@@ -776,9 +776,22 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			consecutiveErrors++
 			if consecutiveErrors >= 3 {
 				log.Printf("[agent] breaking parse-error loop at turn %d (%d consecutive)", turn, consecutiveErrors)
-				ctx.Stream("done", map[string]string{
-					"summary": "Stopped after 3 unparseable responses — the model's tool calls keep getting truncated. Try a more targeted request (e.g. 'edit just the @app.route(\"/product\") handler in app.py') so the response stays under the token cap.",
-				})
+				summary := "Stopped after 3 unparseable responses — the model's tool calls keep " +
+					"getting truncated. Try a more targeted request (e.g. 'edit just the " +
+					"@app.route(\"/product\") handler in app.py') so the response stays under the " +
+					"token cap."
+				if ctx.LastStreamCut == "content_loop" {
+					// Same misdiagnosis the classifier used to make: the token cap
+					// had nothing to do with it. The model began repeating itself
+					// and the proxy cut the stream, so "make the request smaller"
+					// is advice the user cannot act on.
+					summary = "Stopped: the model began repeating itself and its response was cut " +
+						"off mid-call, three times. This usually means it tried to reproduce a " +
+						"large block of data — the contents of an input or fixture file — " +
+						"instead of writing code that reads it. Ask again and say explicitly " +
+						"that the data file should be read at runtime, not rewritten."
+				}
+				ctx.Stream("done", map[string]string{"summary": summary})
 				return nil
 			}
 			continue

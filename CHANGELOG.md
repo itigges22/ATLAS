@@ -197,6 +197,19 @@ than adding another retry around it.
 
 **Fixed**
 
+- The planner no longer opens by recreating files that already exist. This was
+  the origin of the worst failure in the measured runs, three layers above
+  where it surfaced: `aoc_sonar`'s winning plan had `write_file input.txt` as
+  step 1 — "create the necessary input data" — against a 2000-line fixture
+  already on disk. The model followed it, tried to retype the file from
+  memory, degenerated into repeating one line, had its stream cut mid-JSON,
+  and the run died on three unparseable responses. `aoc_course` executed the
+  same step successfully and corrupted the fixture. Both plans scored **1.00**,
+  because the scorer checked step count, verify-step shape and filename
+  overlap, and never what was already there. A create-shaped step targeting an
+  existing file now costs 0.5 and says so; the plan that killed those runs
+  drops from 0.90 to 0.40. Editing an existing file is untouched — only
+  creation clobbers.
 - "Failed to parse model response" is diagnosed from the cut, not the
   wreckage. The proxy's own content-loop detector ends a generation when the
   model starts repeating itself; the cut lands mid-JSON, so the response then

@@ -145,7 +145,29 @@ _VERIFY_CMD_RE = re.compile(
 )
 
 
-def _score_plan(plan: dict, user_message: str) -> Tuple[float, List[str]]:
+# Plan actions that CREATE a file. A step that creates something already on
+# disk is not a plan, it is a data-loss bug waiting for the model to execute
+# it — the edit tools exist for changing a file that is already there.
+_CREATE_ACTIONS = ("write_file", "create", "generate")
+
+
+def _existing_workspace_files(working_dir: str, project_context: Dict[str, str]) -> set:
+    """Relative paths already present, from the workspace and the context the
+    proxy shipped. Best-effort: an unreadable directory yields what context
+    knows, and the check simply does less."""
+    found = {k.lstrip("./") for k in (project_context or {})}
+    if working_dir and os.path.isdir(working_dir):
+        for root, dirs, files in os.walk(working_dir):
+            dirs[:] = [d for d in dirs if d not in
+                       (".git", "node_modules", "__pycache__", ".venv")]
+            for f in files:
+                rel = os.path.relpath(os.path.join(root, f), working_dir)
+                found.add(rel.lstrip("./"))
+    return found
+
+
+def _score_plan(plan: dict, user_message: str,
+                existing_files: set = frozenset()) -> Tuple[float, List[str]]:
     """Heuristic plan scorer. Returns (score in [0,1], reasons[]).
 
     Plans aren't sandbox-buildable so the lens doesn't help us pick a
@@ -195,6 +217,33 @@ def _score_plan(plan: dict, user_message: str) -> Tuple[float, List[str]]:
             reasons.append("verify_step doesn't reference a verification command")
     else:
         reasons.append("missing or invalid verify_step")
+
+    # Planning to CREATE a file that already exists. Measured on aoc_sonar:
+    # the winning plan's step 1 was `write_file input.txt` — "create the
+    # necessary input data" — against a 2000-line fixture already on disk.
+    # The model then tried to retype it from memory, degenerated into
+    # repeating one line, had its stream cut mid-JSON, and the run died on
+    # three unparseable responses. A sibling task executed the same step
+    # successfully and corrupted the fixture. The plan scored 1.00 both
+    # times, because nothing here looked at what was already there.
+    clobbered = []
+    for st in steps:
+        if not isinstance(st, dict):
+            continue
+        action = (st.get("action") or "").lower()
+        target = (st.get("target") or "").strip().lstrip("./")
+        if not target or not any(a in action for a in _CREATE_ACTIONS):
+            continue
+        if target in existing_files:
+            clobbered.append(target)
+    if clobbered:
+        # Heavy: a plan that opens by overwriting existing input is worse
+        # than a vaguer plan that does not.
+        score -= 0.5
+        reasons.append(
+            "plans to create file(s) that already exist: "
+            + ", ".join(sorted(set(clobbered))[:3])
+            + " — edit them instead of recreating them")
 
     # Target-vs-user-message overlap. If the user said "fix index.html",
     # plans that touch index.html beat plans that don't.
@@ -272,6 +321,10 @@ def generate_plan(
     llm = adapters.LLMAdapter(progress_callback=progress_callback, thinking=plan_thinking)
     prompt = _build_plan_prompt(user_message, working_dir, project_context)
 
+    # What is already on disk, so a plan that opens by recreating it can be
+    # scored down rather than executed.
+    existing_files = _existing_workspace_files(working_dir, project_context)
+
     candidates: List[Tuple[Optional[dict], float, List[str]]] = []
     # Diverse sampling via temperature spread. Cheap version of V3's
     # PlanSearch — three samples at 0.3 / 0.5 / 0.7 give us breadth
@@ -298,7 +351,7 @@ def generate_plan(
                  index=i)
             candidates.append((None, 0.0, ["unparseable"]))
             continue
-        score, reasons = _score_plan(plan, user_message)
+        score, reasons = _score_plan(plan, user_message, existing_files)
         emit("plan_candidate_scored", f"candidate {i+1} score={score:.2f}",
              index=i, score=score, reasons=reasons)
         candidates.append((plan, score, reasons))
