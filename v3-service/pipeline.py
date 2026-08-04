@@ -819,10 +819,36 @@ class V3PipelineService:
                 kept, vetoed = [], []
                 for c in passing:
                     per_step = c.get("per_step") or {}
+                    # Vetoes read the MEAN, not the MIN.
+                    #
+                    # gx_score_min is a minimum over every token, so it falls
+                    # with length whatever the content: measured 2026-08-04 on
+                    # one function repeated, 0.468 at 20 tokens down to 0.305
+                    # at 305. It cannot separate — real code 0.325, a
+                    # repetition loop 0.320, stub spam 0.286 all sit together,
+                    # which is why severe=0.28 never fired once in 56 sessions.
+                    #
+                    # gx_score_mean holds across the same 15x length change
+                    # (0.577 to 0.517) and does separate: real code 0.594,
+                    # repetition 0.485, stub spam 0.467. Across 188 scores
+                    # from live runs it ranged 0.547-0.651, so severe_mean at
+                    # 0.52 sits below every clean sample observed and above
+                    # both pathologies.
+                    gx_mean = per_step.get("gx_score_mean")
                     gx_min = per_step.get("gx_score_min")
-                    severe = (per_step.get("thresholds") or {}).get("severe")
-                    if (gx_min is not None and isinstance(severe, (int, float))
-                            and gx_min < severe):
+                    thresholds = per_step.get("thresholds") or {}
+                    severe_mean = thresholds.get("severe_mean")
+                    severe = thresholds.get("severe")
+                    if (gx_mean is not None
+                            and isinstance(severe_mean, (int, float))):
+                        vetoed_now = gx_mean < severe_mean
+                        gx_min, severe = gx_mean, severe_mean
+                    else:
+                        # Artifacts predating severe_mean keep the old check.
+                        vetoed_now = (gx_min is not None
+                                      and isinstance(severe, (int, float))
+                                      and gx_min < severe)
+                    if vetoed_now:
                         # A vetoed candidate is a failing candidate: mark it so
                         # the phase-3 pool (`not c.get("passed")`) picks it up
                         # and the energy fallback can never return it. The veto
