@@ -51,6 +51,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -4507,4 +4508,98 @@ func attachV3(result *ToolResult, meta V3EditMetadata) *ToolResult {
 		result.VerificationEvidence = meta.VerificationEvidence
 	}
 	return result
+}
+
+// sandboxJobState is one entry of the sandbox's /jobs listing. Only the
+// fields this side reads are declared.
+type sandboxJobState struct {
+	JobID   string `json:"job_id"`
+	Command string `json:"command"`
+	Running bool   `json:"running"`
+}
+
+// sandboxListBackground reports every job the sandbox is holding.
+//
+// /jobs carries `running` per job, so completion is observable without
+// reading a job's output — which matters because reading it is what
+// tail_background does, and consuming output the model has not asked for
+// would change what it sees next.
+func sandboxListBackground(ctx *AgentContext) ([]sandboxJobState, error) {
+	if ctx.SandboxURL == "" {
+		return nil, fmt.Errorf("ATLAS_SANDBOX_URL not configured")
+	}
+	reqCtx := ctx.Ctx
+	if reqCtx == nil {
+		reqCtx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(reqCtx, "GET", ctx.SandboxURL+"/jobs", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	var out struct {
+		Jobs []sandboxJobState `json:"jobs"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out.Jobs, nil
+}
+
+// finishedBackgroundNote reports jobs this run started that have since
+// exited, once each, and stops tracking them.
+//
+// A background job's outcome is invisible unless the model calls
+// tail_background, so a server that died on startup looks identical to one
+// serving happily: the run continues, the next probe fails for a reason
+// nothing explains, and a session can finish claiming work it never
+// verified. The foreground-server redirect pushes more work down this path,
+// which makes the silence cost more.
+//
+// Only jobs this run started are reported — the sandbox registry is
+// process-wide and outlives sessions, so another session's leftovers are
+// not this run's news. Errors return "": a job listing that cannot be
+// fetched must not interrupt the loop.
+func finishedBackgroundNote(ctx *AgentContext) string {
+	if ctx == nil || len(ctx.BackgroundJobs) == 0 {
+		return ""
+	}
+	jobs, err := sandboxListBackground(ctx)
+	if err != nil {
+		return ""
+	}
+	state := make(map[string]bool, len(jobs))
+	for _, j := range jobs {
+		state[j.JobID] = j.Running
+	}
+	var done []string
+	for id := range ctx.BackgroundJobs {
+		running, known := state[id]
+		if known && !running {
+			done = append(done, id)
+		}
+	}
+	if len(done) == 0 {
+		return ""
+	}
+	sort.Strings(done)
+	var sb strings.Builder
+	for _, id := range done {
+		cmd := ctx.BackgroundJobs[id]
+		// Reported once: drop it from tracking so the next turn does not
+		// repeat the same news.
+		delete(ctx.BackgroundJobs, id)
+		fmt.Fprintf(&sb, "\nBackground job %s has exited — `%s` is no longer running. "+
+			"Read its output with tail_background(%q) before relying on it; a server "+
+			"that exited on startup and one that served correctly look the same from here.",
+			id, truncateStr(cmd, 80), id)
+	}
+	return strings.TrimLeft(sb.String(), "\n")
 }

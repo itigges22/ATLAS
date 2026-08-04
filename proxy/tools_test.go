@@ -1647,3 +1647,71 @@ func TestRelocateStaleRange(t *testing.T) {
 		}
 	})
 }
+
+// A background job's outcome is invisible unless the model calls
+// tail_background, so a server that died on startup reads the same as one
+// serving happily: the run continues, the next probe fails for a reason
+// nothing explains, and a session can finish claiming work it never
+// verified. The foreground-server redirect pushes more work down this path.
+func TestFinishedBackgroundNote(t *testing.T) {
+	newCtx := func(jobs map[string]string, body string) (*AgentContext, *int) {
+		hits := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hits++
+			w.Write([]byte(body))
+		}))
+		t.Cleanup(srv.Close)
+		return &AgentContext{SandboxURL: srv.URL, BackgroundJobs: jobs}, &hits
+	}
+
+	t.Run("an exited job is reported once and then forgotten", func(t *testing.T) {
+		ctx, _ := newCtx(map[string]string{"job-1": "python app.py"},
+			`{"jobs":[{"job_id":"job-1","command":"python app.py","running":false}]}`)
+		got := finishedBackgroundNote(ctx)
+		if !strings.Contains(got, "job-1") || !strings.Contains(got, "tail_background") {
+			t.Fatalf("expected a note naming the job and how to read it:\n%s", got)
+		}
+		if _, still := ctx.BackgroundJobs["job-1"]; still {
+			t.Error("a reported job must stop being tracked")
+		}
+		if second := finishedBackgroundNote(ctx); second != "" {
+			t.Errorf("reported twice:\n%s", second)
+		}
+	})
+
+	t.Run("a running job is not reported", func(t *testing.T) {
+		ctx, _ := newCtx(map[string]string{"job-1": "python app.py"},
+			`{"jobs":[{"job_id":"job-1","command":"python app.py","running":true}]}`)
+		if got := finishedBackgroundNote(ctx); got != "" {
+			t.Errorf("a live job was reported as finished:\n%s", got)
+		}
+		if _, still := ctx.BackgroundJobs["job-1"]; !still {
+			t.Error("a live job must stay tracked")
+		}
+	})
+
+	t.Run("another session's jobs are not this run's news", func(t *testing.T) {
+		// The sandbox registry is process-wide and outlives sessions.
+		ctx, _ := newCtx(map[string]string{},
+			`{"jobs":[{"job_id":"other","command":"npm start","running":false}]}`)
+		if got := finishedBackgroundNote(ctx); got != "" {
+			t.Errorf("reported a job this run never started:\n%s", got)
+		}
+	})
+
+	t.Run("no tracked jobs means no request at all", func(t *testing.T) {
+		ctx, hits := newCtx(map[string]string{}, `{"jobs":[]}`)
+		finishedBackgroundNote(ctx)
+		if *hits != 0 {
+			t.Errorf("polled the sandbox with nothing to ask about (%d calls)", *hits)
+		}
+	})
+
+	t.Run("an unreachable sandbox is silent", func(t *testing.T) {
+		ctx := &AgentContext{SandboxURL: "http://127.0.0.1:1",
+			BackgroundJobs: map[string]string{"job-1": "x"}}
+		if got := finishedBackgroundNote(ctx); got != "" {
+			t.Errorf("a failed listing must not interrupt the loop:\n%s", got)
+		}
+	})
+}

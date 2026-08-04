@@ -1619,6 +1619,11 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			st.queueCorrective(pendingLensCorrective)
 			st.queueCorrective(pendingRepeatCorrective)
 			st.queueCorrective(pendingReasoningCorrective)
+			// A background job's outcome is invisible unless the model asks
+			// for it, so a server that died on startup reads the same as one
+			// serving happily. Surfaced once per job, through the same queue
+			// as every other steer.
+			st.queueCorrective(finishedBackgroundNote(ctx))
 			st.drainCorrectives(ctx)
 
 			// Option 3 (issue #39): traceback → directed edit. When a
