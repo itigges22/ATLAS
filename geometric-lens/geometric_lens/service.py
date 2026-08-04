@@ -177,10 +177,23 @@ def _load_cx_normalization(models_dir: str) -> None:
         logger.warning("cx_normalization.json load failed (%s) — C(x) normalized scores are neutral", e)
 
 
-def _normalize_cx_energy(energy: float, cx_cfg=None) -> float:
+def _score_length(text: str) -> int:
+    """Length used for the C(x) baseline: characters.
+
+    The baseline is fitted on character counts, so scoring uses the same
+    unit. Tokens would need a tokenizer round-trip per score, and the two
+    do not track each other — `x = 1\n` repeated is 6 characters and 5
+    tokens, ordinary code closer to 4 characters per token — so mixing the
+    units moves a sample into the wrong baseline.
+    """
+    return max(1, len(text))
+
+
+def _normalize_cx_energy(energy: float, cx_cfg=None,
+                         length: int = 0) -> float:
     from geometric_lens.calibration import normalize_cx_energy
     cfg = _cx_normalization if cx_cfg is None else cx_cfg
-    return normalize_cx_energy(energy, cfg)
+    return normalize_cx_energy(energy, cfg, length=length)
 
 
 def _snapshot_weights():
@@ -503,7 +516,8 @@ def evaluate_energy(query: str) -> Tuple[float, float]:
         with torch.no_grad():
             energy = cost_field(x).item()
 
-        normalized = _normalize_cx_energy(energy, cx_cfg)
+        normalized = _normalize_cx_energy(energy, cx_cfg,
+                                          length=_score_length(query))
 
         return (energy, normalized)
 
@@ -577,7 +591,8 @@ def evaluate_combined(query: str) -> dict:
         x = torch.tensor(emb, dtype=torch.float32).unsqueeze(0)
         with torch.no_grad():
             energy = cost_field(x).item()
-        normalized = _normalize_cx_energy(energy, cx_cfg)
+        normalized = _normalize_cx_energy(energy, cx_cfg,
+                                          length=_score_length(query))
 
         # G(x) evaluation (if available)
         gx_score = 0.5
