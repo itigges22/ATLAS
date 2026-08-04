@@ -288,6 +288,19 @@ func TestRequireServiceToken(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("workspace stays closed", func(t *testing.T) {
+		// /workspace discloses a host filesystem path, so it is deliberately
+		// NOT in authOpenPath's exemption list (docs/API.md).
+		defer withToken(t, "atlas-st-testfixture")()
+		h := requireServiceToken(inner)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", "/workspace", nil))
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("/workspace without a token got %d, want 401 — it "+
+				"discloses a host path and must not be auth-exempt", rec.Code)
+		}
+	})
 }
 
 func TestTokenTransportInjection(t *testing.T) {
@@ -574,6 +587,134 @@ func TestClampGenerationBody(t *testing.T) {
 			if string(out) != c.body {
 				t.Fatalf("%s: body modified: %s", c.path, out)
 			}
+		}
+	})
+}
+
+func TestHandleWorkspace(t *testing.T) {
+	t.Run("absolute host path reported", func(t *testing.T) {
+		t.Setenv("ATLAS_PROJECT_DIR", "/some/abs/path")
+		t.Setenv("ATLAS_WORKSPACE_DIR", "/workspace")
+		rec := httptest.NewRecorder()
+		newProxyMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/workspace", nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d", rec.Code)
+		}
+
+		var res map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &res)
+
+		if res["project_dir"] != "/some/abs/path" {
+			t.Errorf("got path %v", res["project_dir"])
+		}
+		// working_dir is reported verbatim — unlike project_dir it gets no
+		// absolute-path filter, since the client only ever compares it to
+		// what the proxy itself writes.
+		if res["working_dir"] != "/workspace" {
+			t.Errorf("got working_dir %v, want /workspace", res["working_dir"])
+		}
+	})
+
+	t.Run("relative host path suppressed", func(t *testing.T) {
+		t.Setenv("ATLAS_PROJECT_DIR", ".")
+		t.Setenv("ATLAS_WORKSPACE_DIR", "/workspace")
+		rec := httptest.NewRecorder()
+		newProxyMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/workspace", nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d", rec.Code)
+		}
+
+		var res map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &res)
+
+		if res["project_dir"] != "" {
+			t.Errorf("got path %v", res["project_dir"])
+		}
+	})
+
+	t.Run("unset host path reported as empty", func(t *testing.T) {
+		t.Setenv("ATLAS_PROJECT_DIR", "")
+		t.Setenv("ATLAS_WORKSPACE_DIR", "")
+		rec := httptest.NewRecorder()
+		newProxyMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/workspace", nil))
+
+		var res map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &res)
+
+		// Both empty is the bare-host local proxy: the client must read this
+		// as "can't tell" and fall through to the CLI, never as a mismatch.
+		if res["project_dir"] != "" || res["working_dir"] != "" {
+			t.Errorf("got project_dir %v, working_dir %v; want both empty",
+				res["project_dir"], res["working_dir"])
+		}
+	})
+
+	t.Run("containerized tracks the docker marker file", func(t *testing.T) {
+		marker := filepath.Join(t.TempDir(), ".dockerenv")
+		prev := dockerEnvMarker
+		dockerEnvMarker = marker
+		t.Cleanup(func() { dockerEnvMarker = prev })
+
+		// Marker absent: bare host.
+		if isContainerized() {
+			t.Fatalf("containerized with no marker file at %s", marker)
+		}
+		rec := httptest.NewRecorder()
+		newProxyMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/workspace", nil))
+		var res map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &res)
+		if res["containerized"] != false {
+			t.Errorf("got containerized %v, want false", res["containerized"])
+		}
+
+		// Marker present: Docker runtime created it.
+		if err := os.WriteFile(marker, nil, 0o600); err != nil {
+			t.Fatalf("write marker: %v", err)
+		}
+		rec = httptest.NewRecorder()
+		newProxyMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/workspace", nil))
+		res = nil
+		_ = json.Unmarshal(rec.Body.Bytes(), &res)
+		if res["containerized"] != true {
+			t.Errorf("got containerized %v, want true", res["containerized"])
+		}
+	})
+
+	t.Run("non-GET rejected", func(t *testing.T) {
+		t.Setenv("ATLAS_PROJECT_DIR", "/temp/anything")
+		t.Setenv("ATLAS_WORKSPACE_DIR", "/workspace")
+		rec := httptest.NewRecorder()
+		newProxyMux().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/workspace", nil))
+
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("expected status %d, got %d", http.StatusMethodNotAllowed, rec.Code)
+		}
+	})
+
+	t.Run("route registered, not passthrough", func(t *testing.T) {
+		t.Setenv("ATLAS_PROJECT_DIR", "/temp/anything")
+		t.Setenv("ATLAS_WORKSPACE_DIR", "/workspace")
+		rec := httptest.NewRecorder()
+		newProxyMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/workspace", nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expect 200, got %d", rec.Code)
+		}
+
+		var response struct {
+			ProjectDir    string `json:"project_dir"`
+			WorkingDir    string `json:"working_dir"`
+			Containerized bool   `json:"containerized"`
+		}
+
+		dec := json.NewDecoder(rec.Body)
+		dec.DisallowUnknownFields()
+
+		if err := dec.Decode(&response); err != nil {
+			t.Errorf(`JSON schema mismatch or extra fields found, i.e.
+			routing to handlePassthrough instead of handleWorkspace: %v`, err)
 		}
 	})
 }

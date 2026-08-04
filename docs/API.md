@@ -48,6 +48,7 @@ The main entry point. Wraps llama-server with an agent loop, grammar-constrained
 | `/health` | GET | Liveness — always 200, `status` reports `"ok"` or `"degraded"` |
 | `/ready` | GET | Readiness probe — 200 only when inference, lens scoring (`lens/ready`), the sandbox, and v3-service are all healthy; 503 otherwise. Use this for load-balancer / orchestrator health checks; use `/health` for informational status. |
 | `/version` | GET | API version, SSE protocol version, and the full error-code set — see [Versioning and error codes](#versioning-and-error-codes) |
+| `/workspace` | GET | Host and container workspace paths for the connected proxy — see [GET /workspace](#workspace-path) |
 
 **Catch-all:** any unmatched path is proxied directly to llama-server.
 
@@ -1216,6 +1217,30 @@ OpenAPI 3.1 spec for this surface (`proxy_openapi.yaml`, parity-checked
 against the registered routes in CI) plus JSON Schemas for the error and
 SSE envelopes.
 
+---
+
+## Workspace path
+
+`GET /workspace` returns the host and container paths the connected
+proxy has mounted, so a client can detect whether its own workspace
+folder matches what the proxy is actually editing:
+
+```json
+{"project_dir": "/home/anuj/atlas-proxy", "working_dir": "/workspace", "containerized": true}
+```
+
+`project_dir` is the **host** path (from `ATLAS_PROJECT_DIR`) — empty
+string when the proxy can't report an absolute path (unset, or a
+relative default like `.`), never a raw relative value. `working_dir` is the path the proxy writes to inside its own process
+(from `ATLAS_WORKSPACE_DIR` — `/workspace` under Compose, the launch
+cwd for a locally-spawned proxy). `containerized` is `true` when
+`/.dockerenv` exists; `working_dir` is not a container signal, since
+the local launcher sets it too.
+
+This endpoint requires the service token like any other route — it
+discloses a host filesystem path, so it is deliberately **not** in the
+open-path exemption list (`/health`, `/ready`, `/version`).
+
 ## Building a non-TUI client
 
 A minimal client needs four things (plus one header):
@@ -1231,6 +1256,11 @@ A minimal client needs four things (plus one header):
 2. **Answer `permission_request` events.** In `default`/`accept-edits` mode the turn pauses on destructive tools until you **POST `/v1/permission`** with `{session_id, tool_call_id, decision:"allow"|"deny", scope:"once"|"session"}` (echo `tool_call_id` from the event). Unanswered requests deny after `ATLAS_PERMISSION_TIMEOUT_SEC` (default 600s). Unattended clients skip this by using `mode:"yolo"` or pre-approving tools via `session_allowed_tools`.
 3. **POST `/cancel`** with `{session_id}` when the user wants to abort.
 4. *(Optional)* **GET `/events`** in a background goroutine/thread for the global typed-envelope feed if you want a pipeline-progress sidebar.
+5. *(Optional)* **GET `/workspace`** to compare the proxy's mounted
+   host path against your own workspace root, and warn the user if
+   they differ (a "wrong folder open" check). Treat a missing or
+   unreachable response as "can't tell" — older proxies won't have
+   this route yet.
 
 The TUI ([atlas tui](CLI.md)) is a Go reference implementation — its `model.go`/`events.go` show how to handle every event type, and `panes.go` shows one approach to rendering them. Browse `tui/` in the repo for a complete worked example. The VS Code extension (`extensions/vscode/`) is a TypeScript client built exactly to this section's surface, with unit-tested SSE parsing and permission handling.
 
