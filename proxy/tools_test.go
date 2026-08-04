@@ -1579,3 +1579,71 @@ func TestStrippedOldStrOnlyCountsWhenItMatchesTheFile(t *testing.T) {
 		t.Errorf("a stripped line absent from the file matched %q", got)
 	}
 }
+
+// A replace_lines range goes stale the moment an earlier edit changes the
+// file's length, and the model re-sends the same numbers because nothing
+// looks wrong from its side. Measured across 168 sessions: 23 hit an anchor
+// refusal and 11 of those lost the task, usually to a re-send loop after
+// "line N is not what you expected".
+//
+// The assertions the call already carries say where the block went. This is
+// grok-build's "shifted" anchor case using text ATLAS already receives,
+// rather than hashing every line of read_file output.
+func TestRelocateStaleRange(t *testing.T) {
+	file := []string{
+		"import sys",          // 1
+		"",                    // 2
+		"def helper():",       // 3
+		"    return 1",        // 4
+		"",                    // 5
+		"def main():",         // 6
+		"    x = helper()",    // 7
+		"    return x",        // 8
+	}
+	limit := len(file)
+
+	t.Run("a block that moved is found", func(t *testing.T) {
+		// Model thinks main() is at 3-5; two lines were inserted above it.
+		got := relocateStaleRange(file, limit, "def main():", "    return x", 3)
+		if got != 6 {
+			t.Errorf("relocated to %d, want 6", got)
+		}
+	})
+
+	t.Run("an ambiguous anchor is refused", func(t *testing.T) {
+		dup := append([]string{}, file...)
+		dup = append(dup, "def main():", "    x = helper()", "    return x")
+		if got := relocateStaleRange(dup, len(dup), "def main():", "    return x", 3); got != 0 {
+			t.Errorf("relocated an ambiguous block to %d — a wrong-place edit is "+
+				"worse than a refusal", got)
+		}
+	})
+
+	t.Run("a block that changed shape is refused", func(t *testing.T) {
+		// Both anchors present but 3 lines apart, not the 5 claimed.
+		if got := relocateStaleRange(file, limit, "def main():", "    return x", 5); got != 0 {
+			t.Errorf("relocated a reshaped block to %d", got)
+		}
+	})
+
+	t.Run("a missing anchor is refused", func(t *testing.T) {
+		if got := relocateStaleRange(file, limit, "def gone():", "    return x", 3); got != 0 {
+			t.Errorf("relocated on a missing anchor to %d", got)
+		}
+	})
+
+	t.Run("empty assertions do nothing", func(t *testing.T) {
+		if got := relocateStaleRange(file, limit, "", "    return x", 3); got != 0 {
+			t.Errorf("relocated without a first-line assertion to %d", got)
+		}
+	})
+
+	t.Run("indentation drift does not block the match", func(t *testing.T) {
+		// The assertion is whitespace-insensitive elsewhere for the same
+		// reason: the model reproduces text reliably and indentation badly.
+		got := relocateStaleRange(file, limit, "  def main():", "return x", 3)
+		if got != 6 {
+			t.Errorf("relocated to %d, want 6", got)
+		}
+	})
+}

@@ -2700,6 +2700,58 @@ func insertAfterTool() *ToolDef {
 // range, and they cost the same two lines whether the span is 5 or 50.
 const replaceLinesMaxSpan = 60
 
+
+// relocateStaleRange finds where a stale replace_lines range moved to.
+//
+// The model's line numbers go stale the moment an earlier edit changes the
+// file's length, and it re-sends the same numbers because from its side
+// nothing looks wrong. Measured across 168 sessions: 23 hit an anchor
+// refusal and 11 of those lost the task, usually to a re-send loop after
+// "line N is not what you expected".
+//
+// The assertions the call already carries are enough to fix it. If the
+// expected first and last lines both appear, at the same offset, exactly
+// once each, the range simply moved — apply it there instead of refusing.
+// Ambiguity (either line appearing more than once, or the two disagreeing
+// about the shift) returns 0 and leaves the refusal in place: relocating an
+// edit to the wrong place is far worse than asking for a re-read.
+//
+// This is the "shifted" case from grok-build's hashline anchors, using the
+// text ATLAS already receives rather than hashing every line of read_file
+// output — the same recovery without spending context on every read.
+func relocateStaleRange(fileLines []string, limit int,
+	expectedFirst, expectedLast string, span int) int {
+	first := strings.TrimSpace(expectedFirst)
+	last := strings.TrimSpace(expectedLast)
+	if first == "" || last == "" || span < 1 {
+		return 0
+	}
+	findUnique := func(want string) int {
+		found := 0
+		for i := 0; i < limit; i++ {
+			if strings.TrimSpace(fileLines[i]) == want {
+				if found != 0 {
+					return -1 // ambiguous
+				}
+				found = i + 1
+			}
+		}
+		return found
+	}
+	firstAt := findUnique(first)
+	if firstAt <= 0 {
+		return 0
+	}
+	lastAt := findUnique(last)
+	if lastAt <= 0 {
+		return 0
+	}
+	if lastAt-firstAt+1 != span {
+		return 0 // the block changed shape, not just position
+	}
+	return firstAt
+}
+
 // lineAssertionMismatch compares an expected line against what is actually
 // there, whitespace-insensitively, and renders the correction when they differ.
 //
@@ -2803,6 +2855,19 @@ func replaceLinesTool() *ToolDef {
 						"HTML template, say) is one string to the Python grammar and no selector reaches into it, so "+
 						"there the split is the way.",
 					span, replaceLinesMaxSpan, replaceLinesMaxSpan)}, nil
+			}
+			// A stale range that simply moved is relocated rather than
+			// refused: the numbers go stale as soon as an earlier edit
+			// changes the file's length, and the model cannot see that.
+			if strings.TrimSpace(in.ExpectedFirstLine) != "" &&
+				strings.TrimSpace(fileLines[in.StartLine-1]) != strings.TrimSpace(in.ExpectedFirstLine) {
+				span := in.EndLine - in.StartLine + 1
+				if moved := relocateStaleRange(fileLines, limit,
+					in.ExpectedFirstLine, in.ExpectedLastLine, span); moved > 0 {
+					log.Printf("[replace_lines] %s: range %d-%d is stale; the same block is at %d-%d — relocating",
+						in.Path, in.StartLine, in.EndLine, moved, moved+span-1)
+					in.StartLine, in.EndLine = moved, moved+span-1
+				}
 			}
 			if msg := lineAssertionMismatch(in.ExpectedFirstLine, fileLines[in.StartLine-1], in.StartLine, in.Path, fileLines); msg != "" {
 				return &ToolResult{Success: false, Error: msg}, nil
