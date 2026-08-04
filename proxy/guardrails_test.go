@@ -1744,3 +1744,67 @@ func TestRestatementSkipsContentAlreadyAnywhereInTheWire(t *testing.T) {
 		t.Error("appended a second copy of content already in the window")
 	}
 }
+
+// A foreground server start costs the sandbox timeout before anything
+// happens. The steer that follows is correct and already existed — it just
+// fired 30 seconds too late. Measured 2026-08-04 on flask_pause: the model
+// ran `python app.py`, the run blocked, and the user watched dead air until
+// the timeout fired.
+func TestForegroundServerStartIsRedirectedBeforeItRuns(t *testing.T) {
+	server := "from flask import Flask\napp = Flask(__name__)\napp.run(port=5000)\n"
+	plain := "import sys\nprint(sum(int(x) for x in sys.stdin))\n"
+	files := map[string]string{"app.py": server, "solve.py": plain}
+	read := func(rel string) (string, bool) { src, ok := files[rel]; return src, ok }
+
+	t.Run("a file that serves is redirected", func(t *testing.T) {
+		got := foregroundServerRejectionWithSource("python app.py", read)
+		if got == "" {
+			t.Fatal("a blocking server start was allowed to run")
+		}
+		if !strings.Contains(got, "run_background") {
+			t.Errorf("steer should name run_background:\n%s", got)
+		}
+	})
+
+	t.Run("a file that exits is left alone", func(t *testing.T) {
+		// The whole point of reading the file: `python solve.py` looks
+		// identical to `python app.py` from the command text alone.
+		if got := foregroundServerRejectionWithSource("python3 solve.py", read); got != "" {
+			t.Errorf("a script that exits was refused:\n%s", got)
+		}
+	})
+
+	t.Run("an unreadable target is left alone", func(t *testing.T) {
+		if got := foregroundServerRejectionWithSource("python missing.py", read); got != "" {
+			t.Errorf("refused on a name alone, which is the guess this avoids:\n%s", got)
+		}
+	})
+
+	t.Run("launchers that always block need no file", func(t *testing.T) {
+		for _, cmd := range []string{"flask run", "npm start",
+			"uvicorn main:app", "gunicorn app:app"} {
+			if foregroundServerRejectionWithSource(cmd, read) == "" {
+				t.Errorf("%q serves until killed and was allowed", cmd)
+			}
+		}
+	})
+
+	t.Run("an already-backgrounded command is not touched", func(t *testing.T) {
+		// `nohup` alone is NOT backgrounded — it only ignores SIGHUP and
+		// still holds the foreground, so it stays redirected.
+		for _, cmd := range []string{"python app.py &", "python app.py  &"} {
+			if got := foregroundServerRejectionWithSource(cmd, read); got != "" {
+				t.Errorf("%q already detaches:\n%s", cmd, got)
+			}
+		}
+	})
+
+	t.Run("ordinary verification is untouched", func(t *testing.T) {
+		for _, cmd := range []string{"pytest -q", "go test ./...",
+			"python3 solve.py < input.txt", "ls -la"} {
+			if got := foregroundServerRejectionWithSource(cmd, read); got != "" {
+				t.Errorf("%q is normal verification:\n%s", cmd, got)
+			}
+		}
+	})
+}

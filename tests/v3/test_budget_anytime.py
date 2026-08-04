@@ -108,40 +108,6 @@ def test_a_disabled_cap_never_trips_the_guard(monkeypatch):
     assert left is None, "an unbounded run must report no budget"
 
 
-# --- the adapter refuses work it cannot finish -----------------------------
-
-def test_adapter_refuses_a_call_that_cannot_finish(monkeypatch):
-    """Boundary checks cannot hold: PR-CoT issues two calls, so a guard that
-    reserves one is already wrong by the second. Measured 2026-08-03 — a
-    boundary check with ~50s left correctly allowed PR-CoT against a ~34s
-    reserve, and PR-CoT spent 44s then started a 21s call past the cap."""
-    import adapters
-
-    a = adapters.LLMAdapter(deadline=time.time() + 15)
-    # 30s average call, 15s left: starting another one overruns.
-    a.call_count, a.total_time_ms = 2, 60_000
-    with pytest.raises(adapters.BudgetExhausted):
-        a._check_budget()
-
-    # Same observed cost, generous clock: allowed.
-    a.deadline = time.time() + 300
-    a._check_budget()
-
-
-def test_adapter_without_a_deadline_is_unbounded():
-    """The bench and any caller with the cap disabled must not be truncated."""
-    import adapters
-    a = adapters.LLMAdapter(deadline=None)
-    a.call_count, a.total_time_ms = 5, 500_000
-    a._check_budget()
-
-
-def test_first_call_is_never_refused():
-    """Before any call there is nothing observed, so a run must be allowed to
-    start rather than returning empty on a short budget."""
-    import adapters
-    a = adapters.LLMAdapter(deadline=time.time() + 1)
-    a._check_budget()
 
 
 def test_an_unverified_candidate_is_not_returned():
@@ -156,3 +122,52 @@ def test_an_unverified_candidate_is_not_returned():
     returning V3's work exposed it.
     """
     assert pipeline._STAGE_PHASE["budget_no_verified_candidate"] == "fallback"
+
+
+# --- generations are sized to the clock ------------------------------------
+
+def test_max_tokens_shrinks_to_what_the_clock_can_decode():
+    """A generation runs until it stops or hits max_tokens, so an 8192-token
+    ceiling at ~25 tok/s is a 327s call — longer than the whole 180s budget.
+
+    Measured 2026-08-04: every V3 hang-up in a 28-session run was the
+    pipeline cut mid-probe, the FIRST generation, which had the full budget
+    and still did not finish. Refusing the call produces nothing at all;
+    asking for a length the clock can deliver is the fix.
+    """
+    import adapters
+
+    a = adapters.LLMAdapter(deadline=time.time() + 60)
+    a.total_tokens, a.total_time_ms = 500, 20_000   # 25 tok/s observed
+    # 60s - 5s reserve = 55s at 25 tok/s * 0.8 == ~1100 tokens, not 8192.
+    got = a._budget_max_tokens(8192)
+    assert 800 < got < 1400, got
+
+    # A generous clock leaves the caller's ceiling alone.
+    a.deadline = time.time() + 3600
+    assert a._budget_max_tokens(8192) == 8192
+
+
+def test_first_call_is_sized_from_an_assumed_rate():
+    """Before this run has observed a call there is no measured rate, and
+    the first generation is exactly where the hang-ups happened."""
+    import adapters
+
+    a = adapters.LLMAdapter(deadline=time.time() + 180)
+    assert a.total_tokens == 0
+    got = a._budget_max_tokens(8192)
+    assert got < 8192, "the first call must still be bounded by the clock"
+    assert got >= adapters.LLMAdapter._MIN_USEFUL_TOKENS
+
+
+def test_a_spent_clock_refuses_rather_than_asking_for_nothing():
+    import adapters
+    a = adapters.LLMAdapter(deadline=time.time() + 2)
+    with pytest.raises(adapters.BudgetExhausted):
+        a._budget_max_tokens(8192)
+
+
+def test_an_unbounded_adapter_keeps_the_caller_ceiling():
+    import adapters
+    a = adapters.LLMAdapter(deadline=None)
+    assert a._budget_max_tokens(8192) == 8192

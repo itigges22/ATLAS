@@ -182,23 +182,45 @@ class LLMAdapter:
         # bench and any caller without a cap want.
         self.deadline = deadline
 
-    def _check_budget(self) -> None:
-        """Refuse to start a generation that cannot finish before the cap.
+    # Fallback decode rate (tokens/sec) for sizing the first call, before
+    # this run has observed one. Measured on a 12B Q4 at 4 slots: ~25 tok/s
+    # single-stream. Deliberately conservative — overestimating the rate
+    # asks for more tokens than the clock can deliver, which is the failure
+    # this exists to prevent.
+    _ASSUMED_TOK_PER_SEC = 20.0
 
-        The reserve is one observed call plus room to return a result: the
-        unit of work here is a generation, so that is what has to fit.
-        Before the first call there is nothing observed, so anything is
-        allowed to start.
+    # Below this many tokens a generation cannot produce anything useful,
+    # so the budget is spent rather than nearly spent.
+    _MIN_USEFUL_TOKENS = 128
+
+    def _observed_tok_per_sec(self) -> float:
+        if self.total_time_ms <= 0 or self.total_tokens <= 0:
+            return self._ASSUMED_TOK_PER_SEC
+        return max(1.0, self.total_tokens / (self.total_time_ms / 1000.0))
+
+    def _budget_max_tokens(self, max_tokens: int) -> int:
+        """Shrink max_tokens to what the remaining clock can actually decode.
+
+        A generation runs until it stops or hits max_tokens, so an 8192-token
+        ceiling at ~25 tok/s is a 327-second call — longer than the whole
+        180s budget. Measured 2026-08-04: every V3 hang-up in a 28-session
+        run was the pipeline cut mid-probe, the first generation, which had
+        the full budget and still did not finish. Refusing the call is not
+        the answer either — that produces nothing at all. Asking for a
+        length the clock can deliver is.
+
+        Raises BudgetExhausted when even a minimal generation will not fit.
         """
         if self.deadline is None:
-            return
-        left_ms = (self.deadline - time.time()) * 1000.0
-        observed = self.avg_call_ms
-        reserve = observed * 1.2 + 10000.0 if observed else 0.0
-        if left_ms < reserve:
+            return max_tokens
+        left_s = self.deadline - time.time()
+        # Leave room to read the response and hand back a result.
+        affordable = int((left_s - 5.0) * self._observed_tok_per_sec() * 0.8)
+        if affordable < self._MIN_USEFUL_TOKENS:
             raise BudgetExhausted(
-                f"{left_ms / 1000:.0f}s left, a call averages "
-                f"{observed / 1000:.0f}s")
+                f"{left_s:.0f}s left decodes ~{max(affordable, 0)} tokens at "
+                f"{self._observed_tok_per_sec():.0f} tok/s")
+        return min(max_tokens, affordable)
 
     @property
     def avg_call_ms(self) -> float:
@@ -220,7 +242,7 @@ class LLMAdapter:
     def __call__(self, prompt: str, temperature: float,
                  max_tokens: int, seed: Optional[int],
                  thinking: Optional[bool] = None) -> Tuple[str, int, float]:
-        self._check_budget()
+        max_tokens = self._budget_max_tokens(max_tokens)
         with LLMAdapter._counter_lock:
             self.call_count += 1
             call_no = self.call_count

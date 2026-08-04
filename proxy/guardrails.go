@@ -1326,8 +1326,68 @@ var reForegroundServer = regexp.MustCompile(`(?i)(^|\s|&&|;)\s*(` +
 // The guidance already says to use run_background for servers and the model
 // still does this, which is the usual result for an instruction. The harness
 // can see the command before it runs, so it stops being a suggestion.
+// A script the user wrote is only recognisable as a server from its
+// contents. These calls do not return until the process is killed, so
+// finding one in the file the command runs is evidence rather than a guess
+// from the command text — `python app.py` and `python solve.py` are
+// indistinguishable otherwise, and refusing on the name would block
+// ordinary verification.
+var serverLoopMarkers = []string{
+	"app.run(", ".serve_forever(", "uvicorn.run(", "socketserver.",
+	"httpd.serve", "app.listen(", "server.listen(", "web.run_app(",
+}
+
+// reServerScript pulls the workspace file out of an interpreter invocation:
+// `python app.py`, `python3 -u srv/app.py`, `node server.js`.
+var reServerScript = regexp.MustCompile(
+	`(?i)\b(?:python3?|node|ruby|php)\b[^|;&]*?\s([\w./-]+\.(?:py|js|mjs|rb|php))\b`)
+
+// runsAServerLoop reports whether the file this command executes blocks
+// forever. readFile returns workspace contents; a miss says no, since
+// refusing on a filename alone is the guess this avoids.
+func runsAServerLoop(cmd string, readFile func(string) (string, bool)) bool {
+	if readFile == nil {
+		return false
+	}
+	m := reServerScript.FindStringSubmatch(cmd)
+	if m == nil {
+		return false
+	}
+	src, ok := readFile(m[1])
+	if !ok {
+		return false
+	}
+	low := strings.ToLower(src)
+	for _, marker := range serverLoopMarkers {
+		if strings.Contains(low, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 func foregroundServerRejection(cmd string) string {
-	if !reForegroundServer.MatchString(cmd) {
+	return foregroundServerRejectionWithSource(cmd, nil)
+}
+
+// foregroundServerRejectionWithSource is foregroundServerRejection plus the
+// workspace reader, so a script that serves is caught alongside the
+// launchers that always do.
+//
+// The pattern list covers the well-known launchers (`http.server`,
+// `npm run dev`, `flask run`). It cannot cover a file the user wrote:
+// measured 2026-08-04 on flask_pause, `python app.py` sat through the full
+// 30s sandbox timeout before the verification gate said anything, and that
+// is the shape a real project takes.
+func foregroundServerRejectionWithSource(cmd string,
+	readFile func(string) (string, bool)) string {
+	// A trailing & already detaches, so the call returns immediately and
+	// there is nothing to redirect. (`nohup` alone does not: it only
+	// ignores SIGHUP, and the command still holds the foreground.)
+	if strings.HasSuffix(strings.TrimSpace(cmd), "&") {
+		return ""
+	}
+	if !reForegroundServer.MatchString(cmd) && !runsAServerLoop(cmd, readFile) {
 		return ""
 	}
 	return fmt.Sprintf(

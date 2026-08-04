@@ -1094,7 +1094,14 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			if parsed.Name == "run_command" {
 				var rc RunCommandInput
 				if json.Unmarshal(parsed.Args, &rc) == nil {
-					if rejection := foregroundServerRejection(rc.Command); rejection != "" {
+					if rejection := foregroundServerRejectionWithSource(rc.Command,
+						func(rel string) (string, bool) {
+							data, err := os.ReadFile(filepath.Join(ctx.WorkingDir, rel))
+							if err != nil {
+								return "", false
+							}
+							return string(data), true
+						}); rejection != "" {
 						log.Printf("[agent] redirecting a foreground server start to run_background: %q",
 							truncateStr(rc.Command, 80))
 						st.bounceToolCall(ctx, "run_command", rejection)
