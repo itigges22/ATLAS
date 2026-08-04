@@ -844,6 +844,12 @@ func structuralSelectorHint(ext string) string {
 		return "e.g. `<body>`, `<script>`"
 	case ".py":
 		return "`function:NAME` or `class:NAME`"
+	case ".go":
+		// function:NAME matches a func or a method, so the model does not
+		// have to know which it is looking at.
+		return "`function:NAME` or `type:NAME`"
+	case ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs":
+		return "`function:NAME` or `class:NAME`"
 	}
 	return ""
 }

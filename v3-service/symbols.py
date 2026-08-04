@@ -36,6 +36,23 @@ except ImportError as _e:
 # availability flag: a build without it must still serve structural_edit and
 # the call-resolution checks. A missing grammar degrades to "no finding",
 # never a crash and never a blocked write.
+# Go and TypeScript grammars for structural_edit. Independent of the
+# JavaScript block below: a build without them still serves Python, HTML and
+# JS rather than failing to import.
+try:
+    import tree_sitter_go as _tsg
+    _GO_LANG = _ts.Language(_tsg.language())
+except ImportError:
+    _GO_LANG = None
+
+try:
+    import tree_sitter_typescript as _tst
+    _TS_LANG = _ts.Language(_tst.language_typescript())
+    _TSX_LANG = _ts.Language(_tst.language_tsx())
+except ImportError:
+    _TS_LANG = None
+    _TSX_LANG = None
+
 try:
     import tree_sitter_javascript as _tsj
     _JS_LANG = _ts.Language(_tsj.language())
@@ -47,12 +64,45 @@ except Exception as _e:  # ImportError, or _ts undefined when tree-sitter is abs
 
 
 def _ast_language_for_path(path: str):
+    """Map a path to its tree-sitter grammar.
+
+    v1 shipped Python and HTML. The engine is language-agnostic — a grammar
+    plus a selector mapping is all a language needs — and the gap was
+    measured: across 168 sessions, `unsupported file type for
+    structural_edit` was the only ATLAS-side wall a session hit, 12 times,
+    when the model reached for it on a .go file. The JavaScript grammar was
+    already installed for embedded_script_check and simply not wired here.
+    """
     p = path.lower()
     if p.endswith(".py"):
         return "python", _PY_LANG
     if p.endswith((".html", ".htm")):
         return "html", _HTML_LANG
+    if p.endswith(".go") and _GO_LANG is not None:
+        return "go", _GO_LANG
+    if p.endswith(".tsx") and _TSX_LANG is not None:
+        return "typescript", _TSX_LANG
+    if p.endswith((".ts", ".mts", ".cts")) and _TS_LANG is not None:
+        return "typescript", _TS_LANG
+    if p.endswith((".js", ".mjs", ".cjs", ".jsx")) and _JS_LANG is not None:
+        return "javascript", _JS_LANG
     return None, None
+
+
+def _supported_structural_exts() -> str:
+    """The extensions this build can actually address, for the error text.
+
+    Built from the grammars that imported rather than hardcoded, so a build
+    missing one never advertises it.
+    """
+    exts = [".py", ".html", ".htm"]
+    if _GO_LANG is not None:
+        exts.append(".go")
+    if _TS_LANG is not None:
+        exts.extend([".ts", ".tsx"])
+    if _JS_LANG is not None:
+        exts.extend([".js", ".jsx"])
+    return ", ".join(exts)
 
 
 def _ast_selector_to_query(selector: str, language: str):
@@ -60,6 +110,67 @@ def _ast_selector_to_query(selector: str, language: str):
     Returns (None, None, error_message) for unknown selectors.
     """
     s = selector.strip()
+    if language == "go":
+        # Go separates plain functions from methods, and the model does not
+        # know which it is looking at — `function:Name` matches either, so a
+        # method does not need a different selector than a function.
+        if s.startswith("function:"):
+            name = s[len("function:"):].strip()
+            if not name:
+                return None, None, "selector 'function:' missing name (e.g. 'function:Solve')"
+            return (
+                f'[(function_declaration name: (identifier) @_name (#eq? @_name "{name}"))'
+                f' (method_declaration name: (field_identifier) @_name (#eq? @_name "{name}"))] @target',
+                "target", None,
+            )
+        if s.startswith("class:") or s.startswith("type:"):
+            name = s.split(":", 1)[1].strip()
+            if not name:
+                return None, None, "selector 'type:' missing name (e.g. 'type:Server')"
+            return (
+                f'(type_declaration (type_spec name: (type_identifier) @_name '
+                f'(#eq? @_name "{name}"))) @target',
+                "target", None,
+            )
+        return None, None, (
+            f"unknown selector '{selector}' for go. Supported: function:NAME "
+            f"(matches a func or a method), type:NAME.")
+
+    if language in ("javascript", "typescript"):
+        # One selector covers the four ways JS spells a function, because
+        # which one a file used is not something the model reliably knows:
+        # `function f(){}`, `const f = () => {}`, `const f = function(){}`,
+        # and a class method.
+        if s.startswith("function:"):
+            name = s[len("function:"):].strip()
+            if not name:
+                return None, None, "selector 'function:' missing name (e.g. 'function:render')"
+            return (
+                f'[(function_declaration name: (identifier) @_name (#eq? @_name "{name}"))'
+                f' (generator_function_declaration name: (identifier) @_name (#eq? @_name "{name}"))'
+                f' (lexical_declaration (variable_declarator name: (identifier) @_name'
+                f'   (#eq? @_name "{name}") value: [(arrow_function) (function_expression)]))'
+                f' (method_definition name: (property_identifier) @_name (#eq? @_name "{name}"))] @target',
+                "target", None,
+            )
+        if s.startswith("class:"):
+            name = s[len("class:"):].strip()
+            if not name:
+                return None, None, "selector 'class:' missing name (e.g. 'class:Board')"
+            # TypeScript names a class with type_identifier, JavaScript with
+            # identifier, and tree-sitter rejects a pattern naming a node the
+            # grammar does not have — an alternation covering both is an
+            # error in each. Same selector for the model either way.
+            name_node = "type_identifier" if language == "typescript" else "identifier"
+            return (
+                f'(class_declaration name: ({name_node}) @_name '
+                f'(#eq? @_name "{name}")) @target',
+                "target", None,
+            )
+        return None, None, (
+            f"unknown selector '{selector}' for {language}. Supported: "
+            f"function:NAME (declaration, arrow, expression or method), class:NAME.")
+
     if language == "python":
         if s.startswith("function:"):
             name = s[len("function:"):].strip()
@@ -678,8 +789,8 @@ def structural_edit(path: str, source_text: str, selector: str, content: str) ->
     language, lang_obj = _ast_language_for_path(path)
     if not language:
         return {"success": False, "error": (
-            f"unsupported file type for structural_edit: {path}. v1 supports .py, .html, .htm — "
-            f"use edit_file for other languages."
+            f"unsupported file type for structural_edit: {path}. This build supports "
+            f"{_supported_structural_exts()} — use edit_file for other languages."
         )}
 
     query_str, target_cap, err = _ast_selector_to_query(selector, language)
