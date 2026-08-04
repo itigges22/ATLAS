@@ -362,9 +362,12 @@ class V3PipelineService:
         # before the cap, so every phase and every loop inside one is
         # covered by a single check rather than a boundary guard each.
         _budget_ms = _remaining_budget_ms(start)
-        llm = adapters.LLMAdapter(
-            progress_callback=emit,
-            deadline=(start + _budget_ms / 1000.0) if _budget_ms is not None else None)
+        llm = adapters.LLMAdapter(progress_callback=emit)
+        # Assigned rather than passed to the constructor: tests substitute
+        # their own LLM doubles here, and a new required kwarg would break
+        # every one of them for a value only the real adapter reads.
+        if _budget_ms is not None:
+            llm.deadline = start + _budget_ms / 1000.0
         # PC-046: ship the user's other project files into the sandbox so
         # multi-file imports resolve. `files` is the same Dict that V3
         # already prepends to the LLM prompt above; passing it to the

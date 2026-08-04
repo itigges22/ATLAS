@@ -110,22 +110,30 @@ def _run_pipeline(monkeypatch):
     return result, refinement
 
 
-def test_exhausted_budget_skips_refinement(monkeypatch):
-    # 1-second total budget: by phase 3 the remaining wall-clock cannot
-    # afford a 180s iteration — the loop must not run.
+def test_exhausted_budget_returns_before_the_repair_phase(monkeypatch):
+    """1-second total budget: the run must not start repair, and must still
+    hand back a result.
+
+    This used to assert the run reached phase 3 and closed through
+    `refinement_skip` + `fallback`. It now stops earlier — entering the
+    repair phase with a spent clock is work whose output the caller would
+    never receive, so the pipeline returns its best candidate at the phase
+    boundary instead. The invariant the test exists for is unchanged: an
+    exhausted budget runs no refinement and still returns.
+    """
     monkeypatch.setenv("ATLAS_V3_TIMEOUT", "1")
     result, refinement = _run_pipeline(monkeypatch)
 
     assert refinement.calls == 0
     stages = [e["stage"] for e in result["events"]]
-    assert "refinement_skip" in stages
     assert "refinement" not in stages
-    # The run still closes through the fallback.
-    assert "fallback" in stages
-    skip = next(e for e in result["events"] if e["stage"] == "refinement_skip")
-    assert skip["data"]["estimated_iteration_ms"] == round(
-        ITERATION_LLM_CALLS * FakeLLM.avg_call_ms)
-    assert skip["data"]["remaining_ms"] <= 1000
+    assert "budget_exhausted" in stages
+    # Returning early is only correct if it still returns.
+    assert result["total_time_ms"] > 0
+    assert "code" in result
+
+    spent = next(e for e in result["events"] if e["stage"] == "budget_exhausted")
+    assert spent["data"]["remaining_ms"] <= 1000
 
 
 def test_disabled_cap_always_enters_refinement(monkeypatch):
