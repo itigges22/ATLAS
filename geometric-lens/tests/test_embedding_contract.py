@@ -179,3 +179,31 @@ def test_observe_convention_reports_flat_normalized(monkeypatch):
     _install_response(monkeypatch, [_flat(norm=5.0), _flat(norm=5.0)])
     c = ee.observe_embedding_convention("x")
     assert c["response_shape"] == "per_token" and c["pooling"] == "none"
+
+
+def test_observed_convention_round_trips_into_an_identity(monkeypatch):
+    """`atlas lens build` records what it observed so the artifacts declare
+    the convention they were fitted on.
+
+    save_model_identity has always accepted an embedding_contract and the
+    builder never passed one, so shipped artifacts declare none — which is
+    what lets a server-side pooling or normalization change shift every
+    score with health checks green. Measured 2026-08-03: unit-norm vectors
+    against a cost field fitted on |v|~137 scored 0.76-0.80 for a clean
+    function, a repetition loop and truncated junk alike.
+    """
+    from geometric_lens.identity import (
+        save_model_identity, load_model_identity,
+    )
+    import tempfile
+
+    _install_response(monkeypatch, _flat(norm=137.0))
+    observed = ee.observe_embedding_convention("def f(): pass")
+    assert observed["normalized"] is False, "|v|=137 is not unit-norm"
+
+    with tempfile.TemporaryDirectory() as d:
+        save_model_identity(d, "gemma-4-12b-it-Q4_K_M", 3840,
+                            embedding_contract=observed)
+        back = load_model_identity(d)
+    assert back["embedding_contract"]["normalized"] is False
+    assert back["embedding_contract"]["response_shape"] == "flat"

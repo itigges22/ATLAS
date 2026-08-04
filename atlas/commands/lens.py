@@ -1025,8 +1025,29 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
                         f"model; refusing to activate these artifacts."
                         f"{RESET if color else ''}")
             return 1
+        # Record the convention these artifacts were actually fitted on.
+        # save_model_identity has always accepted it and nothing passed it,
+        # so shipped artifacts declare no contract — which is why a
+        # server-side pooling or normalization change shifts every score
+        # while health checks stay green. Measured 2026-08-03: served
+        # unit-norm vectors against a cost field fitted on |v|~137 returned
+        # 0.76-0.80 for a clean function, a repetition loop and truncated
+        # junk alike, against a calibrated 9.25/11.81 band.
+        #
+        # Best-effort: a probe failure must not block activation, and an
+        # absent contract is the behaviour we already have.
+        embedding_contract = None
+        try:
+            from geometric_lens.embedding_extractor import (
+                observe_embedding_convention,
+            )
+            embedding_contract = observe_embedding_convention()
+        except Exception as exc:  # noqa: BLE001 — telemetry, not correctness
+            _safe_print(f"  could not observe the embedding convention "
+                        f"({exc}); artifacts will declare none")
         save_model_identity(
-            staging_dir, model_identity, verdict.probe.embedding_dim)
+            staging_dir, model_identity, verdict.probe.embedding_dim,
+            embedding_contract=embedding_contract)
         # Per-bundle provenance manifest (SUPPORT_MATRIX §9.5): every
         # activated bundle is reproducible and auditable — `atlas artifact
         # verify/snapshot/rollback` consume this file. Best-effort: a
