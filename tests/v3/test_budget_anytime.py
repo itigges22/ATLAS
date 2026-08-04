@@ -142,3 +142,17 @@ def test_first_call_is_never_refused():
     import adapters
     a = adapters.LLMAdapter(deadline=time.time() + 1)
     a._check_budget()
+
+
+def test_an_unverified_candidate_is_not_returned():
+    """The caller's baseline is the model's own write, syntax- and
+    structure-gated. A candidate that failed the sandbox is not better than
+    that, and ranking failures by energy picks among them without evidence.
+
+    Measured across a 28-session run: 7 of 8 budget returns took the
+    unverified path, task success fell 20/28 to 17/28 (aoc_course and
+    aoc_slope each 2/2 to 0/2) while harness integrity reached 28/28. The
+    cap used to discard everything, so this fallback rarely reached disk;
+    returning V3's work exposed it.
+    """
+    assert pipeline._STAGE_PHASE["budget_no_verified_candidate"] == "fallback"

@@ -66,7 +66,8 @@ for _phase, _stages in {
     "repair_refinement": ("refinement", "refinement_pass",
                           "refinement_failed", "refinement_error",
                           "refinement_verify_failed", "refinement_skip"),
-    "fallback": ("fallback", "fallback_all_vetoed", "budget_exhausted"),
+    "fallback": ("fallback", "fallback_all_vetoed", "budget_exhausted",
+                 "budget_no_verified_candidate"),
 }.items():
     for _s in _stages:
         _STAGE_PHASE[_s] = _phase
@@ -644,9 +645,22 @@ class V3PipelineService:
                 chosen = passing[0]
                 result["passed"] = True
                 result["phase_solved"] = "budget"
-            elif pool:
-                pool.sort(key=lambda c: c.get("energy", 999))
-                chosen = pool[0]
+            else:
+                # No code rather than an unverified candidate. The caller's
+                # baseline is the model's own write, which is syntax- and
+                # structure-gated; a candidate that failed the sandbox is
+                # not better than that, and ranking the failures by energy
+                # picks among them without evidence.
+                #
+                # Measured across a 28-session run: 7 of 8 returns took the
+                # unverified path and task success fell 20/28 to 17/28 —
+                # aoc_course and aoc_slope went 2/2 to 0/2 — while harness
+                # integrity reached 28/28. The same reasoning the vetoed
+                # path already uses: "executes but is wrong" is worse than
+                # an honest failure.
+                emit("budget_no_verified_candidate",
+                     f"{len(pool)} candidate(s), none verified — "
+                     f"leaving the caller's gated baseline in place")
             if chosen is not None:
                 result["code"] = chosen["code"]
                 result["verification_evidence"] = chosen.get("verification_evidence", [])

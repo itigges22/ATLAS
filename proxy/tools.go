@@ -3798,7 +3798,7 @@ func v3StageToEvent(stage string) string {
 	case "phase3", "pr_cot", "pr_cot_pass", "pr_cot_failed", "pr_cot_error",
 		"refinement", "refinement_pass", "refinement_failed", "refinement_error",
 		"refinement_skip", "fallback", "fallback_all_vetoed",
-		"budget_exhausted":
+		"budget_exhausted", "budget_no_verified_candidate":
 		return "v3_repair"
 	case "probe", "probe_light", "probe_retry", "probe_failed",
 		"probe_scored", "probe_sandbox", "probe_pass", "probe_error":
