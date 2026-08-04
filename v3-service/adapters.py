@@ -20,6 +20,21 @@ LENS_URL = os.environ.get("ATLAS_LENS_URL", "http://localhost:8099")
 SANDBOX_URL = os.environ.get("ATLAS_SANDBOX_URL", "http://localhost:30820")
 
 
+def _max_inflight() -> int:
+    """How many generations may be in flight against llama.cpp at once.
+
+    Defaults to the server's slot count, since a request beyond that queues
+    behind a slot rather than gaining anything — llama.cpp oversubscribed
+    past its slots degrades latency sharply. ATLAS_V3_MAX_INFLIGHT overrides;
+    1 restores the fully serialized behaviour.
+    """
+    for var in ("ATLAS_V3_MAX_INFLIGHT", "ATLAS_PARALLEL_SLOTS", "PARALLEL_SLOTS"):
+        raw = os.environ.get(var)
+        if raw and raw.strip().isdigit() and int(raw) > 0:
+            return int(raw)
+    return 4
+
+
 def _load_service_token() -> str:
     """Internal-auth token (Authorization: Bearer). Empty = auth
     disabled — an install without `atlas init` keeps the open-localhost
@@ -135,7 +150,25 @@ class LLMAdapter:
     override via the `thinking` keyword for ad-hoc switches.
     """
 
-    _lock = threading.Lock()
+    # Bounds how many generations this service has in flight at once.
+    #
+    # This was a Lock, added when the service moved to ThreadingHTTPServer so
+    # a long pipeline call could not starve /health and /internal/* — its job
+    # was to keep concurrent REQUESTS from oversubscribing llama.cpp. Being
+    # class-level, it also serialized the calls inside a single pipeline run,
+    # which is where the cost landed: PlanSearch generates its candidates from
+    # independent plans and seeds, and 4 of them ran end to end at ~22s each
+    # while three of llama-server's four slots sat idle. Measured 2026-08-03,
+    # 8 sequential calls totalling 166s against the proxy's 180s cap.
+    #
+    # A semaphore keeps the original guarantee — never more in flight than the
+    # backend has slots — while letting independent generations share them.
+    # llama.cpp batches concurrent slots itself; serializing here did that job
+    # a second time, worse.
+    _slots = threading.BoundedSemaphore(_max_inflight())
+
+    # Counter updates are read-modify-write and now run under concurrency.
+    _counter_lock = threading.Lock()
 
     def __init__(self, progress_callback=None, thinking: bool = False):
         self.call_count = 0
@@ -164,7 +197,9 @@ class LLMAdapter:
     def __call__(self, prompt: str, temperature: float,
                  max_tokens: int, seed: Optional[int],
                  thinking: Optional[bool] = None) -> Tuple[str, int, float]:
-        self.call_count += 1
+        with LLMAdapter._counter_lock:
+            self.call_count += 1
+            call_no = self.call_count
 
         # Resolve per-call override against the instance default (PC-206).
         thinking_resolved = self.thinking if thinking is None else thinking
@@ -187,19 +222,20 @@ class LLMAdapter:
         start = time.time()
         # Marker so the TUI can frame this LLM call. Mirrors what
         # atlas-proxy emits around its own llama.cpp calls.
-        self._emit("llm_start", f"call #{self.call_count}",
-                   call=self.call_count, max_tokens=max_tokens,
+        self._emit("llm_start", f"call #{call_no}",
+                   call=call_no, max_tokens=max_tokens,
                    temperature=temperature)
-        data = self._send(body)
+        data = self._send(body, call_no)
         # The streaming send already emitted token events; emit a
         # closing marker with totals so the TUI can replace the live
         # row with a compact summary.
         elapsed_ms = (time.time() - start) * 1000
-        self.total_time_ms += elapsed_ms
         completion_tokens = data.get("usage", {}).get("completion_tokens", 0) \
             or data.get("usage", {}).get("total_tokens", 0)
+        with LLMAdapter._counter_lock:
+            self.total_time_ms += elapsed_ms
         self._emit("llm_end", f"{completion_tokens} tok · {elapsed_ms:.0f}ms",
-                   call=self.call_count, tokens=completion_tokens,
+                   call=call_no, tokens=completion_tokens,
                    elapsed_ms=int(elapsed_ms))
 
         # Parse response
@@ -213,10 +249,11 @@ class LLMAdapter:
         if '</think>' in content and '<think>' not in content:
             content = content[content.index('</think>') + len('</think>'):].strip()
 
-        self.total_tokens += tokens
+        with LLMAdapter._counter_lock:
+            self.total_tokens += tokens
         return content, tokens, elapsed_ms
 
-    def _send(self, body: dict) -> dict:
+    def _send(self, body: dict, call_no: int = 0) -> dict:
         """Send to llama-server via /v1/chat/completions.
 
         V3 modules generate ChatML prompts. We parse them into messages format
@@ -269,7 +306,7 @@ class LLMAdapter:
         )
         for attempt in range(5):
             try:
-                with LLMAdapter._lock:
+                with LLMAdapter._slots:
                     with urllib.request.urlopen(req, timeout=600) as resp:
                         if not chat_body["stream"]:
                             data = json.loads(resp.read())
@@ -315,7 +352,11 @@ class LLMAdapter:
                                 rdelta = delta_obj.get("reasoning_content", "") or ""
                                 if delta:
                                     full.append(delta)
-                                    self._emit("token", delta)
+                                    # Tagged with the call it belongs to:
+                                    # concurrent generations interleave in
+                                    # this stream, and an untagged token
+                                    # cannot be attributed to one of them.
+                                    self._emit("token", delta, call=call_no)
                                 if rdelta:
                                     reasoning.append(rdelta)
                             u = chunk.get("usage")

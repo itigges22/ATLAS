@@ -20,6 +20,7 @@ within this massively narrowed space rather than searching blindly.
 import json
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -394,33 +395,44 @@ class PlanSearch:
             )]
             result.constraint_sets = constraint_sets
 
-        # Steps 2 and 3 run sequentially on purpose: both LLM adapters
-        # serialize generation behind a lock (the service adapter always,
-        # the bench adapter unless ATLAS_LLM_PARALLEL spends its
-        # concurrency at the task level), so a thread pool here added
-        # threads without parallelism.
-
-        # Step 2: Plan Construction
-        plans: List[Plan] = []
-        for i, cs in enumerate(constraint_sets):
-            plan, tokens, _t = self._step2_construct_plan(
-                problem, cs, llm_call, budget_tier,
-                seed=base_seed + i + 100
-            )
-            plans.append(plan)
+        # Steps 2 and 3 fan out. Each plan is built from its own constraint
+        # set, and each candidate from its own plan and seed, so nothing in
+        # either step reads another's result — this is the parallel-sampling
+        # shape best-of-N assumes, and it was being run end to end.
+        #
+        # The comment here used to say a pool "added threads without
+        # parallelism" because the service adapter serialized every call
+        # behind a class-level lock. That lock existed to stop concurrent
+        # REQUESTS from oversubscribing llama.cpp and is now a semaphore
+        # bounded by the slot count, so independent calls share the slots
+        # the server already had.
+        #
+        # Measured 2026-08-03: 4 candidates at ~22s each, strictly serial,
+        # inside a pipeline that totalled 166s against the proxy's 180s cap
+        # while three of four slots idled.
+        plans: List[Plan] = [None] * len(constraint_sets)
+        step2_results = self._fan_out(
+            [(i, cs) for i, cs in enumerate(constraint_sets)],
+            lambda i, cs: self._step2_construct_plan(
+                problem, cs, llm_call, budget_tier, seed=base_seed + i + 100),
+        )
+        for i, (plan, tokens, _t) in step2_results:
+            plans[i] = plan
             step2_tokens += tokens
+        plans = [p for p in plans if p is not None]
         result.plans = plans
 
         # Step 3: Code Generation
-        candidates: List[str] = []
-        for i, plan in enumerate(plans):
-            code, tokens, _t = self._step3_generate_code(
-                problem, plan, llm_call, budget_tier,
-                seed=base_seed + i + 200
-            )
-            candidates.append(code)
+        candidates: List[str] = [None] * len(plans)
+        step3_results = self._fan_out(
+            [(i, p) for i, p in enumerate(plans)],
+            lambda i, plan: self._step3_generate_code(
+                problem, plan, llm_call, budget_tier, seed=base_seed + i + 200),
+        )
+        for i, (code, tokens, _t) in step3_results:
+            candidates[i] = code
             step3_tokens += tokens
-        result.candidates = candidates
+        result.candidates = [c for c in candidates if c is not None]
 
         total_time = (time.time() - total_start) * 1000
         result.total_tokens = step1_tokens + step2_tokens + step3_tokens
@@ -443,6 +455,39 @@ class PlanSearch:
         return result
 
     # -- Pipeline steps -----------------------------------------------------
+
+    def _fan_out(self, items, fn):
+        """Run `fn(index, item)` over independent items, results in order.
+
+        Concurrency is bounded downstream by the adapter's slot semaphore, so
+        the pool only has to be wide enough to keep those slots fed; the
+        backend decides how many actually run at once.
+
+        One item raising drops that item and leaves the rest — a candidate
+        that fails to generate is a smaller loss than the batch, and the
+        caller already tolerates a short candidate list.
+        """
+        if len(items) <= 1:
+            out = []
+            for idx, item in items:
+                try:
+                    out.append((idx, fn(idx, item)))
+                except Exception as exc:  # noqa: BLE001 — one item, not the batch
+                    print(f"  [plansearch] item {idx} failed: {exc}", flush=True)
+            return out
+
+        results = []
+        with ThreadPoolExecutor(max_workers=len(items)) as pool:
+            futures = {pool.submit(fn, idx, item): idx for idx, item in items}
+            for fut, idx in futures.items():
+                try:
+                    results.append((idx, fut.result()))
+                except Exception as exc:  # noqa: BLE001
+                    print(f"  [plansearch] item {idx} failed: {exc}", flush=True)
+        # Ordered by index so seeds, plans and candidates stay aligned with
+        # the constraint sets they came from — selection reports winners by
+        # index, and a reordered list would rename them.
+        return sorted(results, key=lambda r: r[0])
 
     def _step1_extract_constraints(
         self, problem: str, n: int,
