@@ -358,7 +358,13 @@ class V3PipelineService:
             if getattr(progress_callback, "disconnected", False):
                 raise adapters.ClientDisconnected(f"client disconnected during task {task_id}")
 
-        llm = adapters.LLMAdapter(progress_callback=emit)
+        # The adapter refuses to start a generation that cannot finish
+        # before the cap, so every phase and every loop inside one is
+        # covered by a single check rather than a boundary guard each.
+        _budget_ms = _remaining_budget_ms(start)
+        llm = adapters.LLMAdapter(
+            progress_callback=emit,
+            deadline=(start + _budget_ms / 1000.0) if _budget_ms is not None else None)
         # PC-046: ship the user's other project files into the sandbox so
         # multi-file imports resolve. `files` is the same Dict that V3
         # already prepends to the LLM prompt above; passing it to the
@@ -581,18 +587,28 @@ class V3PipelineService:
         emit("phase1", f"Generating {k} diverse candidates...", k=k)
         candidates = []
 
-        def out_of_budget(reserve_ms: float = 20000.0) -> bool:
+        def out_of_budget(reserve_ms: Optional[float] = None) -> bool:
             """True when too little of ATLAS_V3_TIMEOUT is left to start more
             work and still hand back a result.
 
-            The refinement loop was the only phase that checked, and it
-            checked once, using an estimate of a single iteration. Everything
-            ahead of it — probe, self-tests, PlanSearch, sandbox — ran
-            unguarded, so the budget was already gone by the time the
-            estimate mattered.
+            The reserve defaults to the cost of one more LLM call as observed
+            on this run, plus room to serialize the result. A flat reserve is
+            useless here: measured 2026-08-03, a phase-3 entry check with 20s
+            left passed, PR-CoT then spent 31s on one call and the cap landed
+            mid-way through the next. The unit of work is a generation, so
+            that is what has to fit.
+
+            The refinement loop was the only phase that checked at all, and it
+            checked once. Everything ahead of it — probe, self-tests,
+            PlanSearch, sandbox, PR-CoT — ran unguarded.
             """
             left = _remaining_budget_ms(start)
-            return left is not None and left < reserve_ms
+            if left is None:
+                return False
+            if reserve_ms is None:
+                observed = getattr(llm, "avg_call_ms", 0.0) or 0.0
+                reserve_ms = max(20000.0, observed * 1.2 + 10000.0)
+            return left < reserve_ms
 
         def finish_with_best(reason: str) -> Dict[str, Any]:
             """Hand back the best candidate found so far.
@@ -635,502 +651,512 @@ class V3PipelineService:
             result["total_time_ms"] = (time.time() - start) * 1000
             result["events"] = events
             return result
+        try:
 
-        # Start with probe if it produced code
-        if probe_code:
-            candidates.append({
-                "index": 0, "code": probe_code,
-                "energy": probe_energy_raw, "energy_norm": probe_energy_norm,
-                "energy_calibrated": probe_cx_calibrated,
-                "passed": probe_passed, "stdout": "", "stderr": "",
-            })
+            # Start with probe if it produced code
+            if probe_code:
+                candidates.append({
+                    "index": 0, "code": probe_code,
+                    "energy": probe_energy_raw, "energy_norm": probe_energy_norm,
+                    "energy_calibrated": probe_cx_calibrated,
+                    "passed": probe_passed, "stdout": "", "stderr": "",
+                })
 
-        remaining_k = max(0, k - len(candidates))
+            remaining_k = max(0, k - len(candidates))
 
-        # Step 1A: PlanSearch
-        if remaining_k > 0:
-            emit("plansearch", f"Generating {remaining_k} plans...",
-                 plans=remaining_k)
-            try:
-                ps_result = self.plan_search.generate(
-                    problem, task_id, llm, num_plans=remaining_k,
-                )
-                for i, code in enumerate(ps_result.candidates):
-                    if code:
-                        energy_raw, energy_norm, energy_calibrated = scoring.score_candidate(code)
-                        per_step = scoring.score_candidate_per_step(code)  # PC-207
-                        cand_index = len(candidates)
-                        candidates.append({
-                            "index": cand_index, "code": code,
-                            "energy": energy_raw, "energy_norm": energy_norm,
-                            "energy_calibrated": energy_calibrated,
-                            "passed": False, "stdout": "", "stderr": "",
-                            "per_step": per_step,
-                        })
-                        if per_step:
-                            emit("lens_per_step",
-                                 f"cand {cand_index}: gx_min={per_step['gx_score_min']:.2f} "
-                                 f"first_off_rails={per_step['first_off_rails_idx']}",
-                                 index=cand_index,
-                                 source="plansearch",
-                                 first_off_rails_idx=per_step["first_off_rails_idx"],
-                                 gx_score_min=per_step["gx_score_min"],
-                                 gx_score_mean=per_step["gx_score_mean"],
-                                 cx_norm_max=per_step["cx_norm_max"],
-                                 n_tokens=per_step["n_tokens"])
-                result["total_tokens"] += ps_result.total_tokens
-                emit("plansearch_done",
-                     f"{len(ps_result.candidates)} candidates from PlanSearch",
-                     candidates=len(ps_result.candidates),
-                     tokens=ps_result.total_tokens)
-            except Exception as e:
-                emit("plansearch_error", str(e)[:200])
-
-        # Step 1B: DivSampling to fill remaining slots
-        remaining_k = max(0, k - len(candidates))
-        if remaining_k > 0:
-            emit("divsampling", f"Filling {remaining_k} slots with diverse sampling...",
-                 slots=remaining_k)
-            for idx in range(remaining_k):
-                check_client()
-                if out_of_budget():
-                    emit("divsampling_stop",
-                         f"budget spent after {len(candidates)} candidate(s)")
-                    break
+            # Step 1A: PlanSearch
+            if remaining_k > 0:
+                emit("plansearch", f"Generating {remaining_k} plans...",
+                     plans=remaining_k)
                 try:
-                    perturbed = self.div_sampling.apply(problem, len(candidates) + idx, task_id)
-                    chatml = self.budget_forcing.format_chatml(perturbed, bf_tier)
-                    response, tokens, t_ms = llm(
-                        chatml, DIVERSITY_TEMPERATURE,
-                        self.budget_forcing.get_max_tokens(bf_tier),
-                        42 + len(candidates) + idx,
+                    ps_result = self.plan_search.generate(
+                        problem, task_id, llm, num_plans=remaining_k,
                     )
-                    code = extract_code(response)
-                    if code:
-                        energy_raw, energy_norm, energy_calibrated = scoring.score_candidate(code)
-                        per_step = scoring.score_candidate_per_step(code)  # PC-207
-                        cand_index = len(candidates)
-                        candidates.append({
-                            "index": cand_index, "code": code,
-                            "energy": energy_raw, "energy_norm": energy_norm,
-                            "energy_calibrated": energy_calibrated,
-                            "passed": False, "stdout": "", "stderr": "",
-                            "per_step": per_step,
-                        })
-                        if per_step:
-                            emit("lens_per_step",
-                                 f"cand {cand_index}: gx_min={per_step['gx_score_min']:.2f} "
-                                 f"first_off_rails={per_step['first_off_rails_idx']}",
-                                 index=cand_index,
-                                 source="divsampling",
-                                 first_off_rails_idx=per_step["first_off_rails_idx"],
-                                 gx_score_min=per_step["gx_score_min"],
-                                 gx_score_mean=per_step["gx_score_mean"],
-                                 cx_norm_max=per_step["cx_norm_max"],
-                                 n_tokens=per_step["n_tokens"])
-                    result["total_tokens"] += tokens
+                    for i, code in enumerate(ps_result.candidates):
+                        if code:
+                            energy_raw, energy_norm, energy_calibrated = scoring.score_candidate(code)
+                            per_step = scoring.score_candidate_per_step(code)  # PC-207
+                            cand_index = len(candidates)
+                            candidates.append({
+                                "index": cand_index, "code": code,
+                                "energy": energy_raw, "energy_norm": energy_norm,
+                                "energy_calibrated": energy_calibrated,
+                                "passed": False, "stdout": "", "stderr": "",
+                                "per_step": per_step,
+                            })
+                            if per_step:
+                                emit("lens_per_step",
+                                     f"cand {cand_index}: gx_min={per_step['gx_score_min']:.2f} "
+                                     f"first_off_rails={per_step['first_off_rails_idx']}",
+                                     index=cand_index,
+                                     source="plansearch",
+                                     first_off_rails_idx=per_step["first_off_rails_idx"],
+                                     gx_score_min=per_step["gx_score_min"],
+                                     gx_score_mean=per_step["gx_score_mean"],
+                                     cx_norm_max=per_step["cx_norm_max"],
+                                     n_tokens=per_step["n_tokens"])
+                    result["total_tokens"] += ps_result.total_tokens
+                    emit("plansearch_done",
+                         f"{len(ps_result.candidates)} candidates from PlanSearch",
+                         candidates=len(ps_result.candidates),
+                         tokens=ps_result.total_tokens)
                 except Exception as e:
-                    emit("divsampling_error", str(e)[:200])
-            emit("divsampling_done", f"{len(candidates)} total candidates",
-                 total=len(candidates))
+                    emit("plansearch_error", str(e)[:200])
 
-        result["candidates_generated"] = len(candidates)
-
-        # ===== SANDBOX TESTING =====
-        emit("sandbox_test", f"Testing {len(candidates)} candidates...",
-             candidates=len(candidates))
-        # Sort by energy (easy first) for early-exit potential
-        candidates.sort(key=lambda c: c.get("energy", 0))
-
-        passing = []
-        for c in candidates:
-            check_client()
-            if c.get("passed"):
-                passing.append(c)
-                continue
-            sb_start = time.time()
-            passed, stdout, stderr, verification_evidence = verified_sandbox(c["code"])
-            sb_ms = int((time.time() - sb_start) * 1000)
-            c["passed"] = passed
-            c["stdout"] = stdout
-            c["stderr"] = stderr
-            c["verification_evidence"] = verification_evidence
-            if passed:
-                passing.append(c)
-                emit("sandbox_pass", f"Candidate {c['index']} passed",
-                     index=c["index"], elapsed_ms=sb_ms,
-                     energy=c.get("energy_norm", 0.0))
-            else:
-                emit("sandbox_fail", f"Candidate {c['index']} failed",
-                     index=c["index"], elapsed_ms=sb_ms,
-                     stderr=(stderr or "")[:120])
-
-        emit("sandbox_done", f"{len(passing)}/{len(candidates)} passed",
-             passed=len(passing), total=len(candidates))
-
-        # ===== LENS VETO =====
-        # PC-207 alignment fix: hard-reject sandbox-passing candidates whose
-        # geometric-lens gx_min sits below THIS model's calibrated severe band.
-        # Sandbox is an ORM (does it execute?), lens is a PRM (is the
-        # generation pattern collapsing into a stub?) — they answer
-        # different questions. The May 7 dashboard.html session shipped
-        # a 10-line `<h1>Dashboard</h1>` stub because sandbox said pass
-        # while lens said gx_min=0.069. Without this filter, V3 returns
-        # passed=True and the proxy's PC-044 nudges the agent to done.
-        #
-        # Language-agnostic by construction: the lens runs on the model's
-        # residual stream; gx values don't depend on whether the file
-        # being scored is HTML, Python, Rust, or Java.
-        if passing:
-            kept, vetoed = [], []
-            for c in passing:
-                per_step = c.get("per_step") or {}
-                gx_min = per_step.get("gx_score_min")
-                severe = (per_step.get("thresholds") or {}).get("severe")
-                if (gx_min is not None and isinstance(severe, (int, float))
-                        and gx_min < severe):
-                    # A vetoed candidate is a failing candidate: mark it so
-                    # the phase-3 pool (`not c.get("passed")`) picks it up
-                    # and the energy fallback can never return it. The veto
-                    # reason replaces the (empty) passing-run stderr so
-                    # repair sees WHY it was rejected.
-                    c["passed"] = False
-                    c["vetoed_by"] = "lens"
-                    c["stderr"] = (
-                        f"lens veto: gx_min={gx_min:.3f} below the severe "
-                        f"threshold {severe:.3f} — generation pattern "
-                        f"collapsed toward a stub; the code executes but "
-                        f"likely does not implement the task")
-                    vetoed.append(c)
-                    emit("lens_veto",
-                         f"Candidate {c['index']} sandbox-passed but lens-vetoed "
-                         f"(gx_min={gx_min:.3f} < {severe:.3f}) — likely a stub",
-                         index=c["index"], gx_score_min=gx_min,
-                         first_off_rails_idx=per_step.get("first_off_rails_idx", -1))
-                else:
-                    kept.append(c)
-            if vetoed:
-                print(
-                    f"  [lens] vetoed {len(vetoed)}/{len(passing)} sandbox-passing "
-                    f"candidates using per-model severe thresholds — falling "
-                    f"{'through to phase-3 repair' if not kept else 'back to remaining %d' % len(kept)}",
-                    flush=True,
-                )
-            passing = kept
-
-        # ===== STRUCTURAL VETO =====
-        # GH #39 point 1: hard-reject candidates whose direct-identifier
-        # calls don't resolve against (local defs, imports, builtins,
-        # project symbols). Sandbox can pass for code where the unresolved
-        # call is in a try/except ImportError fallback or a dead branch
-        # that doesn't execute under the tests; tree-sitter sees the
-        # surface bug regardless. Same architecture as lens veto.
-        #
-        # Language-agnostic fit: v1 supports Python only (matches the
-        # rest of the GH #39 stack), but the resolution-order pattern
-        # generalizes to any language with explicit imports + named
-        # functions (Go, Rust, JS/TS modules). Adding a language adds
-        # implementation surface, not model-facing API surface.
-        if passing:
-            # #147: gate on `passing` alone, not `passing and files`. The
-            # edit path (improveContentWithV3) frequently sends no
-            # project_context, so `files` was empty and the whole veto was
-            # skipped — a NameError edit (render_template called with only
-            # render_template_string imported) sailed through and landed as
-            # verified. structural_score resolves against the candidate's
-            # OWN imports/defs/builtins, so it catches an unresolved direct
-            # call with empty project_symbols; project symbols only add
-            # lenient cross-file crediting.
-            project_symbols = symbols.build_project_symbols(files or {})
-            kept = []
-            for c in passing:
-                struct = symbols.structural_score(project_symbols, c.get("code", ""))
-                if struct.get("ok") and struct.get("n_unresolved", 0) >= 1:
-                    # Same contract as the lens veto: vetoed = failing.
-                    c["passed"] = False
-                    c["vetoed_by"] = "structural"
-                    c["stderr"] = (
-                        "structural veto: unresolved direct call(s) that "
-                        "would raise NameError at runtime: "
-                        + ", ".join(struct["unresolved_calls"][:5]))
-                    emit("structural_veto",
-                         f"Candidate {c['index']} sandbox-passed but "
-                         f"{struct['n_unresolved']} unresolved call(s): "
-                         f"{', '.join(struct['unresolved_calls'][:3])}",
-                         index=c["index"],
-                         n_unresolved=struct["n_unresolved"],
-                         unresolved_calls=struct["unresolved_calls"][:5],
-                         n_calls_total=struct["n_calls_total"])
-                    print(
-                        f"  [structural] vetoed cand {c['index']} — "
-                        f"{struct['n_unresolved']} unresolved: {struct['unresolved_calls'][:5]}",
-                        flush=True,
-                    )
-                    continue
-                if struct.get("ok"):
-                    c["structural"] = struct  # stash for phase 3 / repair
-                kept.append(c)
-            if len(kept) < len(passing):
-                print(
-                    f"  [structural] kept {len(kept)}/{len(passing)} candidates after structural veto"
-                    f"{' — falling through to phase-3 repair' if not kept else ''}",
-                    flush=True,
-                )
-            passing = kept
-
-        # ===== CALL-GRAPH VETO (issue #39, Phase 1) =====
-        # Deepens the structural veto using the import graph: reject a candidate
-        # whose direct calls don't resolve to a real, in-scope definition (local,
-        # builtin, imported, or supplied by a resolved wildcard) — not merely
-        # "some project file defines that name." Catches broken cross-file
-        # references the shipped veto accepts. Flag-gated by ATLAS_CALL_GRAPH;
-        # conservative — stays lenient on opaque wildcards and never empties the
-        # candidate set (a fully-failing set falls through intact to repair).
-        if passing and files and file_path:
-            try:
-                from graph import call_graph_enabled, unresolved_calls
-                _cg_on = call_graph_enabled()
-            except Exception:
-                _cg_on = False
-            if _cg_on:
-                cg_kept, cg_vetoed = [], []
-                for c in passing:
+            # Step 1B: DivSampling to fill remaining slots
+            remaining_k = max(0, k - len(candidates))
+            if remaining_k > 0:
+                emit("divsampling", f"Filling {remaining_k} slots with diverse sampling...",
+                     slots=remaining_k)
+                for idx in range(remaining_k):
+                    check_client()
+                    if out_of_budget():
+                        emit("divsampling_stop",
+                             f"budget spent after {len(candidates)} candidate(s)")
+                        break
                     try:
-                        res = unresolved_calls(
-                            file_path, c.get("code", ""), files, strict=True)
-                    except Exception as cge:
-                        print(f"  [call_graph] veto skipped for cand {c.get('index')}: {cge}",
-                              flush=True)
-                        cg_kept.append(c)
-                        continue
-                    if res.get("ok") and res.get("unresolved"):
-                        cg_vetoed.append((c, res["unresolved"]))
-                        continue
-                    cg_kept.append(c)
-                if cg_kept:  # only prune when at least one candidate survives
-                    # Marking happens only when the prune actually applies —
-                    # the conservative all-vetoed case keeps the full set
-                    # (and its passed flags) intact.
-                    for c, unresolved in cg_vetoed:
+                        perturbed = self.div_sampling.apply(problem, len(candidates) + idx, task_id)
+                        chatml = self.budget_forcing.format_chatml(perturbed, bf_tier)
+                        response, tokens, t_ms = llm(
+                            chatml, DIVERSITY_TEMPERATURE,
+                            self.budget_forcing.get_max_tokens(bf_tier),
+                            42 + len(candidates) + idx,
+                        )
+                        code = extract_code(response)
+                        if code:
+                            energy_raw, energy_norm, energy_calibrated = scoring.score_candidate(code)
+                            per_step = scoring.score_candidate_per_step(code)  # PC-207
+                            cand_index = len(candidates)
+                            candidates.append({
+                                "index": cand_index, "code": code,
+                                "energy": energy_raw, "energy_norm": energy_norm,
+                                "energy_calibrated": energy_calibrated,
+                                "passed": False, "stdout": "", "stderr": "",
+                                "per_step": per_step,
+                            })
+                            if per_step:
+                                emit("lens_per_step",
+                                     f"cand {cand_index}: gx_min={per_step['gx_score_min']:.2f} "
+                                     f"first_off_rails={per_step['first_off_rails_idx']}",
+                                     index=cand_index,
+                                     source="divsampling",
+                                     first_off_rails_idx=per_step["first_off_rails_idx"],
+                                     gx_score_min=per_step["gx_score_min"],
+                                     gx_score_mean=per_step["gx_score_mean"],
+                                     cx_norm_max=per_step["cx_norm_max"],
+                                     n_tokens=per_step["n_tokens"])
+                        result["total_tokens"] += tokens
+                    except Exception as e:
+                        emit("divsampling_error", str(e)[:200])
+                emit("divsampling_done", f"{len(candidates)} total candidates",
+                     total=len(candidates))
+
+            result["candidates_generated"] = len(candidates)
+
+            # ===== SANDBOX TESTING =====
+            emit("sandbox_test", f"Testing {len(candidates)} candidates...",
+                 candidates=len(candidates))
+            # Sort by energy (easy first) for early-exit potential
+            candidates.sort(key=lambda c: c.get("energy", 0))
+
+            passing = []
+            for c in candidates:
+                check_client()
+                if c.get("passed"):
+                    passing.append(c)
+                    continue
+                sb_start = time.time()
+                passed, stdout, stderr, verification_evidence = verified_sandbox(c["code"])
+                sb_ms = int((time.time() - sb_start) * 1000)
+                c["passed"] = passed
+                c["stdout"] = stdout
+                c["stderr"] = stderr
+                c["verification_evidence"] = verification_evidence
+                if passed:
+                    passing.append(c)
+                    emit("sandbox_pass", f"Candidate {c['index']} passed",
+                         index=c["index"], elapsed_ms=sb_ms,
+                         energy=c.get("energy_norm", 0.0))
+                else:
+                    emit("sandbox_fail", f"Candidate {c['index']} failed",
+                         index=c["index"], elapsed_ms=sb_ms,
+                         stderr=(stderr or "")[:120])
+
+            emit("sandbox_done", f"{len(passing)}/{len(candidates)} passed",
+                 passed=len(passing), total=len(candidates))
+
+            # ===== LENS VETO =====
+            # PC-207 alignment fix: hard-reject sandbox-passing candidates whose
+            # geometric-lens gx_min sits below THIS model's calibrated severe band.
+            # Sandbox is an ORM (does it execute?), lens is a PRM (is the
+            # generation pattern collapsing into a stub?) — they answer
+            # different questions. The May 7 dashboard.html session shipped
+            # a 10-line `<h1>Dashboard</h1>` stub because sandbox said pass
+            # while lens said gx_min=0.069. Without this filter, V3 returns
+            # passed=True and the proxy's PC-044 nudges the agent to done.
+            #
+            # Language-agnostic by construction: the lens runs on the model's
+            # residual stream; gx values don't depend on whether the file
+            # being scored is HTML, Python, Rust, or Java.
+            if passing:
+                kept, vetoed = [], []
+                for c in passing:
+                    per_step = c.get("per_step") or {}
+                    gx_min = per_step.get("gx_score_min")
+                    severe = (per_step.get("thresholds") or {}).get("severe")
+                    if (gx_min is not None and isinstance(severe, (int, float))
+                            and gx_min < severe):
+                        # A vetoed candidate is a failing candidate: mark it so
+                        # the phase-3 pool (`not c.get("passed")`) picks it up
+                        # and the energy fallback can never return it. The veto
+                        # reason replaces the (empty) passing-run stderr so
+                        # repair sees WHY it was rejected.
                         c["passed"] = False
-                        c["vetoed_by"] = "call_graph"
+                        c["vetoed_by"] = "lens"
                         c["stderr"] = (
-                            "call-graph veto: cross-file call(s) that resolve "
-                            "to no in-scope definition: "
-                            + ", ".join(unresolved[:5]))
-                        emit("call_graph_veto",
-                             f"Candidate {c.get('index')} has unresolved call(s): "
-                             f"{', '.join(unresolved[:3])}",
-                             index=c.get("index"), unresolved=unresolved[:5])
-                        print(f"  [call_graph] vetoed cand {c.get('index')} — "
-                              f"unresolved: {unresolved[:5]}", flush=True)
-                    passing = cg_kept
-
-        # ===== CANDIDATE SELECTION =====
-        # Lens selection: minimum C(x) energy among the passing candidates.
-        # (S* tiebreaking used to run first for 2+ passers; across 118 H200
-        # tiebreaks every pair scored 0-0 and 110/110 winners equaled the
-        # lens min-energy pick, so it carried zero discriminating signal.)
-        if passing:
-            ci_list = [
-                CandidateInfo(c["index"], c["code"], c["energy"], c["passed"])
-                for c in passing
-            ]
-            selected = select_candidate(ci_list, strategy="lens")
-            if selected:
-                emit("selected", f"Lens selected candidate {selected.index}",
-                     index=selected.index, energy=getattr(selected, "energy", 0.0))
-                result["passed"] = True
-                result["code"] = selected.code
-                result["phase_solved"] = "phase1"
-                result["total_time_ms"] = (time.time() - start) * 1000
-                winner = _candidate_by_index(passing, selected.index)
-                result["verification_evidence"] = (winner or {}).get("verification_evidence", [])
-                result["winning_score"] = (winner or {}).get("energy_norm", 0.0)
-                result["events"] = events
-                return result
-
-        # ===== PHASE 3: VERIFIED ITERATIVE REFINEMENT =====
-        check_client()
-        if out_of_budget():
-            return finish_with_best("budget spent before the repair phase")
-        emit("phase3", "All candidates failed — entering repair phase...",
-             failing=len([c for c in candidates if not c.get("passed")]))
-
-        failing = [
-            FailingCandidate(
-                index=c["index"], code=c["code"],
-                error_output=c.get("stderr", ""),
-            )
-            for c in candidates if not c.get("passed")
-        ]
-
-        # Repair verifies against the SAME self-tests phase 0 generated —
-        # verified_sandbox closes over them. Regenerate only when phase 0
-        # produced none (e.g. a transient LLM failure); a failed retry here
-        # must not downgrade an existing good set to None. Interactive
-        # tasks repair against compile-smoke (PC-022).
-        if task_type == "algorithmic" and not (self_tests and self_tests.test_cases):
-            emit("self_test_gen", "Generating self-tests...")
-            try:
-                self_tests = self.self_test_gen.generate(problem, llm, task_id)
-                emit("self_test_done", f"{len(self_tests.test_cases)} test cases generated")
-                result["total_tokens"] += self_tests.generation_tokens
-            except Exception as e:
-                emit("self_test_error", str(e)[:200])
-
-        # GH #39 point 3: build call-graph context for the failing
-        # function once, reuse across PR-CoT + refinement. Skips
-        # cleanly when stderr isn't a Python traceback or the failing
-        # function isn't defined in the project — both arms get plain
-        # error_output in that case. When ATLAS_CALL_GRAPH is on the
-        # block is a multi-hop reachability slice (entry-point path,
-        # transitive impact, callees); flag-off it stays at direct
-        # callers/callees (1 hop). Fail-soft on any graph failure.
-        chain_context_block = ""
-        if failing:
-            failing_func = symbols._failing_function_from_stderr(failing[0].error_output)
-            if failing_func and files:
-                try:
-                    from graph import call_graph_enabled as _cg_on, repair_context as _cg_repair
-                    chain_context_block = _cg_repair(files, failing_func, transitive=_cg_on())
-                except Exception as cge:
-                    print(f"  [phase3] graph repair-context skipped: {cge}", flush=True)
-                if chain_context_block:
-                    emit("call_chain_context",
-                         f"Built call-chain for failing `{failing_func}`",
-                         function=failing_func)
+                            f"lens veto: gx_min={gx_min:.3f} below the severe "
+                            f"threshold {severe:.3f} — generation pattern "
+                            f"collapsed toward a stub; the code executes but "
+                            f"likely does not implement the task")
+                        vetoed.append(c)
+                        emit("lens_veto",
+                             f"Candidate {c['index']} sandbox-passed but lens-vetoed "
+                             f"(gx_min={gx_min:.3f} < {severe:.3f}) — likely a stub",
+                             index=c["index"], gx_score_min=gx_min,
+                             first_off_rails_idx=per_step.get("first_off_rails_idx", -1))
+                    else:
+                        kept.append(c)
+                if vetoed:
                     print(
-                        f"  [phase3] call-chain context built for `{failing_func}`",
+                        f"  [lens] vetoed {len(vetoed)}/{len(passing)} sandbox-passing "
+                        f"candidates using per-model severe thresholds — falling "
+                        f"{'through to phase-3 repair' if not kept else 'back to remaining %d' % len(kept)}",
                         flush=True,
                     )
+                passing = kept
 
-        def _enriched_error(stderr: str) -> str:
-            """Append call-chain context to a candidate's stderr if available."""
-            if not chain_context_block:
-                return stderr
-            return (stderr or "") + "\n\n" + chain_context_block
-
-        # Strategy 1: PR-CoT Quick Repair
-        if failing:
-            emit("pr_cot", "Attempting PR-CoT repair...",
-                 strategy="pr_cot", failing=len(failing))
-            best_failing = failing[0]
-            try:
-                pr_result = self.pr_cot.repair(
-                    problem=problem,
-                    code=best_failing.code,
-                    error=_enriched_error(best_failing.error_output),
-                    llm_call=llm,
-                    task_id=task_id,
-                )
-                result["total_tokens"] += pr_result.total_tokens
-                for repair_code in pr_result.repairs:
-                    passed, stdout, stderr, repair_evidence = verified_sandbox(repair_code)
-                    if passed:
-                        emit("pr_cot_pass", "PR-CoT repair succeeded!",
-                             strategy="pr_cot", tokens=pr_result.total_tokens)
-                        result["passed"] = True
-                        result["code"] = repair_code
-                        result["phase_solved"] = "pr_cot"
-                        result["total_time_ms"] = (time.time() - start) * 1000
-                        result["verification_evidence"] = repair_evidence
-                        result["events"] = events
-                        return result
-                emit("pr_cot_failed", "PR-CoT repair did not produce passing code")
-            except Exception as e:
-                emit("pr_cot_error", str(e)[:200])
-
-        # Strategy 2: Refinement Loop — entered only when the remaining
-        # wall-clock can afford one iteration. H200 join: 453/487
-        # refinement entries timed out with ZERO completed iterations
-        # while burning ~6 minutes each; one iteration is ~3 sequential
-        # LLM calls, estimated at the per-call latency observed on THIS
-        # run. The budget is the ATLAS_V3_TIMEOUT cap the proxy's V3
-        # bridge enforces — starting work the bridge will abandon only
-        # delays the fallback the user ends up with.
-        run_refinement = bool(failing)
-        if run_refinement:
-            est_ms = estimate_iteration_ms(getattr(llm, "avg_call_ms", 0.0))
-            remaining_ms = _remaining_budget_ms(start)
-            if (remaining_ms is not None
-                    and not can_afford_iteration(remaining_ms, est_ms)):
-                run_refinement = False
-                emit("refinement_skip",
-                     f"remaining budget {remaining_ms / 1000:.0f}s cannot "
-                     f"afford one iteration (~{est_ms / 1000:.0f}s) — "
-                     f"skipping to fallback",
-                     strategy="refinement",
-                     remaining_ms=round(remaining_ms),
-                     estimated_iteration_ms=round(est_ms))
-        if run_refinement and out_of_budget():
-            run_refinement = False
-        if run_refinement:
-            check_client()
-            emit("refinement", "Starting refinement loop...",
-                 strategy="refinement", failing=len(failing))
-            # GH #39 point 3: enrich each failing candidate's error_output
-            # with call-chain context so the refinement loop sees it on
-            # every iteration. Cheap (chain_context_block is built once
-            # above and reused).
-            failing_for_refinement = failing
-            if chain_context_block:
-                failing_for_refinement = [
-                    FailingCandidate(
-                        index=c.index,
-                        code=c.code,
-                        error_output=_enriched_error(c.error_output),
+            # ===== STRUCTURAL VETO =====
+            # GH #39 point 1: hard-reject candidates whose direct-identifier
+            # calls don't resolve against (local defs, imports, builtins,
+            # project symbols). Sandbox can pass for code where the unresolved
+            # call is in a try/except ImportError fallback or a dead branch
+            # that doesn't execute under the tests; tree-sitter sees the
+            # surface bug regardless. Same architecture as lens veto.
+            #
+            # Language-agnostic fit: v1 supports Python only (matches the
+            # rest of the GH #39 stack), but the resolution-order pattern
+            # generalizes to any language with explicit imports + named
+            # functions (Go, Rust, JS/TS modules). Adding a language adds
+            # implementation surface, not model-facing API surface.
+            if passing:
+                # #147: gate on `passing` alone, not `passing and files`. The
+                # edit path (improveContentWithV3) frequently sends no
+                # project_context, so `files` was empty and the whole veto was
+                # skipped — a NameError edit (render_template called with only
+                # render_template_string imported) sailed through and landed as
+                # verified. structural_score resolves against the candidate's
+                # OWN imports/defs/builtins, so it catches an unresolved direct
+                # call with empty project_symbols; project symbols only add
+                # lenient cross-file crediting.
+                project_symbols = symbols.build_project_symbols(files or {})
+                kept = []
+                for c in passing:
+                    struct = symbols.structural_score(project_symbols, c.get("code", ""))
+                    if struct.get("ok") and struct.get("n_unresolved", 0) >= 1:
+                        # Same contract as the lens veto: vetoed = failing.
+                        c["passed"] = False
+                        c["vetoed_by"] = "structural"
+                        c["stderr"] = (
+                            "structural veto: unresolved direct call(s) that "
+                            "would raise NameError at runtime: "
+                            + ", ".join(struct["unresolved_calls"][:5]))
+                        emit("structural_veto",
+                             f"Candidate {c['index']} sandbox-passed but "
+                             f"{struct['n_unresolved']} unresolved call(s): "
+                             f"{', '.join(struct['unresolved_calls'][:3])}",
+                             index=c["index"],
+                             n_unresolved=struct["n_unresolved"],
+                             unresolved_calls=struct["unresolved_calls"][:5],
+                             n_calls_total=struct["n_calls_total"])
+                        print(
+                            f"  [structural] vetoed cand {c['index']} — "
+                            f"{struct['n_unresolved']} unresolved: {struct['unresolved_calls'][:5]}",
+                            flush=True,
+                        )
+                        continue
+                    if struct.get("ok"):
+                        c["structural"] = struct  # stash for phase 3 / repair
+                    kept.append(c)
+                if len(kept) < len(passing):
+                    print(
+                        f"  [structural] kept {len(kept)}/{len(passing)} candidates after structural veto"
+                        f"{' — falling through to phase-3 repair' if not kept else ''}",
+                        flush=True,
                     )
-                    for c in failing
-                ]
-            try:
-                ref_result = self.refinement_loop.run(
-                    problem=problem,
-                    failing_candidates=failing_for_refinement,
-                    original_constraints=[],
-                    llm_call=llm,
-                    sandbox_run=sandbox,
-                    embed_call=embed,
-                    task_id=task_id,
-                )
-                result["total_tokens"] += ref_result.total_tokens
-                if ref_result.solved:
-                    passed, stdout, stderr, refinement_evidence = verified_sandbox(ref_result.winning_code)
-                    if passed:
-                        emit("refinement_pass",
-                             f"Refinement solved in {ref_result.total_iterations} iterations!",
-                             strategy="refinement",
-                             iterations=ref_result.total_iterations,
-                             tokens=ref_result.total_tokens)
-                        result["passed"] = True
-                        result["code"] = ref_result.winning_code
-                        result["phase_solved"] = "refinement"
-                        result["total_time_ms"] = (time.time() - start) * 1000
-                        result["verification_evidence"] = refinement_evidence
-                        result["events"] = events
-                        return result
-                    emit("refinement_verify_failed", (stderr or "")[:200])
-                emit("refinement_failed", f"Exhausted {ref_result.total_iterations} iterations")
-            except Exception as e:
-                emit("refinement_error", str(e)[:200])
+                passing = kept
 
-        # ===== FALLBACK: Return best candidate even if none passed =====
-        # Vetoed candidates are excluded outright: a veto means "executes
-        # but is wrong" (stub, NameError-in-waiting), which is worse than
-        # an honest sandbox failure — and returning one is exactly the
-        # May 7 dashboard-stub failure mode. If every candidate was
-        # vetoed, return no code; the caller falls back to its baseline.
-        emit("fallback", "No passing solution found — returning best candidate by energy")
-        fallback_pool = [c for c in candidates if not c.get("vetoed_by")]
-        if fallback_pool:
-            fallback_pool.sort(key=lambda c: c.get("energy", 999))
-            result["code"] = fallback_pool[0]["code"]
-        elif candidates:
-            emit("fallback_all_vetoed",
-                 "Every candidate was vetoed — returning no code")
-        result["total_time_ms"] = (time.time() - start) * 1000
-        result["events"] = events
-        return result
+            # ===== CALL-GRAPH VETO (issue #39, Phase 1) =====
+            # Deepens the structural veto using the import graph: reject a candidate
+            # whose direct calls don't resolve to a real, in-scope definition (local,
+            # builtin, imported, or supplied by a resolved wildcard) — not merely
+            # "some project file defines that name." Catches broken cross-file
+            # references the shipped veto accepts. Flag-gated by ATLAS_CALL_GRAPH;
+            # conservative — stays lenient on opaque wildcards and never empties the
+            # candidate set (a fully-failing set falls through intact to repair).
+            if passing and files and file_path:
+                try:
+                    from graph import call_graph_enabled, unresolved_calls
+                    _cg_on = call_graph_enabled()
+                except Exception:
+                    _cg_on = False
+                if _cg_on:
+                    cg_kept, cg_vetoed = [], []
+                    for c in passing:
+                        try:
+                            res = unresolved_calls(
+                                file_path, c.get("code", ""), files, strict=True)
+                        except Exception as cge:
+                            print(f"  [call_graph] veto skipped for cand {c.get('index')}: {cge}",
+                                  flush=True)
+                            cg_kept.append(c)
+                            continue
+                        if res.get("ok") and res.get("unresolved"):
+                            cg_vetoed.append((c, res["unresolved"]))
+                            continue
+                        cg_kept.append(c)
+                    if cg_kept:  # only prune when at least one candidate survives
+                        # Marking happens only when the prune actually applies —
+                        # the conservative all-vetoed case keeps the full set
+                        # (and its passed flags) intact.
+                        for c, unresolved in cg_vetoed:
+                            c["passed"] = False
+                            c["vetoed_by"] = "call_graph"
+                            c["stderr"] = (
+                                "call-graph veto: cross-file call(s) that resolve "
+                                "to no in-scope definition: "
+                                + ", ".join(unresolved[:5]))
+                            emit("call_graph_veto",
+                                 f"Candidate {c.get('index')} has unresolved call(s): "
+                                 f"{', '.join(unresolved[:3])}",
+                                 index=c.get("index"), unresolved=unresolved[:5])
+                            print(f"  [call_graph] vetoed cand {c.get('index')} — "
+                                  f"unresolved: {unresolved[:5]}", flush=True)
+                        passing = cg_kept
+
+            # ===== CANDIDATE SELECTION =====
+            # Lens selection: minimum C(x) energy among the passing candidates.
+            # (S* tiebreaking used to run first for 2+ passers; across 118 H200
+            # tiebreaks every pair scored 0-0 and 110/110 winners equaled the
+            # lens min-energy pick, so it carried zero discriminating signal.)
+            if passing:
+                ci_list = [
+                    CandidateInfo(c["index"], c["code"], c["energy"], c["passed"])
+                    for c in passing
+                ]
+                selected = select_candidate(ci_list, strategy="lens")
+                if selected:
+                    emit("selected", f"Lens selected candidate {selected.index}",
+                         index=selected.index, energy=getattr(selected, "energy", 0.0))
+                    result["passed"] = True
+                    result["code"] = selected.code
+                    result["phase_solved"] = "phase1"
+                    result["total_time_ms"] = (time.time() - start) * 1000
+                    winner = _candidate_by_index(passing, selected.index)
+                    result["verification_evidence"] = (winner or {}).get("verification_evidence", [])
+                    result["winning_score"] = (winner or {}).get("energy_norm", 0.0)
+                    result["events"] = events
+                    return result
+
+            # ===== PHASE 3: VERIFIED ITERATIVE REFINEMENT =====
+            check_client()
+            if out_of_budget():
+                return finish_with_best("budget spent before the repair phase")
+            emit("phase3", "All candidates failed — entering repair phase...",
+                 failing=len([c for c in candidates if not c.get("passed")]))
+
+            failing = [
+                FailingCandidate(
+                    index=c["index"], code=c["code"],
+                    error_output=c.get("stderr", ""),
+                )
+                for c in candidates if not c.get("passed")
+            ]
+
+            # Repair verifies against the SAME self-tests phase 0 generated —
+            # verified_sandbox closes over them. Regenerate only when phase 0
+            # produced none (e.g. a transient LLM failure); a failed retry here
+            # must not downgrade an existing good set to None. Interactive
+            # tasks repair against compile-smoke (PC-022).
+            if task_type == "algorithmic" and not (self_tests and self_tests.test_cases):
+                emit("self_test_gen", "Generating self-tests...")
+                try:
+                    self_tests = self.self_test_gen.generate(problem, llm, task_id)
+                    emit("self_test_done", f"{len(self_tests.test_cases)} test cases generated")
+                    result["total_tokens"] += self_tests.generation_tokens
+                except Exception as e:
+                    emit("self_test_error", str(e)[:200])
+
+            # GH #39 point 3: build call-graph context for the failing
+            # function once, reuse across PR-CoT + refinement. Skips
+            # cleanly when stderr isn't a Python traceback or the failing
+            # function isn't defined in the project — both arms get plain
+            # error_output in that case. When ATLAS_CALL_GRAPH is on the
+            # block is a multi-hop reachability slice (entry-point path,
+            # transitive impact, callees); flag-off it stays at direct
+            # callers/callees (1 hop). Fail-soft on any graph failure.
+            chain_context_block = ""
+            if failing:
+                failing_func = symbols._failing_function_from_stderr(failing[0].error_output)
+                if failing_func and files:
+                    try:
+                        from graph import call_graph_enabled as _cg_on, repair_context as _cg_repair
+                        chain_context_block = _cg_repair(files, failing_func, transitive=_cg_on())
+                    except Exception as cge:
+                        print(f"  [phase3] graph repair-context skipped: {cge}", flush=True)
+                    if chain_context_block:
+                        emit("call_chain_context",
+                             f"Built call-chain for failing `{failing_func}`",
+                             function=failing_func)
+                        print(
+                            f"  [phase3] call-chain context built for `{failing_func}`",
+                            flush=True,
+                        )
+
+            def _enriched_error(stderr: str) -> str:
+                """Append call-chain context to a candidate's stderr if available."""
+                if not chain_context_block:
+                    return stderr
+                return (stderr or "") + "\n\n" + chain_context_block
+
+            # Strategy 1: PR-CoT Quick Repair
+            if failing and out_of_budget():
+                return finish_with_best("budget spent before PR-CoT repair")
+            if failing:
+                emit("pr_cot", "Attempting PR-CoT repair...",
+                     strategy="pr_cot", failing=len(failing))
+                best_failing = failing[0]
+                try:
+                    pr_result = self.pr_cot.repair(
+                        problem=problem,
+                        code=best_failing.code,
+                        error=_enriched_error(best_failing.error_output),
+                        llm_call=llm,
+                        task_id=task_id,
+                    )
+                    result["total_tokens"] += pr_result.total_tokens
+                    for repair_code in pr_result.repairs:
+                        passed, stdout, stderr, repair_evidence = verified_sandbox(repair_code)
+                        if passed:
+                            emit("pr_cot_pass", "PR-CoT repair succeeded!",
+                                 strategy="pr_cot", tokens=pr_result.total_tokens)
+                            result["passed"] = True
+                            result["code"] = repair_code
+                            result["phase_solved"] = "pr_cot"
+                            result["total_time_ms"] = (time.time() - start) * 1000
+                            result["verification_evidence"] = repair_evidence
+                            result["events"] = events
+                            return result
+                    emit("pr_cot_failed", "PR-CoT repair did not produce passing code")
+                except Exception as e:
+                    emit("pr_cot_error", str(e)[:200])
+
+            # Strategy 2: Refinement Loop — entered only when the remaining
+            # wall-clock can afford one iteration. H200 join: 453/487
+            # refinement entries timed out with ZERO completed iterations
+            # while burning ~6 minutes each; one iteration is ~3 sequential
+            # LLM calls, estimated at the per-call latency observed on THIS
+            # run. The budget is the ATLAS_V3_TIMEOUT cap the proxy's V3
+            # bridge enforces — starting work the bridge will abandon only
+            # delays the fallback the user ends up with.
+            run_refinement = bool(failing)
+            if run_refinement:
+                est_ms = estimate_iteration_ms(getattr(llm, "avg_call_ms", 0.0))
+                remaining_ms = _remaining_budget_ms(start)
+                if (remaining_ms is not None
+                        and not can_afford_iteration(remaining_ms, est_ms)):
+                    run_refinement = False
+                    emit("refinement_skip",
+                         f"remaining budget {remaining_ms / 1000:.0f}s cannot "
+                         f"afford one iteration (~{est_ms / 1000:.0f}s) — "
+                         f"skipping to fallback",
+                         strategy="refinement",
+                         remaining_ms=round(remaining_ms),
+                         estimated_iteration_ms=round(est_ms))
+            if run_refinement and out_of_budget():
+                run_refinement = False
+            if run_refinement:
+                check_client()
+                emit("refinement", "Starting refinement loop...",
+                     strategy="refinement", failing=len(failing))
+                # GH #39 point 3: enrich each failing candidate's error_output
+                # with call-chain context so the refinement loop sees it on
+                # every iteration. Cheap (chain_context_block is built once
+                # above and reused).
+                failing_for_refinement = failing
+                if chain_context_block:
+                    failing_for_refinement = [
+                        FailingCandidate(
+                            index=c.index,
+                            code=c.code,
+                            error_output=_enriched_error(c.error_output),
+                        )
+                        for c in failing
+                    ]
+                try:
+                    ref_result = self.refinement_loop.run(
+                        problem=problem,
+                        failing_candidates=failing_for_refinement,
+                        original_constraints=[],
+                        llm_call=llm,
+                        sandbox_run=sandbox,
+                        embed_call=embed,
+                        task_id=task_id,
+                    )
+                    result["total_tokens"] += ref_result.total_tokens
+                    if ref_result.solved:
+                        passed, stdout, stderr, refinement_evidence = verified_sandbox(ref_result.winning_code)
+                        if passed:
+                            emit("refinement_pass",
+                                 f"Refinement solved in {ref_result.total_iterations} iterations!",
+                                 strategy="refinement",
+                                 iterations=ref_result.total_iterations,
+                                 tokens=ref_result.total_tokens)
+                            result["passed"] = True
+                            result["code"] = ref_result.winning_code
+                            result["phase_solved"] = "refinement"
+                            result["total_time_ms"] = (time.time() - start) * 1000
+                            result["verification_evidence"] = refinement_evidence
+                            result["events"] = events
+                            return result
+                        emit("refinement_verify_failed", (stderr or "")[:200])
+                    emit("refinement_failed", f"Exhausted {ref_result.total_iterations} iterations")
+                except Exception as e:
+                    emit("refinement_error", str(e)[:200])
+
+            # ===== FALLBACK: Return best candidate even if none passed =====
+            # Vetoed candidates are excluded outright: a veto means "executes
+            # but is wrong" (stub, NameError-in-waiting), which is worse than
+            # an honest sandbox failure — and returning one is exactly the
+            # May 7 dashboard-stub failure mode. If every candidate was
+            # vetoed, return no code; the caller falls back to its baseline.
+            emit("fallback", "No passing solution found — returning best candidate by energy")
+            fallback_pool = [c for c in candidates if not c.get("vetoed_by")]
+            if fallback_pool:
+                fallback_pool.sort(key=lambda c: c.get("energy", 999))
+                result["code"] = fallback_pool[0]["code"]
+            elif candidates:
+                emit("fallback_all_vetoed",
+                     "Every candidate was vetoed — returning no code")
+            result["total_time_ms"] = (time.time() - start) * 1000
+            result["events"] = events
+            return result
+        except adapters.BudgetExhausted as exc:
+            # An anytime algorithm whose clock expires owes its caller the
+            # best answer it has. Raised from the adapter rather than
+            # checked at phase boundaries: every phase runs its own loop —
+            # PR-CoT alone issues two calls — so a boundary check that
+            # reserves one call is already wrong by the second.
+            return finish_with_best(f"budget exhausted mid-pipeline ({exc})")
 
 
 # --- Problem Builder for /v3/generate ----------------------------------------

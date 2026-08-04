@@ -170,12 +170,35 @@ class LLMAdapter:
     # Counter updates are read-modify-write and now run under concurrency.
     _counter_lock = threading.Lock()
 
-    def __init__(self, progress_callback=None, thinking: bool = False):
+    def __init__(self, progress_callback=None, thinking: bool = False,
+                 deadline: Optional[float] = None):
         self.call_count = 0
         self.total_tokens = 0
         self.total_time_ms = 0.0
         self._progress = progress_callback
         self.thinking = thinking
+        # Monotonic wall-clock (time.time()) after which no new generation
+        # may start. None leaves the adapter unbounded, which is what the
+        # bench and any caller without a cap want.
+        self.deadline = deadline
+
+    def _check_budget(self) -> None:
+        """Refuse to start a generation that cannot finish before the cap.
+
+        The reserve is one observed call plus room to return a result: the
+        unit of work here is a generation, so that is what has to fit.
+        Before the first call there is nothing observed, so anything is
+        allowed to start.
+        """
+        if self.deadline is None:
+            return
+        left_ms = (self.deadline - time.time()) * 1000.0
+        observed = self.avg_call_ms
+        reserve = observed * 1.2 + 10000.0 if observed else 0.0
+        if left_ms < reserve:
+            raise BudgetExhausted(
+                f"{left_ms / 1000:.0f}s left, a call averages "
+                f"{observed / 1000:.0f}s")
 
     @property
     def avg_call_ms(self) -> float:
@@ -197,6 +220,7 @@ class LLMAdapter:
     def __call__(self, prompt: str, temperature: float,
                  max_tokens: int, seed: Optional[int],
                  thinking: Optional[bool] = None) -> Tuple[str, int, float]:
+        self._check_budget()
         with LLMAdapter._counter_lock:
             self.call_count += 1
             call_no = self.call_count
@@ -386,6 +410,21 @@ class LLMAdapter:
         # for py/mixed-returns (the implicit fall-through returns None,
         # which violates the -> dict signature).
         raise RuntimeError("unreachable: _send loop must return or raise")
+
+
+class BudgetExhausted(Exception):
+    """Not enough of ATLAS_V3_TIMEOUT is left to start another generation.
+
+    Raised from LLMAdapter.__call__ rather than checked at phase boundaries.
+    Boundary checks cannot hold: every phase runs its own internal loop —
+    PR-CoT alone issues two calls — so a check that reserves one call is
+    already wrong by the second. Measured 2026-08-03: a boundary check with
+    ~50s left correctly allowed PR-CoT against a ~34s reserve, and PR-CoT
+    spent 44s then started a 21s call, overrunning the cap.
+
+    The pipeline catches this and returns its best candidate so far, which is
+    the contract an anytime algorithm owes its caller.
+    """
 
 
 class ClientDisconnected(Exception):
