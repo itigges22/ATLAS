@@ -54,7 +54,7 @@ for _phase, _stages in {
     "allocation": ("phase2", "phase2_allocated"),
     "generation": ("phase1", "plansearch", "plansearch_done",
                    "plansearch_error", "divsampling", "divsampling_done",
-                   "divsampling_error", "lens_per_step"),
+                   "divsampling_error", "divsampling_stop", "lens_per_step"),
     "sandbox": ("sandbox_test", "sandbox_pass", "sandbox_fail",
                 "sandbox_done", "smoke_check", "interactive_lint",
                 "self_test_verify", "build_verify",
@@ -66,7 +66,7 @@ for _phase, _stages in {
     "repair_refinement": ("refinement", "refinement_pass",
                           "refinement_failed", "refinement_error",
                           "refinement_verify_failed", "refinement_skip"),
-    "fallback": ("fallback", "fallback_all_vetoed"),
+    "fallback": ("fallback", "fallback_all_vetoed", "budget_exhausted"),
 }.items():
     for _s in _stages:
         _STAGE_PHASE[_s] = _phase
@@ -581,6 +581,61 @@ class V3PipelineService:
         emit("phase1", f"Generating {k} diverse candidates...", k=k)
         candidates = []
 
+        def out_of_budget(reserve_ms: float = 20000.0) -> bool:
+            """True when too little of ATLAS_V3_TIMEOUT is left to start more
+            work and still hand back a result.
+
+            The refinement loop was the only phase that checked, and it
+            checked once, using an estimate of a single iteration. Everything
+            ahead of it — probe, self-tests, PlanSearch, sandbox — ran
+            unguarded, so the budget was already gone by the time the
+            estimate mattered.
+            """
+            left = _remaining_budget_ms(start)
+            return left is not None and left < reserve_ms
+
+        def finish_with_best(reason: str) -> Dict[str, Any]:
+            """Hand back the best candidate found so far.
+
+            V3 is an anytime algorithm — the refinement loop is budget-gated,
+            so it expands to fill the budget rather than converging early.
+            Measured 2026-08-03 on one task: a 180s budget produced 9 LLM
+            calls and 5 sandbox verifications, a 420s budget 21 calls and 10.
+            It is not interrupted mid-something-it-would-finish; the clock is
+            its terminal condition.
+
+            An anytime algorithm whose clock expires has to return its best
+            answer. This one returned nothing: the caller's deadline cancelled
+            the request, every verified candidate was discarded, and the write
+            fell back to the model's own output — 16 of 41 write calls in one
+            28-session run, ~48 of the 56 minutes spent in them.
+
+            Vetoed candidates stay excluded for the same reason the end-of-run
+            fallback excludes them: "executes but is wrong" is worse than an
+            honest failure.
+            """
+            emit("budget_exhausted", reason,
+                 candidates=len(candidates),
+                 remaining_ms=round(_remaining_budget_ms(start) or 0))
+            pool = [c for c in candidates if not c.get("vetoed_by")]
+            passing = [c for c in pool if c.get("passed")]
+            chosen = None
+            if passing:
+                passing.sort(key=lambda c: c.get("energy", 999))
+                chosen = passing[0]
+                result["passed"] = True
+                result["phase_solved"] = "budget"
+            elif pool:
+                pool.sort(key=lambda c: c.get("energy", 999))
+                chosen = pool[0]
+            if chosen is not None:
+                result["code"] = chosen["code"]
+                result["verification_evidence"] = chosen.get("verification_evidence", [])
+                result["winning_score"] = chosen.get("energy_norm", 0.0)
+            result["total_time_ms"] = (time.time() - start) * 1000
+            result["events"] = events
+            return result
+
         # Start with probe if it produced code
         if probe_code:
             candidates.append({
@@ -638,6 +693,10 @@ class V3PipelineService:
                  slots=remaining_k)
             for idx in range(remaining_k):
                 check_client()
+                if out_of_budget():
+                    emit("divsampling_stop",
+                         f"budget spent after {len(candidates)} candidate(s)")
+                    break
                 try:
                     perturbed = self.div_sampling.apply(problem, len(candidates) + idx, task_id)
                     chatml = self.budget_forcing.format_chatml(perturbed, bf_tier)
@@ -893,6 +952,8 @@ class V3PipelineService:
 
         # ===== PHASE 3: VERIFIED ITERATIVE REFINEMENT =====
         check_client()
+        if out_of_budget():
+            return finish_with_best("budget spent before the repair phase")
         emit("phase3", "All candidates failed — entering repair phase...",
              failing=len([c for c in candidates if not c.get("passed")]))
 
@@ -1002,6 +1063,8 @@ class V3PipelineService:
                      strategy="refinement",
                      remaining_ms=round(remaining_ms),
                      estimated_iteration_ms=round(est_ms))
+        if run_refinement and out_of_budget():
+            run_refinement = False
         if run_refinement:
             check_client()
             emit("refinement", "Starting refinement loop...",

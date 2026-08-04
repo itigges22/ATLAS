@@ -3788,7 +3788,8 @@ func v3StageToEvent(stage string) string {
 		return "v3_phase"
 	case "plansearch", "plansearch_done", "plansearch_error":
 		return "v3_plansearch"
-	case "divsampling", "divsampling_done", "divsampling_error":
+	case "divsampling", "divsampling_done", "divsampling_error",
+		"divsampling_stop":
 		return "v3_divsampling"
 	case "sandbox_test", "sandbox_pass", "sandbox_fail", "sandbox_done":
 		return "v3_sandbox"
@@ -3796,7 +3797,8 @@ func v3StageToEvent(stage string) string {
 		return "v3_select"
 	case "phase3", "pr_cot", "pr_cot_pass", "pr_cot_failed", "pr_cot_error",
 		"refinement", "refinement_pass", "refinement_failed", "refinement_error",
-		"refinement_skip", "fallback", "fallback_all_vetoed":
+		"refinement_skip", "fallback", "fallback_all_vetoed",
+		"budget_exhausted":
 		return "v3_repair"
 	case "probe", "probe_light", "probe_retry", "probe_failed",
 		"probe_scored", "probe_sandbox", "probe_pass", "probe_error":
