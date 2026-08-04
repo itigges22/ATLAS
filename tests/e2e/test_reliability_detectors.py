@@ -419,3 +419,24 @@ def test_h6_still_reports_a_real_service_fault(rel, tmp_path):
     s = _session(rel, [boom], tmp_path, stream_ok=False)
     found = rel.h6_service_fault(s)
     assert any("connection refused" in d for d in found)
+
+
+def test_h6_ignores_a_parse_failure_the_session_recovered_from(rel, tmp_path):
+    """flask_pause rep2, 2026-08-03: the model emitted a 20 KB tool call that
+    ran out of tokens mid-JSON, the proxy classified it and told the model,
+    and the session went on to pass the task — scored a harness defect for
+    it. Recovered model behaviour is the proxy working."""
+    err = {"type": "error", "data": {"category": "truncated_tool",
+                                     "error": "failed to parse model response"}}
+    s = _session(rel, [_call("edit_file", path="app.py"), err,
+                       _call("replace_lines", path="app.py"), _ok("replace_lines"),
+                       {"type": "done", "data": {"summary": "added the toggle"}}],
+                 tmp_path)
+    assert rel.h6_service_fault(s) == []
+
+
+def test_h6_still_reports_a_parse_failure_the_session_died_on(rel, tmp_path):
+    err = {"type": "error", "data": {"error": "failed to parse model response"}}
+    s = _session(rel, [_call("edit_file", path="app.py"), err], tmp_path,
+                 stream_ok=False)
+    assert any("parse model response" in d for d in rel.h6_service_fault(s))

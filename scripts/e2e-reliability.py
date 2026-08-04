@@ -1042,9 +1042,24 @@ def h5_corrupt_write(s: Session, task: Task) -> list[str]:
     return out
 
 
+def _recovered_after(s: Session, idx: int) -> bool:
+    """True when the session kept working after the event at `idx`.
+
+    A successful tool call plus a `done` afterwards means the proxy caught
+    the condition, told the model, and the model carried on.
+    """
+    rest = s.events[idx + 1:]
+    worked = any(e.get("type") == "tool_result"
+                 and (e.get("data") or {}).get("success") for e in rest)
+    finished = any(e.get("type") == "done" for e in rest)
+    return worked and finished
+
+
 def h6_service_fault(s: Session) -> list[str]:
     out = []
-    for ev in s.of_type("error"):
+    for idx, ev in enumerate(s.events):
+        if ev.get("type") != "error":
+            continue
         d = ev.get("data") or {}
         # The proxy's error events carry "error" (see the TUI's own case);
         # "message" is what this harness uses for a stream-level failure it
@@ -1056,6 +1071,17 @@ def h6_service_fault(s: Session) -> list[str]:
         # to the proxy a second time — h1_protocol already reports it as the
         # timeout it is.
         if "harness cap:" in str(detail):
+            continue
+        # A parse failure the session recovered from is the proxy doing its
+        # job, not a service outage. Measured 2026-08-03 on flask_pause rep2:
+        # the model emitted a 20 KB tool call that ran out of tokens
+        # mid-JSON, the proxy classified it (category=truncated_tool), told
+        # the model, and the session went on to pass the task — and was
+        # scored a harness defect for it. Counting recovered model behaviour
+        # here puts a floor under harness integrity that no amount of
+        # correct proxy behaviour can lift. An unrecovered one still counts:
+        # that is a session the model never got back from.
+        if "parse model response" in str(detail) and _recovered_after(s, idx):
             continue
         out.append(f"H6 service fault: error event {str(detail)[:160]!r}")
     for ev in s.of_type("tool_result"):
