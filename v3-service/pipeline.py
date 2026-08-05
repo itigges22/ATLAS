@@ -50,7 +50,7 @@ for _phase, _stages in {
     "probe": ("probe", "probe_light", "probe_retry", "probe_failed",
               "probe_error", "probe_scored", "probe_sandbox", "probe_pass"),
     "self_test": ("self_test_gen", "self_test_done", "self_test_error",
-                  "self_test_skip"),
+                  "self_test_skip", "self_test_inconclusive"),
     "allocation": ("phase2", "phase2_allocated"),
     "generation": ("phase1", "plansearch", "plansearch_done",
                    "plansearch_error", "divsampling", "divsampling_done",
@@ -589,7 +589,27 @@ class V3PipelineService:
                         fails.append(f"TC{i+1}:{str(ex)[:40]}")
                 total = len(self_tests.test_cases)
                 emit("self_test_verify", f"{p}/{total} passed")
-                if total > 0 and p < total / 2:
+                # A suite the candidate passes NO case of says nothing about
+                # the candidate. The cases come from the same model that
+                # writes the code, and for these tasks producing an expected
+                # output IS solving the problem — so a wrong answer key and
+                # wrong code are indistinguishable at zero.
+                #
+                # Measured: 0 of 44 candidates across a 28-session run, with
+                # scores of 0/5, 0/4, 0/3 and never a partial. A check that
+                # rejects every candidate it sees is not evidence, and it
+                # cost the pipeline every winner it might have had — every
+                # passing session was won by the model's own direct write.
+                #
+                # A partial score is different: the suite has demonstrated
+                # some case is passable, so falling below half is the
+                # candidate underperforming a bar something else cleared.
+                if total > 0 and p == 0:
+                    emit("self_test_inconclusive",
+                         f"0/{total} — no case passed, so the suite cannot "
+                         f"separate a wrong answer key from wrong code",
+                         cases=total)
+                elif total > 0 and p < total / 2:
                     return False, out, f"Self-test:{p}/{total}. "+";".join(fails[:3]), verification_evidence
             return verify_build_if_requested(out, err)
 
