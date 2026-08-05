@@ -201,6 +201,41 @@ def _entry_function(code: str) -> Optional[str]:
     return top[-1].name
 
 
+def _entry_takes_case_input(code: str, name: str) -> bool:
+    """Whether the case input can be passed to `name` and its answer read
+    back as a return value.
+
+    The two self-test shapes are not interchangeable. A function-shaped
+    solution takes the case input as arguments and returns the answer. A
+    script-shaped one reads stdin and prints — calling it with the case
+    input raises TypeError, and there is no return value to compare.
+
+    Measured on aoc_sonar: candidates are `def main():` reading sys.stdin
+    and printing, so the function path called main(case) and every case
+    failed. The stdin/stdout path below handles exactly this and was never
+    reached, because the choice keyed on a function merely existing.
+
+    Requires all three: the function takes at least one parameter, it
+    returns a value somewhere, and the file does not read stdin itself.
+    """
+    import ast as _ast
+    if "sys.stdin" in code or "input()" in code:
+        return False
+    try:
+        tree = _ast.parse(code)
+    except SyntaxError:
+        return True  # old behaviour for code that does not parse
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.FunctionDef) and node.name == name:
+            args = node.args
+            takes = bool(args.args or args.posonlyargs or args.kwonlyargs
+                         or args.vararg)
+            returns = any(isinstance(n, _ast.Return) and n.value is not None
+                          for n in _ast.walk(node))
+            return takes and returns
+    return False
+
+
 def _make_self_test(code: str, tc) -> str:
     """Build executable assertion code for a single test case.
 
@@ -211,7 +246,7 @@ def _make_self_test(code: str, tc) -> str:
     inp = tc.input_str.strip()
     exp = tc.expected_output.strip()
     name = _entry_function(code)
-    if name and 'input()' not in code:
+    if name and _entry_takes_case_input(code, name):
         return (code + "\nimport ast as _a\n"
             + f"_i={repr(inp)}\n_e={repr(exp)}\n"
             + "try:\n _p=_a.literal_eval(_i)\nexcept:\n _p=_i\n"  # noqa: E722  -- bare except inside generated user code, intentional

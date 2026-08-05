@@ -76,3 +76,59 @@ def test_the_generated_test_calls_the_entry_point():
     body = pipeline._make_self_test(code, tc)
     assert "solve(" in body
     assert "_r=parse(" not in body
+
+
+# --- the two self-test shapes are not interchangeable ----------------------
+
+SCRIPT = ("import sys\n\n"
+          "def main():\n"
+          "    d = [int(x) for x in sys.stdin]\n"
+          "    print(len(d))\n\n"
+          "main()\n")
+
+FUNCTION = ("def parse(lines):\n"
+            "    return [int(x) for x in lines]\n\n"
+            "def solve(lines):\n"
+            "    return sum(parse(lines))\n")
+
+
+def _case():
+    return type("TC", (), {"input_str": "199\n200\n208",
+                           "expected_output": "1"})()
+
+
+def test_a_stdin_script_is_driven_through_stdin():
+    """Measured on aoc_sonar: candidates are `def main():` reading sys.stdin
+    and printing. The function path called main(case) — a TypeError, with no
+    return value to compare — so every case failed. The stdin/stdout path
+    already existed and was never reached, because the choice keyed on a
+    function merely existing."""
+    body = pipeline._make_self_test(SCRIPT, _case())
+    assert "_s.stdin" in body, "a stdin-reading script must be fed stdin"
+    assert "main(" not in body.split("_src=")[0]
+
+
+def test_a_pure_function_is_still_called_directly():
+    body = pipeline._make_self_test(FUNCTION, _case())
+    assert "solve(" in body
+    assert "_s.stdin" not in body
+
+
+def test_a_zero_argument_function_cannot_take_the_case():
+    assert not pipeline._entry_takes_case_input(
+        "def solve():\n    return 1\n", "solve")
+
+
+def test_a_function_that_returns_nothing_has_no_answer_to_compare():
+    assert not pipeline._entry_takes_case_input(
+        "def solve(x):\n    print(x)\n", "solve")
+
+
+def test_a_function_taking_the_case_and_returning_qualifies():
+    assert pipeline._entry_takes_case_input(
+        "def solve(x):\n    return x + 1\n", "solve")
+
+
+def test_reading_stdin_disqualifies_whatever_the_signature_says():
+    assert not pipeline._entry_takes_case_input(
+        "import sys\ndef solve(x):\n    return sys.stdin.read()\n", "solve")
