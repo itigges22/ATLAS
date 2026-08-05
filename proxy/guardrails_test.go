@@ -1862,3 +1862,33 @@ func TestVerifiedPhase(t *testing.T) {
 		}
 	}
 }
+
+// A run has three ways to reach the user: done, text, and the salvage path
+// that recovers a reply the content-loop detector cut. The first two check
+// whether anything was actually written; the third did not.
+//
+// Observed on aoc_slope rep2 and smallrung_toml rep2 (run 16): the cut
+// reply was half-written code, so the run handed back something that reads
+// like the answer while nothing was on disk, and the reliability checker
+// flagged both as exiting "without saying it had stopped".
+func TestSalvagedTextStillSaysNothingWasWritten(t *testing.T) {
+	salvaged := "def solve():\n    grid = [line.strip() for line in f]\n    # Wait, if"
+	cut := salvaged + "\n\n(The reply was cut short — it had begun repeating itself. " +
+		"Ask again if something is missing.)"
+
+	got := nothingWrittenSummary(cut)
+	if !strings.HasPrefix(got, "Nothing was written") {
+		t.Errorf("the correction has to lead, or the code reads as the answer:\n%s", got)
+	}
+	if !strings.Contains(got, "cut short") {
+		t.Error("the salvage note is still useful and should survive")
+	}
+	if !strings.Contains(got, salvaged) {
+		t.Error("the salvaged content itself should survive")
+	}
+	// The reliability checker looks for exactly this phrasing to tell an
+	// honest stop from a silent one.
+	if !strings.Contains(strings.ToLower(got), "nothing was written") {
+		t.Error("must match what the checker recognises as saying it stopped")
+	}
+}

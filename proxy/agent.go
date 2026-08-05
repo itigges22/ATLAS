@@ -832,10 +832,20 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				if salvaged, ok := recoverTruncatedText(response); ok {
 					log.Printf("[agent] salvaged %d chars of a cut text answer at turn %d", len(salvaged), turn)
 					ctx.Stream("text", map[string]string{"content": salvaged})
+					salvageSummary := salvaged + "\n\n(The reply was cut short — it had begun " +
+						"repeating itself. Ask again if something is missing.)"
+					// Salvage is a third exit, alongside done and text, and it
+					// reached the user without the honesty the other two apply.
+					// Observed on aoc_slope rep2 and smallrung_toml rep2 (run
+					// 16): the cut reply was half-written code, so the run
+					// finished by handing back code that reads like the answer
+					// while nothing was on disk.
+					if st.actionDemandedAndUnmet(ctx, userMessage) {
+						log.Printf("[agent] salvaged text at turn %d with nothing written — saying so", turn)
+						salvageSummary = nothingWrittenSummary(salvageSummary)
+					}
 					ctx.Stream("done", map[string]string{
-						"summary": salvaged + "\n\n(The reply was cut short — it had begun " +
-							"repeating itself. Ask again if something is missing.)" +
-							liveBackgroundJobNote(ctx),
+						"summary": salvageSummary + liveBackgroundJobNote(ctx),
 					})
 					return nil
 				}
