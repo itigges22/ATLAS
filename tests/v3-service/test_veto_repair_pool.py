@@ -154,9 +154,19 @@ def test_all_passing_candidates_vetoed_enters_repair_and_repair_wins(monkeypatch
     assert result["code"] == REPAIRED_CODE
 
 
-def test_energy_fallback_skips_vetoed_candidates(monkeypatch):
-    """Repair exhausted: the fallback must return the honest sandbox failure
-    (high energy, never vetoed), not the lower-energy vetoed stubs."""
+def test_energy_fallback_returns_no_unverified_candidate(monkeypatch):
+    """Repair exhausted and nothing passed: no code is returned at all.
+
+    This used to hand back the honest sandbox failure — the highest-energy
+    non-vetoed candidate — on the reasoning that it beat a vetoed stub. It
+    does not beat the caller's baseline, which is the model's own
+    syntax-gated write. Measured across one 28-session run: 0 of 44
+    candidates passed the sandbox and this path returned a failing one 11
+    times, each written over the model's own content.
+
+    The vetoed candidates must still reach repair's failing pool, which is
+    what the rest of this asserts.
+    """
     pr_cot = RecordingPRCoT(repairs=[])  # repair produces nothing
     service = _make_service(
         monkeypatch, [STUB_CODES[0], STUB_CODES[1], FAILING_CODE], pr_cot)
@@ -166,9 +176,9 @@ def test_energy_fallback_skips_vetoed_candidates(monkeypatch):
     stages = [e["stage"] for e in result["events"]]
     assert stages.count("lens_veto") == 2
     assert result["passed"] is False
-    # Energy order alone would pick a vetoed stub (energy 1.0 < 9.0).
-    assert result["code"] == FAILING_CODE
-    # Refinement also saw the vetoed candidates in its failing pool.
+    assert not result.get("code"), "an unverified candidate must not be returned"
+    assert "fallback_unverified" in stages
+    # Refinement still saw the vetoed candidates in its failing pool.
     assert service.refinement_loop.calls
     pool_codes = {c.code for c in service.refinement_loop.calls[0]}
     assert STUB_CODES[0] in pool_codes and STUB_CODES[1] in pool_codes
