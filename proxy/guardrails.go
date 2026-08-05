@@ -1485,3 +1485,25 @@ func inferenceFailureSummary(err error, wrote bool) string {
 	}
 	return sb.String()
 }
+
+// nothingWrittenSummary states that a run which was asked to change
+// something finished without changing anything.
+//
+// The action gate bounces this while it can, then stops — its bounces are
+// capped so an exhausted gate cannot loop. Past the cap the exit is
+// unremarked, and the worst version is a summary that looks like success:
+// observed on smallrung_toml, a refused structural_edit, the model giving
+// up on tools and emitting the replacement as chat text, and that code
+// arriving as the run's summary. A user reading it has no way to tell the
+// change was never applied.
+//
+// Prefixed rather than replacing: whatever the model said may still be
+// useful, it just cannot stand as a completion claim.
+func nothingWrittenSummary(original string) string {
+	const lead = "Nothing was written — no file was created or changed in this run. " +
+		"Any code below is a proposal, not something on disk."
+	if strings.TrimSpace(original) == "" {
+		return lead
+	}
+	return lead + "\n\n" + original
+}

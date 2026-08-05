@@ -279,6 +279,22 @@ func (s *runState) verificationDemandedAndUnmet() bool {
 	return (s.userWantsVerification || s.sawFailedVerification) && !s.verifiedThisLoop
 }
 
+// actionDemandedAndUnmet reports a run that was asked to change something on
+// disk and finished without changing anything.
+//
+// The action gate bounces this while it has bounces left, and then stops:
+// chargeBounce is capped so an exhausted gate cannot loop. Past that cap the
+// exit goes through unremarked, which is how a session ends having written
+// nothing while saying nothing about it. Observed on smallrung_toml: a
+// structural_edit was refused for making the file invalid, the model gave up
+// on tools and emitted the replacement as chat text, and the run finished
+// with that code as its summary — the user is shown a block of code that
+// was never applied, with no indication it was not.
+func (s *runState) actionDemandedAndUnmet(ctx *AgentContext, userMessage string) bool {
+	return wantsStateChange(userMessage, ctx.Tier, s.inspectedWorkspace) &&
+		!s.madeProductiveChange
+}
+
 // exitGates runs the completion-honesty gates a done or text exit must
 // clear, in order: verification, done-without-action, expected-output,
 // claim-check. claimText is the completion claim to check structurally
@@ -878,6 +894,12 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				log.Printf("[agent] done at turn %d with no passing verification — replacing the summary", turn)
 				summary = unverifiedSummary(st.madeProductiveChange, parsed.Summary)
 			}
+			// Same reasoning one gate over: the action gate can be past
+			// because its bounces ran out, not because anything was written.
+			if st.actionDemandedAndUnmet(ctx, userMessage) {
+				log.Printf("[agent] done at turn %d with nothing written — saying so", turn)
+				summary = nothingWrittenSummary(summary)
+			}
 			ctx.Stream("done", map[string]string{
 				"summary": summary + liveBackgroundJobNote(ctx),
 			})
@@ -904,7 +926,12 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				continue
 			}
 			ctx.Stream("text", map[string]string{"content": parsed.Content})
-			ctx.Stream("done", map[string]string{"summary": ""})
+			textSummary := ""
+			if st.actionDemandedAndUnmet(ctx, userMessage) {
+				log.Printf("[agent] text exit at turn %d with nothing written — saying so", turn)
+				textSummary = nothingWrittenSummary("")
+			}
+			ctx.Stream("done", map[string]string{"summary": textSummary})
 			return nil
 
 		case "tool_call":

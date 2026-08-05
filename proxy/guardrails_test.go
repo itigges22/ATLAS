@@ -1808,3 +1808,38 @@ func TestForegroundServerStartIsRedirectedBeforeItRuns(t *testing.T) {
 		}
 	})
 }
+
+// The action gate bounces a run that was asked to change something and has
+// not, then stops — its bounces are capped so an exhausted gate cannot
+// loop. Past the cap the exit is unremarked, and the worst version looks
+// like success: observed on smallrung_toml, a refused structural_edit, the
+// model giving up on tools and emitting the replacement as chat text, and
+// that code arriving as the run's summary with nothing on disk.
+func TestNothingWrittenSummary(t *testing.T) {
+	t.Run("says it plainly when the model said nothing", func(t *testing.T) {
+		got := nothingWrittenSummary("")
+		if !strings.Contains(got, "Nothing was written") {
+			t.Errorf("summary must state it:\n%s", got)
+		}
+	})
+
+	t.Run("keeps what the model said but strips the claim", func(t *testing.T) {
+		code := "elif lang == \"toml\":\n    fpath.write_text(code)"
+		got := nothingWrittenSummary(code)
+		if !strings.Contains(got, code) {
+			t.Error("the model's content is still useful and should survive")
+		}
+		if !strings.HasPrefix(got, "Nothing was written") {
+			t.Errorf("the correction has to lead, or it reads as success:\n%s", got)
+		}
+		if !strings.Contains(got, "proposal, not something on disk") {
+			t.Errorf("a code block needs saying it was not applied:\n%s", got)
+		}
+	})
+
+	t.Run("whitespace-only is treated as empty", func(t *testing.T) {
+		if got := nothingWrittenSummary("   \n  "); !strings.HasPrefix(got, "Nothing was written") {
+			t.Errorf("got %q", got)
+		}
+	})
+}
