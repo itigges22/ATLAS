@@ -1749,7 +1749,14 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// keeps grinding: re-reads the file, edits unrelated functions,
 			// runs another V3 cycle (~110s each). Inject an explicit
 			// "you're done unless you have a specific reason" message.
-			if result.Success && result.V3Used && result.PhaseSolved != "" &&
+			// "none" is the phase a run reports when nothing passed, and it
+			// is not the empty string — so this fired on every unverified
+			// fallback and told the model its code was build-checked when
+			// no candidate had passed anything. Measured across one
+			// 28-session run: 0 of 44 candidates passed the sandbox and
+			// this nudge fired 11 times, each one pushing the model to stop
+			// working on a file that had failed verification.
+			if result.Success && result.V3Used && verifiedPhase(result.PhaseSolved) &&
 				(parsed.Name == "write_file" || parsed.Name == "edit_file") {
 				ctx.Messages = append(ctx.Messages, AgentMessage{
 					Role: "user",

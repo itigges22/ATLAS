@@ -1843,3 +1843,22 @@ func TestNothingWrittenSummary(t *testing.T) {
 		}
 	})
 }
+
+// phase_solved is initialised to "none" and only overwritten when a
+// candidate passes, so "not empty" is not the same question as "verified".
+// The done-nudge tested that way and fired on every unverified fallback,
+// telling the model its code was build-checked when nothing had passed.
+// Measured across one 28-session run: 0 of 44 candidates passed the
+// sandbox and the nudge fired 11 times.
+func TestVerifiedPhase(t *testing.T) {
+	for _, phase := range []string{"probe", "phase1", "pr_cot", "refinement", "budget"} {
+		if !verifiedPhase(phase) {
+			t.Errorf("%q means a candidate passed", phase)
+		}
+	}
+	for _, phase := range []string{"none", "", "fallback", "unknown_future_phase"} {
+		if verifiedPhase(phase) {
+			t.Errorf("%q does not mean verified", phase)
+		}
+	}
+}

@@ -66,8 +66,8 @@ for _phase, _stages in {
     "repair_refinement": ("refinement", "refinement_pass",
                           "refinement_failed", "refinement_error",
                           "refinement_verify_failed", "refinement_skip"),
-    "fallback": ("fallback", "fallback_all_vetoed", "budget_exhausted",
-                 "budget_no_verified_candidate"),
+    "fallback": ("fallback", "fallback_all_vetoed", "fallback_unverified",
+                 "budget_exhausted", "budget_no_verified_candidate"),
 }.items():
     for _s in _stages:
         _STAGE_PHASE[_s] = _phase
@@ -1182,11 +1182,26 @@ class V3PipelineService:
             # an honest sandbox failure — and returning one is exactly the
             # May 7 dashboard-stub failure mode. If every candidate was
             # vetoed, return no code; the caller falls back to its baseline.
-            emit("fallback", "No passing solution found — returning best candidate by energy")
-            fallback_pool = [c for c in candidates if not c.get("vetoed_by")]
-            if fallback_pool:
-                fallback_pool.sort(key=lambda c: c.get("energy", 999))
-                result["code"] = fallback_pool[0]["code"]
+            # Nothing verified, so nothing is returned. The caller's
+            # baseline is the model's own write, which is syntax- and
+            # structure-gated; a candidate that failed the sandbox is not
+            # better than that, and ranking failures by energy picks among
+            # them without evidence.
+            #
+            # Measured: across one 28-session run, 0 of 44 candidates passed
+            # the sandbox, and this path still handed back a failing one 11
+            # times — the proxy logged each as a V3 write and put it on disk
+            # over the model's own. The run that shipped that behaviour
+            # scored 20/28 to 17/28 against the run that did not.
+            #
+            # Same reasoning the vetoed branch below already used, and the
+            # same as the budget boundary: "executes but is wrong" is worse
+            # than an honest failure.
+            unverified = [c for c in candidates if not c.get("vetoed_by")]
+            if unverified:
+                emit("fallback_unverified",
+                     f"{len(unverified)} candidate(s), none passed verification — "
+                     f"leaving the caller's gated baseline in place")
             elif candidates:
                 emit("fallback_all_vetoed",
                      "Every candidate was vetoed — returning no code")

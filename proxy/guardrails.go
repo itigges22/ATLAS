@@ -1507,3 +1507,19 @@ func nothingWrittenSummary(original string) string {
 	}
 	return lead + "\n\n" + original
 }
+
+// verifiedPhase reports whether a V3 phase_solved value means a candidate
+// actually passed verification.
+//
+// The field is initialised to "none" and only overwritten when something
+// passes, so "not empty" is not the same question as "verified" — "none" is
+// a perfectly good non-empty string. Listing the phases that mean success is
+// the check that cannot drift: a new phase added upstream is unverified here
+// until it is named, which is the safe direction.
+func verifiedPhase(phase string) bool {
+	switch phase {
+	case "probe", "phase1", "pr_cot", "refinement", "budget":
+		return true
+	}
+	return false
+}
