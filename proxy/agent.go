@@ -340,6 +340,19 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 			s.gateBounces["intent_gate"], maxGateBounces)
 		return "intent_gate", "You described the tool call you were about to make instead of making it, and a `text` reply ends the turn. Emit the tool_call itself now — read the file, then answer in a single `text` reply once you have its contents."
 	}
+	// A claim about a file the run never opened. This is the conversational
+	// half of an invariant the write path already enforces — edit_file,
+	// structural_edit, insert_after and replace_lines all refuse a path that
+	// was not read first — and until now answers were exempt, because
+	// "conversational messages are never gated" (see wantsStateChange).
+	// Diagnostic questions are exactly where that exemption costs the most:
+	// the reply IS the deliverable, and a guess is indistinguishable from an
+	// answer.
+	if cited := unreadFileCitations(ctx, claimText); len(cited) > 0 && s.chargeBounce("evidence_gate") {
+		log.Printf("[agent] evidence gate: bouncing exit at turn %d — reply cites %v with no read (bounce %d/%d)",
+			s.turn, cited, s.gateBounces["evidence_gate"], maxGateBounces)
+		return "evidence_gate", unreadCitationMessage(cited)
+	}
 	if (s.userWantsVerification || s.sawFailedVerification) && !s.verifiedThisLoop && s.chargeBounce("verification_gate") {
 		log.Printf("[agent] verification gate: bouncing exit at turn %d (trigger=%s, no successful verification command this loop, bounce %d/%d)",
 			s.turn, gateTrigger(s.userWantsVerification, s.sawFailedVerification), s.gateBounces["verification_gate"], maxGateBounces)

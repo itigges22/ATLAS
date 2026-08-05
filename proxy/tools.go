@@ -304,6 +304,7 @@ func readFileTool() *ToolDef {
 				recorded = strings.Join(lines[start:shownEnd], "\n")
 			}
 			ctx.RecordFileRead(path, recorded)
+			ctx.RecordBodySeen(path)
 
 			// Call-graph footer (issue #39, flag-gated). The model reads a
 			// file far more often than it outlines one, so attach the
@@ -946,6 +947,7 @@ func writeFileTool() *ToolDef {
 			res, err := writeFileDirect(path, input.Content)
 			if err == nil && res != nil && res.Success {
 				ctx.SessionWrites[input.Path] = true
+				ctx.RecordBodySeen(path)
 			}
 			return res, err
 		},
@@ -1894,6 +1896,7 @@ func editFileTool() *ToolDef {
 
 			// Update cached state with whatever was actually written
 			ctx.RecordFileRead(path, newContent)
+			ctx.RecordBodySeen(path)
 
 			// Build diff preview against the original on-disk content
 			oldLines := strings.Count(input.OldStr, "\n") + 1
@@ -2209,6 +2212,7 @@ func structuralEditTool() *ToolDef {
 				return nil, fmt.Errorf("cannot rename temp file: %w", err)
 			}
 			ctx.RecordFileRead(path, finalContent)
+			ctx.RecordBodySeen(path)
 
 			log.Printf("[structural_edit] %s %s selector=%q lang=%s old=%dB new=%dB v3=%v",
 				input.Path, input.Selector, input.Selector, astResp.Language, astResp.OldSize, len(finalContent), v3Out.Used)
@@ -2676,6 +2680,7 @@ func insertAfterTool() *ToolDef {
 			}
 			ctx.SessionWrites[in.Path] = true
 			ctx.RecordFileRead(path, updated)
+			ctx.RecordBodySeen(path)
 			log.Printf("[insert_after] %s +%d lines after line %d", logPath(in.Path), len(insert), in.Line)
 			out, _ := json.Marshal(EditFileOutput{
 				OK:          true,
@@ -2920,6 +2925,7 @@ func replaceLinesTool() *ToolDef {
 			}
 			ctx.SessionWrites[in.Path] = true
 			ctx.RecordFileRead(path, updated)
+			ctx.RecordBodySeen(path)
 			replaced := in.EndLine - in.StartLine + 1
 			log.Printf("[replace_lines] %s lines %d-%d: %d -> %d lines", logPath(in.Path), in.StartLine, in.EndLine, replaced, len(replacement))
 			out, _ := json.Marshal(EditFileOutput{

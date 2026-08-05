@@ -514,6 +514,93 @@ func announcesImminentToolUse(text string) bool {
 	return false
 }
 
+// fileCitationRe matches a filename as it appears in prose: `scoring.py`,
+// planning.py, src/app/main.go. The extension must start with a letter and run
+// 1-5 characters, so version strings ("V3.2") and decimals ("0.34") are not
+// read as paths. Anything it over-matches is discarded by the existence check
+// in unreadFileCitations.
+var fileCitationRe = regexp.MustCompile(`[A-Za-z0-9_][A-Za-z0-9_./-]*\.[A-Za-z][A-Za-z0-9]{0,4}`)
+
+// maxCitedPaths caps how many unread files one rejection names. Listing every
+// one turns the correction into a chore; the model needs the shape and a
+// couple of concrete targets.
+const maxCitedPaths = 3
+
+// unreadFileCitations returns files in the workspace that the reply makes a
+// claim about without the run ever having been shown their contents.
+//
+// A reply that names a file it never opened is guessing, and the guess reads
+// exactly like knowledge. Measured on a diagnostic question across three
+// modules: 12 of 12 sessions ran list_directory, outlined ONE file, and
+// answered. Which file they guessed decided the outcome — scoring.py wrong
+// 11/11, planning.py right 1/1 — because the prompt said "scored" and the
+// filename matched. One session cited "lines 134-142" of a file whose body it
+// had never seen.
+//
+// The predicate is existence plus absence of evidence, not a judgement about
+// the claim: the file has to be real, and the run has to have never read it.
+// A file the model wrote is evidence enough, since it authored the contents.
+func unreadFileCitations(ctx *AgentContext, text string) []string {
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, m := range fileCitationRe.FindAllString(text, -1) {
+		name := strings.Trim(m, "./-")
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		resolved := resolveAgentPath(ctx, name)
+		if info, err := os.Stat(resolved); err != nil || info.IsDir() {
+			continue
+		}
+		if ctx.WasBodySeen(resolved) {
+			continue
+		}
+		out = append(out, name)
+		if len(out) == maxCitedPaths {
+			break
+		}
+	}
+	return out
+}
+
+// unreadCitationMessage tells the model to look before it answers.
+//
+// It names outline_file explicitly because that is the tool the failure runs
+// through: an outline lists signatures and line ranges with no bodies, which
+// is enough scaffolding to state a confident, specific, wrong claim about what
+// those lines contain.
+func unreadCitationMessage(paths []string) string {
+	var b strings.Builder
+	b.WriteString("Your reply makes a claim about ")
+	for i, p := range paths {
+		switch {
+		case i == 0:
+		case i == len(paths)-1:
+			b.WriteString(" and ")
+		default:
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "`%s`", p)
+	}
+	subject, object := "that file", "it"
+	if len(paths) > 1 {
+		subject, object = "those files", "each of them"
+	}
+	fmt.Fprintf(&b, ", but this session has never seen the contents of %s. ", subject)
+	fmt.Fprintf(&b, "outline_file lists signatures and line ranges only — it shows you no code, "+
+		"so anything you say about what those lines do is a guess. "+
+		"Call read_file on %s now, and on any other file you are about to name as the cause, "+
+		"then answer from what the code actually says. ", object)
+	b.WriteString(
+		"If you are not sure which file holds the problem, search_files for the relevant symbol " +
+		"across the whole directory rather than picking the file whose name matches the question.")
+	return b.String()
+}
+
 // isExplainOnlyMessage reports an explicit "tell me, do not touch it"
 // instruction: an explain/describe request paired with a no-edit directive.
 //

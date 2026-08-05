@@ -498,6 +498,22 @@ type AgentContext struct {
 	FilesRead     map[string]string    // cache of read file contents
 	TotalTokens   int
 
+	// BodySeen records the files whose CONTENTS were put in front of the
+	// model. FilesRead answers a different question: outline_file caches a
+	// file's full source for staleness tracking while showing the model only
+	// signatures and line ranges, so a path sits in FilesRead having never
+	// been displayed. read_file already draws this distinction the same way,
+	// recording only the head of a truncated read because the head is all the
+	// model saw.
+	//
+	// Measured on a diagnostic question over three files: the model outlined
+	// scoring.py, received symbol names with line ranges, and answered "line
+	// 142 tries to access keys like..." about lines it had never been shown.
+	// Across 12 sessions it never once read a body before diagnosing, and the
+	// answer was decided entirely by which filename it guessed: scoring.py
+	// wrong 11/11, planning.py right 1/1.
+	BodySeen map[string]bool
+
 	// SessionWrites tracks files this agent loop wrote during this run.
 	// The write_file guard rejects overwrites of "existing" files >5
 	// lines (BiasBusters #3 — protects the user's code from clobbering).
@@ -672,6 +688,7 @@ func NewAgentContext(workingDir string, tier Tier) *AgentContext {
 		PermissionMode:  PermissionDefault,
 		FileReadTimes:   make(map[string]time.Time),
 		FilesRead:       make(map[string]string),
+		BodySeen:        make(map[string]bool),
 		AppliedEdits:    make(map[string]bool),
 		FailedToolCalls: make(map[string]string),
 		SessionWrites:   make(map[string]bool),
@@ -702,6 +719,26 @@ func (c *AgentContext) RecordFileRead(path string, content string) {
 	}
 	c.FilesRead[path] = content
 	c.LastReadPath = path
+}
+
+// RecordBodySeen marks a file's contents as having been shown to the model —
+// read in full or in part, or authored by it. See BodySeen for why this is not
+// the same as being in the read cache.
+func (c *AgentContext) RecordBodySeen(path string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.BodySeen == nil {
+		c.BodySeen = make(map[string]bool)
+	}
+	c.BodySeen[path] = true
+}
+
+// WasBodySeen reports whether the model has actually been shown this file's
+// contents. Distinct from WasFileRead, which outline_file also satisfies.
+func (c *AgentContext) WasBodySeen(path string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.BodySeen[path]
 }
 
 // OriginalOf returns a file's content as the run first saw it, and whether the
