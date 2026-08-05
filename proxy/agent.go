@@ -243,6 +243,22 @@ func (s *runState) drainCorrectives(ctx *AgentContext) {
 // the conversation, so the next LLM call sees exactly why the attempt
 // was refused. The one shape every gate and guard refusal shares.
 func (s *runState) bounce(ctx *AgentContext, toolName, rejection string) {
+	// The rejection reaches the model through Messages. It reached nothing
+	// else: a completion gate holding a run back — "you were asked to change
+	// something and have not" — produced no event, so the TUI showed an
+	// unexplained pause and the run's own event stream held no record that a
+	// gate had fired at all. Measured across 84 sessions, that made the
+	// completion gates unobservable while 11 of 35 failures were the model
+	// stopping short, which is exactly what they exist to catch.
+	//
+	// Emitted as its own type rather than a tool_result: nothing was
+	// executed, and a consumer pairing calls with results must not see a
+	// result it never made a call for.
+	ctx.Stream("gate", map[string]interface{}{
+		"gate":   toolName,
+		"turn":   s.turn,
+		"reason": truncateStr(rejection, 200),
+	})
 	ctx.Messages = append(ctx.Messages, AgentMessage{Role: "assistant", Content: s.response})
 	ctx.Messages = append(ctx.Messages, AgentMessage{
 		Role:       "tool",

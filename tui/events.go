@@ -277,6 +277,23 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 			})
 		}
 
+	case "gate":
+		// A completion gate holding the run back — "you were asked to change
+		// something and have not". The rejection reached the model and
+		// nothing else, so the user watched an unexplained pause while the
+		// run silently retried. Shown as a system line: it is the harness
+		// speaking, not a tool result, and no tool was executed.
+		var p struct {
+			Gate   string `json:"gate"`
+			Reason string `json:"reason"`
+		}
+		if json.Unmarshal(ev.Data, &p) == nil {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: p.Gate,
+				Body: p.Reason, Echo: true,
+			})
+		}
+
 	case "permission_request":
 		var p struct {
 			ToolName   string          `json:"tool_name"`
