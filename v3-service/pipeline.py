@@ -158,6 +158,49 @@ def _candidate_by_index(candidates: List[Dict[str, Any]], index: int) -> Optiona
     return next((c for c in candidates if c.get("index") == index), None)
 
 
+def _entry_function(code: str) -> Optional[str]:
+    """Name the function a self-test should call.
+
+    The generator used to take the first `def` in the file, which is the
+    entry point only when the solution happens to define no helpers above
+    it. `def parse(...)` followed by `def solve(...)` meant every test
+    called parse with the case input and compared it to the final answer —
+    a guaranteed failure that says nothing about the code.
+
+    Measured across a 28-session run: 0 of 44 candidates passed, and the
+    self-test results were 0/5, 0/4, 0/3 — never partial. Imperfect code
+    fails some cases; only a harness fault fails all of them uniformly.
+
+    The entry point is the top-level function nothing else in the file
+    calls. Where several qualify a conventional name wins, then the last
+    one, since helpers are conventionally defined above their caller.
+    Unparseable code falls back to the first def, which is what the old
+    behaviour was.
+    """
+    import ast as _ast
+    try:
+        tree = _ast.parse(code)
+    except SyntaxError:
+        m = re.search(r'^def (\w+)\(', code, re.MULTILINE)
+        return m.group(1) if m else None
+    top = [n for n in tree.body if isinstance(n, _ast.FunctionDef)]
+    if not top:
+        return None
+    names = {n.name for n in top}
+    called = set()
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Call) and isinstance(node.func, _ast.Name):
+            if node.func.id in names:
+                called.add(node.func.id)
+    roots = [n.name for n in top if n.name not in called]
+    for preferred in ("solve", "main", "run"):
+        if preferred in roots:
+            return preferred
+    if roots:
+        return roots[-1]
+    return top[-1].name
+
+
 def _make_self_test(code: str, tc) -> str:
     """Build executable assertion code for a single test case.
 
@@ -167,9 +210,8 @@ def _make_self_test(code: str, tc) -> str:
     """
     inp = tc.input_str.strip()
     exp = tc.expected_output.strip()
-    fn = re.search(r'^def (\w+)\(', code, re.MULTILINE)
-    if fn and 'input()' not in code:
-        name = fn.group(1)
+    name = _entry_function(code)
+    if name and 'input()' not in code:
         return (code + "\nimport ast as _a\n"
             + f"_i={repr(inp)}\n_e={repr(exp)}\n"
             + "try:\n _p=_a.literal_eval(_i)\nexcept:\n _p=_i\n"  # noqa: E722  -- bare except inside generated user code, intentional
