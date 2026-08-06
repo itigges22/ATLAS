@@ -48,7 +48,8 @@ _TELEMETRY_DISABLE_VALUES = {"0", "off", "none", "disabled", "false"}
 _STAGE_PHASE = {}
 for _phase, _stages in {
     "probe": ("probe", "probe_light", "probe_retry", "probe_failed",
-              "probe_error", "probe_scored", "probe_sandbox", "probe_pass"),
+              "probe_error", "probe_scored", "probe_sandbox", "probe_pass",
+              "probe_unverifiable"),
     "self_test": ("self_test_gen", "self_test_done", "self_test_error",
                   "self_test_skip", "self_test_inconclusive"),
     "allocation": ("phase2", "phase2_allocated"),
@@ -811,6 +812,7 @@ class V3PipelineService:
         probe_energy_raw, probe_energy_norm = 0.0, 0.5
         probe_cx_calibrated = False
         probe_passed = False
+        probe_stdout = probe_stderr = ""
         if probe_code:
             probe_scores = scoring.score_candidate_combined(probe_code)
             probe_energy_raw = probe_scores["cx_energy"]
@@ -837,6 +839,30 @@ class V3PipelineService:
             result["total_time_ms"] = (time.time() - start) * 1000
             result["verification_evidence"] = probe_evidence
             result["winning_score"] = probe_energy_norm
+            result["events"] = events
+            return result
+
+        # The oracle condemned nothing and certified nothing (0/N), and the
+        # probe executes. Every candidate this pipeline could generate faces
+        # the same broken answer key, so none can be verified either —
+        # measured across every logged run: zero candidates ever selected on
+        # this path, every session ending in fallback_unverified after
+        # burning the full budget (~300s per write), leaving too little
+        # session time for the model's own write-run-fix loop. When
+        # verification cannot distinguish candidates, generating them buys
+        # nothing: return unverified FAST and let the caller's own draft
+        # stand. A partial oracle score (some case passed) still runs the
+        # full pipeline, because there the suite can actually rank.
+        if "inconclusive" in (probe_stderr or ""):
+            emit("probe_unverifiable",
+                 "self-test cannot certify anything (0/N) and the probe "
+                 "executes — skipping candidate generation, returning "
+                 "unverified without spending the budget")
+            result["passed"] = False
+            result["code"] = ""
+            result["phase_solved"] = "oracle_inconclusive"
+            result["candidates_generated"] = 1
+            result["total_time_ms"] = (time.time() - start) * 1000
             result["events"] = events
             return result
 

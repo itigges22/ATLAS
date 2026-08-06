@@ -1496,6 +1496,20 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				parsed.Name == "structural_edit" || parsed.Name == "delete_file" ||
 				parsed.Name == "insert_after" || parsed.Name == "replace_lines") {
 				st.madeProductiveChange = true
+				// A write AFTER a successful verification un-verifies the
+				// run: what was checked is no longer what is on disk. Three
+				// novel-benchmark sessions ran a working version, rewrote
+				// it, and exited — the checker then found a traceback the
+				// session never saw, because nothing demanded a re-run of
+				// the final artifact. Verification is of an artifact, not
+				// of a session.
+				if st.verifiedThisLoop {
+					log.Printf("[agent] %s after verification — the final artifact is unverified, re-arming the gate", parsed.Name)
+					st.verifiedThisLoop = false
+					st.verifiedStandalone = false
+					st.verifiedByRedirect = ""
+					st.sawFailedVerification = false
+				}
 			}
 
 			// Track verification — a successful run_command of a build /
