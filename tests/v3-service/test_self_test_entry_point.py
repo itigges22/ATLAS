@@ -179,7 +179,12 @@ def test_a_computed_path_is_left_alone():
 def test_the_case_input_is_written_to_that_file_not_stdin():
     body = pipeline._make_self_test(FILE_READER, _case())
     assert "open('input.txt','w')" in body, "the file the program reads must exist"
-    assert "_s.stdin=" not in body, "feeding stdin tests a contract the task never stated"
+    # Empty stdin is part of the contract: a stdin-reader must hit EOF and
+    # fail fast rather than hang the sandbox. The CASE INPUT riding stdin is
+    # what tests a contract the task never stated.
+    assert "_s.stdin=_o.StringIO('')" in body, "stdin must be attached and empty"
+    assert "_s.stdin=_o.StringIO('199" not in body, \
+        "the case input goes to the file, never to stdin"
 
 
 def test_the_file_shape_actually_passes(tmp_path):

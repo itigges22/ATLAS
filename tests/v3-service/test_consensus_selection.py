@@ -152,4 +152,7 @@ def test_without_a_task_input_file_the_old_shapes_stand():
 def test_the_probe_uses_the_same_contract():
     probe = pipeline._make_output_probe(STDIN_CANDIDATE, _case(), "input.txt")
     assert "open('input.txt','w')" in probe
-    assert "_s.stdin=" not in probe
+    # stdin is attached-and-empty under the task contract; the case input
+    # must never ride it.
+    assert "_s.stdin=_o.StringIO('')" in probe
+    assert "199" not in probe.split("open(")[0], "case input stays out of the stdin setup"
