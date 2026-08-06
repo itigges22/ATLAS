@@ -336,8 +336,16 @@ def _make_self_test(code: str, tc, task_input_file: str = "") -> str:
     # pipeline, wrote input.txt readers and scored 12/12.
     infile = task_input_file or _reads_input_file(code)
     if infile:
+        # Empty stdin, not absent stdin. The caller runs the program with
+        # stdin at EOF, so a candidate that reads sys.stdin must terminate
+        # immediately and fail fast. With no stdin attached it BLOCKS until
+        # the sandbox timeout instead: measured live, one stdin candidate
+        # turned the probe into a 300s hang and the dead-oracle fast return
+        # never fired, because the probe "failed" by timeout rather than by
+        # inconclusive.
         return (
             "import sys as _s,io as _o\n"
+            "_s.stdin=_o.StringIO('')\n"
             f"open({repr(infile)},'w').write({repr(inp)})\n"
             "_c=_o.StringIO()\n_old=_s.stdout\n_s.stdout=_c\n"
             f"_src={repr(code)}\n"
@@ -388,7 +396,8 @@ def _make_output_probe(code: str, tc, task_input_file: str = "") -> str:
                 + f"_r={name}(*_p) if isinstance(_p,tuple) else {name}(_p)\n"
                 + f"print({repr(_CONSENSUS_MARK)}+repr(str(_r).strip()))\n")
     infile = task_input_file or _reads_input_file(code)
-    setup = (f"open({repr(infile)},'w').write({repr(inp)})\n" if infile
+    setup = ((f"_s.stdin=_o.StringIO('')\n"
+              f"open({repr(infile)},'w').write({repr(inp)})\n") if infile
              else f"_s.stdin=_o.StringIO({repr(inp)})\n")
     return ("import sys as _s,io as _o\n" + setup
             + "_c=_o.StringIO()\n_old=_s.stdout\n_s.stdout=_c\n"
