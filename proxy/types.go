@@ -877,6 +877,13 @@ type V3GenerateRequest struct {
 	Framework      string            `json:"framework,omitempty"`
 	BuildCommand   string            `json:"build_command,omitempty"`
 	Constraints    []string          `json:"constraints,omitempty"`
+	// UserMessage is what the user actually asked for. Without it the
+	// pipeline is handed "Create the file `solve.py`", the project context
+	// and the baseline, and told to improve on the baseline "preserving all
+	// functionality" — so it can only mimic a draft whose requirement it has
+	// never seen, and cannot correct one that is subtly wrong. V3PlanRequest
+	// has carried this since plan mode shipped; generation never did.
+	UserMessage    string            `json:"user_message,omitempty"`
 	Tier           int               `json:"tier"`
 	WorkingDir     string            `json:"working_dir,omitempty"`
 }

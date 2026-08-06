@@ -1162,6 +1162,21 @@ func v3CandidatesTested(r *V3GenerateResponse) int {
 	return r.CandidatesTested
 }
 
+// latestUserMessage is the most recent user turn's text, for handing the V3
+// pipeline the requirement it is generating against. Reads the conversation
+// rather than adding state, so it cannot drift from what the model was told.
+func latestUserMessage(ctx *AgentContext) string {
+	if ctx == nil {
+		return ""
+	}
+	for i := len(ctx.Messages) - 1; i >= 0; i-- {
+		if ctx.Messages[i].Role == "user" {
+			return ctx.Messages[i].Content
+		}
+	}
+	return ""
+}
+
 // writeFileWithV3 routes through the V3 pipeline for T2/T3 tasks.
 // Model's content becomes baseline candidate #0; V3 generates diverse
 // alternatives, tests all, selects the best.
@@ -1172,6 +1187,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		BaselineCode: baselineContent,
 		Tier:         int(ctx.Tier),
 		WorkingDir:   ctx.WorkingDir,
+		UserMessage:  latestUserMessage(ctx),
 	}
 
 	// Add project context from files read during this session. The target
@@ -2304,6 +2320,7 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 		BaselineCode: content,
 		Tier:         int(ctx.Tier),
 		WorkingDir:   ctx.WorkingDir,
+		UserMessage:  latestUserMessage(ctx),
 	}
 	// Exclude the target's own pre-edit snapshot from project context —
 	// same rule (and reason) as writeFileWithV3 / checkStructuralUnresolved.

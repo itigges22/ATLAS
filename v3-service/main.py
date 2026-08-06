@@ -158,6 +158,7 @@ class V3Handler(BaseHTTPRequestHandler):
         framework = body.get("framework", "")
         build_command = body.get("build_command", "")
         constraints = body.get("constraints", [])
+        user_message = body.get("user_message", "")
         tier = body.get("tier", 2)
         working_dir = body.get("working_dir", "")
 
@@ -168,7 +169,7 @@ class V3Handler(BaseHTTPRequestHandler):
         # Build problem description from the adapter request
         problem = _build_problem_from_request(
             file_path, baseline_code, project_context,
-            framework, build_command, constraints,
+            framework, build_command, constraints, user_message,
         )
 
         # Build file context for the pipeline

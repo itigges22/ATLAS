@@ -1403,9 +1403,27 @@ class V3PipelineService:
 def _build_problem_from_request(
     file_path: str, baseline_code: str, project_context: Dict[str, str],
     framework: str, build_command: str, constraints: List[str],
+    user_message: str = "",
 ) -> str:
-    """Build a problem description for the V3 pipeline from a generate request."""
+    """Build a problem description for the V3 pipeline from a generate request.
+
+    The user's own request leads, when the caller sends one. Without it the
+    pipeline saw only "Create the file X", the project context and the
+    baseline, under an instruction to improve on the baseline "preserving all
+    functionality" — so every candidate could only mimic a draft whose
+    requirement it had never been shown, and a baseline that misread the task
+    was reproduced rather than corrected.
+
+    Measured on the AoC tasks, whose prompt states "reads input.txt": 9 of the
+    12 solutions ATLAS produced read stdin instead, and the caller runs
+    `python solve.py` with no stdin. The same model given the task directly
+    wrote file readers 12 times out of 12.
+    """
     parts = []
+
+    if user_message.strip():
+        parts.append("## The request\n\n")
+        parts.append(user_message.strip() + "\n\n")
 
     parts.append(f"Create the file `{file_path}`")
     if framework:
