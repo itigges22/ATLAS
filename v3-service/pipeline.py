@@ -605,10 +605,30 @@ class V3PipelineService:
                 # some case is passable, so falling below half is the
                 # candidate underperforming a bar something else cleared.
                 if total > 0 and p == 0:
+                    # Inconclusive is not a pass. An earlier version emitted
+                    # this and fell through to the build check, which made
+                    # "it compiles" the whole of verification: a candidate
+                    # that failed every one of its own cases was marked
+                    # passed, joined the selection pool, and could be written
+                    # over the model's work. Measured on the two tasks whose
+                    # answer is computed from a file the program has to read:
+                    # 0/4 sessions correct on the run that shipped it,
+                    # against 1-2 of 4 on each of the four runs before.
+                    #
+                    # "Cannot condemn" and "therefore promote" are different
+                    # claims. A suite that passes nothing still establishes
+                    # nothing, so the candidate stays unverified and the
+                    # caller's own write stands — the rule the fallback path
+                    # below already states, that executing but wrong is worse
+                    # than an honest failure.
                     emit("self_test_inconclusive",
                          f"0/{total} — no case passed, so the suite cannot "
-                         f"separate a wrong answer key from wrong code",
+                         f"separate a wrong answer key from wrong code. Not "
+                         f"verified; leaving the caller's own write in place",
                          cases=total)
+                    return (False, out,
+                            f"Self-test:0/{total} inconclusive — nothing verified",
+                            verification_evidence)
                 elif total > 0 and p < total / 2:
                     return False, out, f"Self-test:{p}/{total}. "+";".join(fails[:3]), verification_evidence
             return verify_build_if_requested(out, err)

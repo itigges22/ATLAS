@@ -28,8 +28,9 @@ import pipeline  # noqa: E402
 def _verdict(passed: int, total: int):
     """The decision the pipeline makes from a self-test score.
 
-    Mirrors the branch under test: zero is inconclusive, a partial score
-    below half fails the candidate, at or above half passes.
+    Mirrors the branch under test: zero is inconclusive and returns no
+    verified candidate, a partial score below half fails the candidate, at
+    or above half passes.
     """
     if total > 0 and passed == 0:
         return "inconclusive"
@@ -38,12 +39,33 @@ def _verdict(passed: int, total: int):
     return "pass"
 
 
+def _returns_a_candidate(verdict: str) -> bool:
+    """Only a pass puts a candidate in the pool the caller can receive."""
+    return verdict == "pass"
+
+
 def test_zero_of_n_no_longer_condemns_the_candidate():
     """The measured shape: every candidate scoring 0/5 against a suite the
     model wrote for a problem it could not solve."""
     assert _verdict(0, 5) == "inconclusive"
     assert _verdict(0, 4) == "inconclusive"
     assert _verdict(0, 3) == "inconclusive"
+
+
+def test_inconclusive_does_not_certify_either():
+    """Cannot condemn and therefore promote are different claims.
+
+    Falling through to the build check made "it compiles" the whole of
+    verification, so a candidate that failed every one of its own cases was
+    marked passed and could be written over the model's work. Measured on
+    the two tasks whose answer is computed from a file the program reads:
+    0 of 4 sessions correct on the run that shipped it, against 1-2 of 4 on
+    each of the four runs before.
+    """
+    assert not _returns_a_candidate(_verdict(0, 5))
+    assert not _returns_a_candidate(_verdict(0, 3))
+    # And a real pass still is one.
+    assert _returns_a_candidate(_verdict(3, 5))
 
 
 def test_a_partial_score_still_fails_a_weak_candidate():
