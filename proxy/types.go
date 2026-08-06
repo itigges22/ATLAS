@@ -197,6 +197,10 @@ type WriteFileInput struct {
 
 type WriteFileOutput struct {
 	BytesWritten         int                      `json:"bytes_written"`
+	// Warning carries a non-blocking defect notice: the write LANDED, and
+	// the model should act on this next (e.g. "does not parse — run it and
+	// read the traceback"). See writeNewFileWithWarning.
+	Warning              string                   `json:"warning,omitempty"`
 	V3Used               bool                     `json:"v3_used,omitempty"`
 	CandidatesTested     int                      `json:"candidates_tested,omitempty"`
 	WinningScore         float64                  `json:"winning_score,omitempty"`

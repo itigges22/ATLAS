@@ -850,6 +850,17 @@ func writeFileTool() *ToolDef {
 			// four times, each costing 180s before it was told anything.
 			if fileTier >= Tier2Medium && ctx.V3URL != "" && !ctx.BypassV3 && !iterating {
 				if synErr, ok := checkFallbackSyntax(ctx, input.Path, input.Content); !ok {
+					// Feeding V3 broken content wastes its whole budget, so
+					// V3 is skipped either way. What happens to the bytes
+					// depends on what is at the path: clobbering an existing
+					// file with garbage is still refused, but a NEW file
+					// lands with a warning so the model can run it and read
+					// the real traceback. See writeNewFileWithWarning.
+					if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+						log.Printf("[write_file] new file %s does not parse — writing with a warning, skipping V3 (%s)",
+							logPath(input.Path), truncateStr(synErr, 80))
+						return writeNewFileWithWarning(path, input.Content, synErr, ctx)
+					}
 					log.Printf("[write_file] %s does not parse — rejecting before V3 (%s)",
 						logPath(input.Path), truncateStr(synErr, 80))
 					return &ToolResult{
@@ -935,12 +946,9 @@ func writeFileTool() *ToolDef {
 			// "exists" — so testing it here silently skipped the gate.
 			if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
 				if synErr, ok := checkFallbackSyntax(ctx, input.Path, input.Content); !ok {
-					log.Printf("[write_file] new file %s does not parse — rejecting (%s)",
+					log.Printf("[write_file] new file %s does not parse — writing with a warning (%s)",
 						logPath(input.Path), truncateStr(synErr, 80))
-					return &ToolResult{
-						Success: false,
-						Error:   fallbackSyntaxRejection(input.Path, input.Content, synErr),
-					}, nil
+					return writeNewFileWithWarning(path, input.Content, synErr, ctx)
 				}
 			}
 
@@ -1111,6 +1119,37 @@ func readFileTruncationNotice(shown, totalLines, totalBytes int) string {
 			"have your program open it. To look at a different part of the file, read "+
 			"it again with offset/limit.]",
 		shown, totalLines, totalBytes)
+}
+
+// writeNewFileWithWarning lands syntactically broken content in a file that
+// does not exist yet, and says so, instead of rejecting the write.
+//
+// The rejection was the harness substituting its judgement for execution's.
+// On an EXISTING file it earns its keep: it stops working code being
+// clobbered with garbage. On a new file there is nothing to protect, and the
+// rejection forbids the one loop that measurably works — write it, run it,
+// read the real traceback, fix it. The no-tool baseline arm, whose only
+// feedback IS the traceback, resolves its own syntax errors at 85-100%.
+// Under the rejection the model retried blind against our error message,
+// resent byte-identical content, and the repetition breaker ended the
+// session: three AoC sessions and a novel-arm session all died as
+// "solve.py was never created" — code on hand, nothing on disk.
+func writeNewFileWithWarning(path, content, synErr string, ctx *AgentContext) (*ToolResult, error) {
+	res, err := writeFileRecorded(path, content, ctx)
+	if err != nil || res == nil || !res.Success {
+		return res, err
+	}
+	ctx.SessionWrites[path] = true
+	out := WriteFileOutput{
+		BytesWritten: len(content),
+		Warning: fmt.Sprintf(
+			"written, but it does not parse (%s). Run it now and read the "+
+				"real traceback, then fix that line and write it again.",
+			truncateStr(synErr, 160)),
+	}
+	outBytes, _ := json.Marshal(out)
+	res.Data = outBytes
+	return res, nil
 }
 
 // writeFileRecorded is writeFileDirect plus the body-seen record.

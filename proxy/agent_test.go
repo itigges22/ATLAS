@@ -2106,14 +2106,24 @@ func TestWriteFileRejectsUnparseableContentWithoutCallingV3(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write_file: %v", err)
 	}
-	if res == nil || res.Success {
-		t.Fatalf("unparseable content must be rejected, got %+v", res)
+	// The contract here changed on measured evidence. Rejecting broken
+	// content in a NEW file forbade the write-run-read-the-traceback loop —
+	// the one the no-tool baseline resolves its own syntax errors with at
+	// 85-100% — and sessions died as "solve.py was never created" instead.
+	// The write now LANDS with a warning. What this test still pins is the
+	// original point: V3 must not be fed content that does not parse.
+	if res == nil || !res.Success {
+		t.Fatalf("a new file lands with a warning, got %+v", res)
+	}
+	var out WriteFileOutput
+	if json.Unmarshal(res.Data, &out) != nil || out.Warning == "" {
+		t.Fatalf("the result must warn that the content does not parse: %s", string(res.Data))
 	}
 	if v3Called {
 		t.Error("V3 must not be called for content that does not parse")
 	}
-	if _, statErr := os.Stat(path); statErr == nil {
-		t.Error("nothing should have landed on disk")
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Error("the file must be on disk so the model can run it")
 	}
 }
 
@@ -2178,7 +2188,7 @@ func TestPlainBounceEmitsNoToolResult(t *testing.T) {
 // multi-document files (valid YAML, and the shape every Kubernetes manifest
 // uses); with that checker fixed, the gate is safe here. Observed: a 4-line
 // test_discount.py with an unterminated string reached disk this way.
-func TestDirectWriteGatesAnUnparseableNewFile(t *testing.T) {
+func TestDirectWriteLandsAnUnparseableNewFileWithAWarning(t *testing.T) {
 	dir := t.TempDir()
 	sb := fakeSyntaxSandbox(t, "UNTERMINATED")
 	defer sb.Close()
@@ -2190,11 +2200,14 @@ func TestDirectWriteGatesAnUnparseableNewFile(t *testing.T) {
 	if err != nil && res == nil {
 		t.Fatalf("write_file: %v", err)
 	}
-	if res != nil && res.Success {
-		t.Error("an unparseable new file must not reach disk")
+	// Fail-forward: a NEW file lands with a warning so the model can run it
+	// and read the real traceback (see TestWriteFileRejectsUnparseable...
+	// for the measured reasoning). An EXISTING file is still protected.
+	if res == nil || !res.Success {
+		t.Errorf("an unparseable new file lands with a warning, got %+v", res)
 	}
-	if _, statErr := os.Stat(filepath.Join(dir, "t.py")); statErr == nil {
-		t.Error("nothing should have been written")
+	if _, statErr := os.Stat(filepath.Join(dir, "t.py")); statErr != nil {
+		t.Error("the file must be on disk so the model can run it")
 	}
 }
 
