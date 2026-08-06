@@ -88,7 +88,7 @@ def _remaining_budget_ms(start: float) -> Optional[float]:
     try:
         seconds = int(raw) if raw else 300
     except ValueError:
-        seconds = 180
+        seconds = 300
     if seconds <= 0:
         return None
     return seconds * 1000.0 - (time.time() - start) * 1000.0
@@ -278,7 +278,34 @@ def _reads_input_file(code: str):
     return None
 
 
-def _make_self_test(code: str, tc) -> str:
+_SOURCE_SUFFIXES = (".py", ".js", ".ts", ".go", ".java", ".rb", ".php", ".rs",
+                    ".c", ".cpp", ".h", ".html", ".css", ".md", ".json",
+                    ".yaml", ".yml", ".toml")
+
+
+def _task_input_file(project_files) -> str:
+    """The data file the task supplies for the program to read, if any.
+
+    Verification has to hold a candidate to the environment's contract, not
+    to whichever contract the candidate happens to prefer. The caller runs
+    `python solve.py` with this file on disk and NO stdin, so a candidate
+    that reads stdin must fail here rather than be handed a stdin the real
+    run will never provide.
+
+    Measured: with the self-test choosing its shape from the candidate's own
+    code, stdin-reading candidates passed verification and were selected in 3
+    sessions — every one of which then failed the task, printing 0 because no
+    stdin arrived.
+    """
+    if not project_files:
+        return ""
+    for name in project_files:
+        if not name.lower().endswith(_SOURCE_SUFFIXES):
+            return name
+    return ""
+
+
+def _make_self_test(code: str, tc, task_input_file: str = "") -> str:
     """Build executable assertion code for a single test case.
 
     Uses ast.literal_eval (safe — only parses Python literals) to convert
@@ -306,7 +333,7 @@ def _make_self_test(code: str, tc) -> str:
     # ATLAS wrote read stdin, against a prompt that says "reads input.txt",
     # and both tasks sat at 7/26. The same model asked directly, with no
     # pipeline, wrote input.txt readers and scored 12/12.
-    infile = _reads_input_file(code)
+    infile = task_input_file or _reads_input_file(code)
     if infile:
         return (
             "import sys as _s,io as _o\n"
@@ -334,7 +361,7 @@ def _make_self_test(code: str, tc) -> str:
 _CONSENSUS_MARK = "V3_OUT:"
 
 
-def _make_output_probe(code: str, tc) -> str:
+def _make_output_probe(code: str, tc, task_input_file: str = "") -> str:
     """Run a candidate on a case's INPUT and report what it printed.
 
     The self-test compares that output to the model's predicted answer. For a
@@ -359,7 +386,7 @@ def _make_output_probe(code: str, tc) -> str:
                 + "try:\n _p=_a.literal_eval(_i)\nexcept:\n _p=_i\n"
                 + f"_r={name}(*_p) if isinstance(_p,tuple) else {name}(_p)\n"
                 + f"print({repr(_CONSENSUS_MARK)}+repr(str(_r).strip()))\n")
-    infile = _reads_input_file(code)
+    infile = task_input_file or _reads_input_file(code)
     setup = (f"open({repr(infile)},'w').write({repr(inp)})\n" if infile
              else f"_s.stdin=_o.StringIO({repr(inp)})\n")
     return ("import sys as _s,io as _o\n" + setup
@@ -371,7 +398,8 @@ def _make_output_probe(code: str, tc) -> str:
             + f"print({repr(_CONSENSUS_MARK)}+repr(_c.getvalue().strip()))\n")
 
 
-def _consensus_winners(candidates, test_cases, sandbox, emit):
+def _consensus_winners(candidates, test_cases, sandbox, emit,
+                       task_input_file=""):
     """CodeT agreement: candidates whose outputs match the largest cluster.
 
     Returns [] when there is nothing to agree on — fewer than two candidates,
@@ -386,7 +414,8 @@ def _consensus_winners(candidates, test_cases, sandbox, emit):
         outs = []
         for tc in test_cases:
             try:
-                ok, out, _ = sandbox(_make_output_probe(c["code"], tc))
+                ok, out, _ = sandbox(
+                    _make_output_probe(c["code"], tc, task_input_file))
             except Exception:
                 ok, out = False, ""
             marker = ""
@@ -591,6 +620,9 @@ class V3PipelineService:
         # `from utils import helper` and the sandbox imports a workspace
         # that contains only solution.py.
         sandbox = adapters.SandboxAdapter(project_files=files)
+        # The contract verification must hold candidates to: the caller runs
+        # the program with these files on disk and no stdin.
+        task_input_file = _task_input_file(files)
         embed = adapters.EmbedAdapter()
 
         result = {
@@ -717,7 +749,7 @@ class V3PipelineService:
                 p, fails = 0, []
                 for i, tc in enumerate(self_tests.test_cases):
                     try:
-                        tc_code = _make_self_test(code, tc)
+                        tc_code = _make_self_test(code, tc, task_input_file)
                         tp, to, te = sandbox(tc_code)
                         if tp and "SELF_TEST_PASS" in to:
                             p += 1
@@ -1071,7 +1103,8 @@ class V3PipelineService:
             # working suite keeps deciding.
             if not passing and self_tests and self_tests.test_cases:
                 agreed = _consensus_winners(
-                    candidates, self_tests.test_cases, sandbox, emit)
+                    candidates, self_tests.test_cases, sandbox, emit,
+                    task_input_file)
                 for c in agreed:
                     c["passed"] = True
                     passing.append(c)

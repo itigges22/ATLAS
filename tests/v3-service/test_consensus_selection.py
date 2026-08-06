@@ -50,6 +50,11 @@ def _case(expected="THIS KEY IS WRONG"):
                            "expected_output": expected})()
 
 
+def _case3(expected):
+    return type("TC", (), {"input_str": "1\n2\n3",
+                           "expected_output": expected})()
+
+
 def _cands(*codes):
     return [{"index": i, "code": c} for i, c in enumerate(codes)]
 
@@ -100,3 +105,51 @@ def test_the_consensus_stage_is_registered():
     """An unregistered stage contributes no phase row, so the run summary
     loses the reason a candidate was selected."""
     assert pipeline._STAGE_PHASE["consensus"] == "selection"
+
+
+# --- verification holds candidates to the ENVIRONMENT's contract -----------
+#
+# The self-test used to pick its shape from the candidate's own code, so a
+# stdin-reading candidate was handed a stdin the real run never provides. It
+# passed verification and was selected in 3 sessions; all 3 then failed the
+# task, printing 0 because no stdin arrived. The caller runs the program with
+# the task's files on disk and no stdin, and verification has to do the same.
+
+STDIN_CANDIDATE = "import sys\nprint(len([x for x in sys.stdin]))\n"
+FILE_CANDIDATE = "print(len(open('input.txt').read().split()))\n"
+
+
+def _run(body):
+    work = tempfile.mkdtemp()
+    Path(work, "t.py").write_text(body)
+    return subprocess.run([sys.executable, "t.py"], cwd=work,
+                          capture_output=True, text=True, timeout=60)
+
+
+def test_the_task_input_file_is_recognised():
+    assert pipeline._task_input_file({"input.txt": "1\n"}) == "input.txt"
+    assert pipeline._task_input_file({"solve.py": "x=1"}) == ""
+    assert pipeline._task_input_file(None) == ""
+
+
+def test_a_stdin_candidate_fails_the_task_contract():
+    """The measured regression: it passed on a stdin the caller never gives."""
+    body = pipeline._make_self_test(STDIN_CANDIDATE, _case3("3"), "input.txt")
+    assert "SELF_TEST_PASS" not in _run(body).stdout
+
+
+def test_a_file_candidate_passes_the_task_contract():
+    body = pipeline._make_self_test(FILE_CANDIDATE, _case3("3"), "input.txt")
+    assert "SELF_TEST_PASS" in _run(body).stdout
+
+
+def test_without_a_task_input_file_the_old_shapes_stand():
+    """Tasks that really are stdin-driven must keep working."""
+    body = pipeline._make_self_test(STDIN_CANDIDATE, _case3("3"))
+    assert "_s.stdin=" in body
+
+
+def test_the_probe_uses_the_same_contract():
+    probe = pipeline._make_output_probe(STDIN_CANDIDATE, _case(), "input.txt")
+    assert "open('input.txt','w')" in probe
+    assert "_s.stdin=" not in probe

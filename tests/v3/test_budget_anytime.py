@@ -45,14 +45,20 @@ def test_a_disabled_cap_reports_no_budget(monkeypatch):
 
 def test_the_cap_default_matches_the_proxy(monkeypatch):
     """The service and the proxy read the same knob. If these drift, the
-    service plans against a budget the caller does not honour."""
+    service plans against a budget the caller does not honour.
+
+    300s, not the 180s both shipped with: PlanSearch spends two LLM calls per
+    candidate, so k=3 costs ~162s at the measured ~22s per call before the
+    probe and self-test. At 180s, sessions spent a median 207s on generation
+    alone and phase-3 repair was skipped 19 times with 7-9s left.
+    """
     monkeypatch.delenv("ATLAS_V3_TIMEOUT", raising=False)
     left = pipeline._remaining_budget_ms(time.time())
-    assert 179_000 < left <= 180_000
+    assert 299_000 < left <= 300_000
 
     monkeypatch.setenv("ATLAS_V3_TIMEOUT", "not-a-number")
     left = pipeline._remaining_budget_ms(time.time())
-    assert 179_000 < left <= 180_000
+    assert 299_000 < left <= 300_000
 
 
 def test_new_stages_are_registered_for_the_summary():
