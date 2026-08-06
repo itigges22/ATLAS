@@ -237,6 +237,13 @@ services:
       - HOME=/home/sandbox
       - CARGO_HOME=/home/sandbox/.cargo
       - GOPATH=/home/sandbox/go
+      # `go run` links the program into GOTMPDIR and then executes it,
+      # and every tmpfs below is noexec, so the default (/tmp) makes
+      # `go run x.go` fail with "fork/exec ...: permission denied" on
+      # every invocation. Measured across four benchmark runs: 22
+      # permission-denied results, all of them Go. Points at the one
+      # tmpfs that allows exec.
+      - GOTMPDIR=/home/sandbox/gobuild
       - ATLAS_SERVICE_TOKEN_FILE=/run/atlas-secrets/service-token
     # Writable mounts for language toolchains. The container fs is
     # read_only=true for hardening, so every install/cache target a
@@ -262,6 +269,13 @@ services:
       - /home/sandbox/.npm:size=256M     # Node: npm cache
       - /home/sandbox/.cargo:size=512M   # Rust: crate downloads (CARGO_HOME; toolchain stays read-only in /opt)
       - /home/sandbox/go:size=512M       # Go: module cache + bin (GOPATH)
+      # The one writable path that permits exec, for compiled languages
+      # that link a binary outside the project and run it. Scoped
+      # deliberately: /tmp stays noexec. This grants no capability the
+      # sandbox lacked, since the bind-mounted /workspace already
+      # permits exec, so `go build -o ./prog && ./prog` always worked;
+      # it makes the toolchain's own default path work too.
+      - /home/sandbox/gobuild:size=512M,exec  # Go: `go run` link+exec dir (GOTMPDIR)
       - /home/sandbox/.m2:size=512M      # Java: Maven local repo
       - /home/sandbox/.gradle:size=512M  # Java/Kotlin: Gradle caches
       - /home/sandbox/.bundle:size=256M  # Ruby: bundler --path

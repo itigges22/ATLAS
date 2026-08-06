@@ -11,7 +11,7 @@ Within that model:
 
 Model-generated tool calls are treated as untrusted input: file edits are constrained to the workspace and shell commands run in the sandbox container (read-only rootfs, no-new-privileges, pids limit, `/workspace` as the only writable host mount). If you find a way around either boundary, that is exactly the kind of report we want.
 
-Two current limits of that boundary, so reports can be calibrated against what is actually enforced: the sandbox has outbound network access by default (toolchains need to fetch dependencies) — `ATLAS_SANDBOX_NET_INTERNAL=true` cuts all egress from executed code; and the resource caps are host-sized only when `atlas init` writes them — a raw `docker compose up` without the wizard falls back to conservative caps (`4g` memory, `2` CPUs, `1024` PIDs), never unlimited.
+Three current limits of that boundary, so reports can be calibrated against what is actually enforced: the sandbox has outbound network access by default (toolchains need to fetch dependencies) — `ATLAS_SANDBOX_NET_INTERNAL=true` cuts all egress from executed code; and the resource caps are host-sized only when `atlas init` writes them — a raw `docker compose up` without the wizard falls back to conservative caps (`4g` memory, `2` CPUs, `1024` PIDs), never unlimited. Third, execution is permitted from the bind-mounted `/workspace` and from one 512M tmpfs (`/home/sandbox/gobuild`, the Go toolchain's link-and-run directory); every other writable tmpfs, `/tmp` included, is mounted `noexec`. That scoped grant adds no capability the sandbox lacked, since `/workspace` already permitted exec, but it is where compiled output can run.
 
 ## Supported versions
 
