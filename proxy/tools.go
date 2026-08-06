@@ -286,9 +286,7 @@ func readFileTool() *ToolDef {
 					cut = nl + 1
 				}
 				shown := strings.Count(content[:cut], "\n")
-				content = content[:cut] + fmt.Sprintf(
-					"\n... [read_file truncated: showing the first %d of %d lines (%d bytes). This file is too large to read whole. Read a specific range with offset/limit, or process it with run_command (grep/awk/sed/head, or a python script) instead of loading it all into context.]",
-					shown, totalLines, len(data))
+					content = content[:cut] + readFileTruncationNotice(shown, totalLines, len(data))
 				truncated = true
 				shownEnd = start + shown
 				if shownEnd > totalLines {
@@ -1085,6 +1083,34 @@ func isBinaryContent(data []byte) bool {
 		}
 	}
 	return false
+}
+
+// readFileTruncationNotice explains a read the byte cap cut short.
+//
+// The old wording ended "process it with run_command (grep/awk/sed/head, or a
+// python script) instead of loading it all into context". That is right for
+// inspecting a large SOURCE file and wrong for a DATA file the program is
+// meant to open at runtime: it points the model at shell pipelines and stdin,
+// and the caller then runs `python solve.py` with no stdin and gets 0.
+//
+// Measured on the AoC tasks, whose answer is computed from input.txt:
+//
+//	shoal   1 line,     600 B    never truncated   92%
+//	slope   400 lines,  12800 B  truncated         50%
+//	course  1200 lines, 9707 B   truncated         27%
+//	sonar   2000 lines, 8707 B   truncated         27%
+//
+// The score tracks the notice rather than the problem. The same model
+// prompted directly never reads the file at all and scored 83-100% on every
+// one of them.
+func readFileTruncationNotice(shown, totalLines, totalBytes int) string {
+	return fmt.Sprintf(
+		"\n... [read_file truncated: showing the first %d of %d lines (%d bytes). "+
+			"The head is shown, which is enough to see the format. If you are writing "+
+			"code that reads this file when it runs, you do not need the rest here \u2014 "+
+			"have your program open it. To look at a different part of the file, read "+
+			"it again with offset/limit.]",
+		shown, totalLines, totalBytes)
 }
 
 // writeFileRecorded is writeFileDirect plus the body-seen record.
