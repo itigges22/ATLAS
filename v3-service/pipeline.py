@@ -60,7 +60,7 @@ for _phase, _stages in {
                 "self_test_verify", "build_verify",
                 "build_verify_unavailable"),
     "veto": ("lens_veto", "structural_veto", "call_graph_veto"),
-    "selection": ("selected",),
+    "selection": ("selected", "consensus"),
     "repair_pr_cot": ("phase3", "call_chain_context", "pr_cot",
                       "pr_cot_pass", "pr_cot_failed", "pr_cot_error"),
     "repair_refinement": ("refinement", "refinement_pass",
@@ -329,6 +329,80 @@ def _make_self_test(code: str, tc) -> str:
         "try:\n    exec(compile(_src,'solution.py','exec'),globals())\nfinally:\n _s.stdout=_old\n"
         f"assert _c.getvalue().strip()=={repr(exp)},f'got {{_c.getvalue().strip()}}'\n"
         "print('SELF_TEST_PASS')\n")
+
+
+_CONSENSUS_MARK = "V3_OUT:"
+
+
+def _make_output_probe(code: str, tc) -> str:
+    """Run a candidate on a case's INPUT and report what it printed.
+
+    The self-test compares that output to the model's predicted answer. For a
+    problem the model cannot reliably solve, producing the answer IS the
+    problem, so the prediction is wrong and correct code fails its own suite.
+    Measured across 42 verifications in one run: every one scored 0/N, while a
+    candidate taken from those same logs passed immediately when given a
+    correct expected value. Uniform zero is a broken answer key, not broken
+    code.
+
+    CodeT (Chen et al., 2022), which this pipeline already cites, does not use
+    generated tests as an oracle, for exactly this reason. It runs candidates
+    on the generated INPUTS and clusters them by agreement, so the signal is
+    the answer candidates converge on rather than the answer the model
+    guessed. This probe produces the raw material for that.
+    """
+    inp = tc.input_str.strip()
+    name = _entry_function(code)
+    if name and _entry_takes_case_input(code, name):
+        return (code + "\nimport ast as _a\n"
+                + f"_i={repr(inp)}\n"
+                + "try:\n _p=_a.literal_eval(_i)\nexcept:\n _p=_i\n"
+                + f"_r={name}(*_p) if isinstance(_p,tuple) else {name}(_p)\n"
+                + f"print({repr(_CONSENSUS_MARK)}+repr(str(_r).strip()))\n")
+    infile = _reads_input_file(code)
+    setup = (f"open({repr(infile)},'w').write({repr(inp)})\n" if infile
+             else f"_s.stdin=_o.StringIO({repr(inp)})\n")
+    return ("import sys as _s,io as _o\n" + setup
+            + "_c=_o.StringIO()\n_old=_s.stdout\n_s.stdout=_c\n"
+            + f"_src={repr(code)}\n"
+            + "try:\n    exec(compile(_src,'solution.py','exec'),globals())\n"
+            + "except Exception:\n    pass\n"
+            + "finally:\n _s.stdout=_old\n"
+            + f"print({repr(_CONSENSUS_MARK)}+repr(_c.getvalue().strip()))\n")
+
+
+def _consensus_winners(candidates, test_cases, sandbox, emit):
+    """CodeT agreement: candidates whose outputs match the largest cluster.
+
+    Returns [] when there is nothing to agree on — fewer than two candidates,
+    no case produced output, or every candidate disagreed with every other.
+    Agreement between independently generated programs is evidence; one
+    program agreeing with itself is not, so a lone cluster does not win.
+    """
+    if len(candidates) < 2 or not test_cases:
+        return []
+    sigs = {}
+    for c in candidates:
+        outs = []
+        for tc in test_cases:
+            try:
+                ok, out, _ = sandbox(_make_output_probe(c["code"], tc))
+            except Exception:
+                ok, out = False, ""
+            marker = ""
+            if ok and _CONSENSUS_MARK in (out or ""):
+                marker = out.split(_CONSENSUS_MARK)[-1].strip()
+            outs.append(marker)
+        if any(outs):
+            sigs.setdefault(tuple(outs), []).append(c)
+    if not sigs:
+        return []
+    best = max(sigs.values(), key=len)
+    if len(best) < 2:
+        return []
+    emit("consensus", f"{len(best)}/{len(candidates)} candidates agree",
+         cluster=len(best), clusters=len(sigs))
+    return best
 
 
 class V3PipelineService:
@@ -982,6 +1056,29 @@ class V3PipelineService:
 
             emit("sandbox_done", f"{len(passing)}/{len(candidates)} passed",
                  passed=len(passing), total=len(candidates))
+
+            # Nothing passed, which for these tasks usually means the answer
+            # key was wrong rather than every candidate. Measured across 42
+            # verifications in one run: all 42 scored 0/N, and a candidate
+            # pulled from those logs passed immediately against a correct
+            # expected value. The pipeline has never selected a candidate in
+            # any measured run — every session shipped the model's own draft.
+            #
+            # Fall back to the agreement signal CodeT actually uses: run the
+            # candidates on the generated INPUTS and take the largest cluster
+            # that produced the same answers. Narrow on purpose — this only
+            # runs where the oracle has already condemned everything, so a
+            # working suite keeps deciding.
+            if not passing and self_tests and self_tests.test_cases:
+                agreed = _consensus_winners(
+                    candidates, self_tests.test_cases, sandbox, emit)
+                for c in agreed:
+                    c["passed"] = True
+                    passing.append(c)
+                if agreed:
+                    emit("sandbox_done",
+                         f"{len(passing)}/{len(candidates)} by consensus",
+                         passed=len(passing), total=len(candidates))
 
             # ===== LENS VETO =====
             # PC-207 alignment fix: hard-reject sandbox-passing candidates whose
