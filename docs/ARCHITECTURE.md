@@ -144,7 +144,7 @@ In the default `strict` mode the proxy sends a full JSON schema — `oneOf` with
 | Tool | Purpose | Read-only |
 |------|---------|-----------|
 | `read_file` | Read file contents (with optional offset/limit) | Yes |
-| `outline_file` | List a file's top-level functions/classes with line ranges, no bodies (tree-sitter for `.py`, best-effort scan otherwise). The surgical-read entry point: outline first, then `read_file` with offset/limit | Yes |
+| `outline_file` | List a file's top-level functions/classes with line ranges, no bodies (tree-sitter for `.py`, best-effort scan otherwise). Locates a target inside a file too large to read whole: outline, then `read_file` with offset/limit. Returns no code, so it cannot ground a diagnosis — `read_file` is the default entry point | Yes |
 | `write_file` | Create a NEW file (rejected for existing files >5 lines — see safety limits) | No |
 | `edit_file` | Surgical inline string replacement (old_str/new_str) for ≤10-line changes | No |
 | `insert_after` | Insert new lines after a given line number — the line numbers `read_file` prints. For ADDING code (a branch, function, import) where nothing existing changes: there is no `old_str` to reproduce, which is the step that fails on long spans | No |

@@ -345,11 +345,14 @@ func outlineFileTool() *ToolDef {
 	return &ToolDef{
 		Name: "outline_file",
 		Description: "List a file's top-level functions and classes with their " +
-			"line ranges — NO bodies, so it costs almost no context. Use this " +
-			"FIRST to navigate an existing file instead of reading the whole " +
-			"thing: outline_file to find the function you care about, then " +
-			"read_file with offset/limit to read just its lines, then structural_edit " +
-			"(selector function:NAME / class:NAME) or edit_file to change it. " +
+			"line ranges. Returns NO code: an outline tells you WHERE something is " +
+			"defined and never what it does, so you cannot answer a question, " +
+			"diagnose a bug, or judge whether code is correct from one. " +
+			"Use it to locate a target inside a file too large to read whole: " +
+			"outline_file to find the function, then read_file with offset/limit " +
+			"for its lines, then structural_edit (selector function:NAME / " +
+			"class:NAME) or edit_file to change it. For a file you can simply " +
+			"read, go straight to read_file. " +
 			"Python is parsed precisely (tree-sitter, decorator-aware); other " +
 			"languages get a best-effort definition scan.",
 		InputSchema: OutlineInput{},

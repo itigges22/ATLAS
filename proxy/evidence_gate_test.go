@@ -137,3 +137,27 @@ func TestTheRejectionIsCappedAndReadable(t *testing.T) {
 		t.Errorf("list punctuation is malformed: %s", msg)
 	}
 }
+
+// The failure the evidence gate backstops was caused upstream, by guidance.
+// The tool description sold outline_file on costing "almost no context" and
+// told the model to reach for it FIRST "instead of reading the whole thing",
+// while the system prompt separately said never to answer from code it had
+// not opened. The model followed the procedure and dropped the principle.
+//
+// Measured over run 16's 28 sessions: peak prompt tokens median 6,294, worst
+// case 15,406, against a 131,072-token window. Context frugality is buying
+// nothing at 12% utilisation, and read_file already caps itself on a file too
+// large to load, so the advice duplicated a guard that works and cost
+// correctness to do it.
+func TestOutlineIsNotSoldAsACheaperRead(t *testing.T) {
+	def := outlineFileTool()
+	for _, banned := range []string{"almost no context", "instead of reading the whole"} {
+		if strings.Contains(def.Description, banned) {
+			t.Errorf("outline_file must not be pitched as a cheaper read: %q", banned)
+		}
+	}
+	// It has to say what it withholds, or an outline reads as having read.
+	if !strings.Contains(def.Description, "NO code") {
+		t.Errorf("outline_file must state that it returns no code: %s", def.Description)
+	}
+}
