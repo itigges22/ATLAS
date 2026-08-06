@@ -236,6 +236,48 @@ def _entry_takes_case_input(code: str, name: str) -> bool:
     return False
 
 
+def _reads_input_file(code: str):
+    """The literal filename a candidate opens for reading, if it opens one.
+
+    Returns None when the program takes no named file, which is the case the
+    stdin path below already covers.
+
+    Only string literals count. A computed path cannot be materialised without
+    running the program, and guessing one wrong is worse than falling through
+    to the existing behaviour.
+    """
+    import ast as _ast
+    try:
+        tree = _ast.parse(code)
+    except SyntaxError:
+        return None
+    for node in _ast.walk(tree):
+        if not isinstance(node, _ast.Call):
+            continue
+        func = node.func
+        name = getattr(func, "id", None) or getattr(func, "attr", None)
+        if name not in ("open", "read_text", "read_bytes", "Path"):
+            continue
+        if not node.args:
+            continue
+        target = node.args[0]
+        if not (isinstance(target, _ast.Constant) and isinstance(target.value, str)):
+            continue
+        # A write/append target is an output file, not the program's input.
+        mode = node.args[1] if len(node.args) > 1 else None
+        if isinstance(mode, _ast.Constant) and isinstance(mode.value, str):
+            if any(ch in mode.value for ch in ("w", "a", "x")):
+                continue
+        for kw in node.keywords:
+            if kw.arg == "mode" and isinstance(kw.value, _ast.Constant):
+                if any(ch in str(kw.value.value) for ch in ("w", "a", "x")):
+                    break
+        else:
+            if "/" not in target.value and "\\" not in target.value:
+                return target.value
+    return None
+
+
 def _make_self_test(code: str, tc) -> str:
     """Build executable assertion code for a single test case.
 
@@ -253,6 +295,28 @@ def _make_self_test(code: str, tc) -> str:
             + f"_r={name}(*_p) if isinstance(_p,tuple) else {name}(_p) if isinstance(_p,list) else {name}(_p)\n"
             + "try:\n _ev=_a.literal_eval(_e)\nexcept:\n _ev=_e\n"  # noqa: E722  -- bare except inside generated user code, intentional
             + "assert str(_r)==str(_ev) or _r==_ev,f'got {_r}'\nprint('SELF_TEST_PASS')\n")
+    # A program that reads a named file has to be given that file. Feeding it
+    # stdin instead tests a contract the task never stated, and the verdict
+    # comes out backwards: a candidate that correctly reads input.txt finds no
+    # such file in the sandbox and FAILS, while one that reads stdin passes.
+    # Verification then selects for the shape that cannot work when the caller
+    # runs `python solve.py` with no stdin.
+    #
+    # Measured on the two AoC tasks whose input is a file: 9 of 12 candidates
+    # ATLAS wrote read stdin, against a prompt that says "reads input.txt",
+    # and both tasks sat at 7/26. The same model asked directly, with no
+    # pipeline, wrote input.txt readers and scored 12/12.
+    infile = _reads_input_file(code)
+    if infile:
+        return (
+            "import sys as _s,io as _o\n"
+            f"open({repr(infile)},'w').write({repr(inp)})\n"
+            "_c=_o.StringIO()\n_old=_s.stdout\n_s.stdout=_c\n"
+            f"_src={repr(code)}\n"
+            "try:\n    exec(compile(_src,'solution.py','exec'),globals())\n"
+            "finally:\n _s.stdout=_old\n"
+            f"assert _c.getvalue().strip()=={repr(exp)},f'got {{_c.getvalue().strip()}}'\n"
+            "print('SELF_TEST_PASS')\n")
     # exec the candidate from a string literal instead of splicing its lines
     # under `try:` — per-line indenting corrupts multiline string literals
     # inside the candidate. exec(..., globals()) keeps the namespace (and

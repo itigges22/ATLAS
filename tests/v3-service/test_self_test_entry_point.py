@@ -132,3 +132,71 @@ def test_a_function_taking_the_case_and_returning_qualifies():
 def test_reading_stdin_disqualifies_whatever_the_signature_says():
     assert not pipeline._entry_takes_case_input(
         "import sys\ndef solve(x):\n    return sys.stdin.read()\n", "solve")
+
+
+# --- a program that reads a file must be given that file -------------------
+#
+# The self-test had two shapes: call the entry function, or pipe the case
+# input to stdin. A task whose input is a file on disk fits neither, and it
+# got the stdin shape by default. That inverts the verdict: a candidate that
+# correctly reads input.txt finds no such file in the sandbox and FAILS, while
+# one that reads stdin PASSES. Verification selected for the shape that cannot
+# work when the caller runs `python solve.py` with no stdin.
+#
+# Measured on the two AoC tasks whose answer is computed from a file: 9 of 12
+# candidates ATLAS wrote read stdin, against a prompt that says "reads
+# input.txt", and both tasks sat at 7/26. The same model prompted directly,
+# with no pipeline at all, wrote input.txt readers and scored 12/12.
+
+FILE_READER = ("def main():\n"
+               "    with open('input.txt') as f:\n"
+               "        d = [int(x) for x in f]\n"
+               "    print(sum(1 for i in range(1, len(d)) if d[i] > d[i-1]))\n"
+               "main()\n")
+
+
+def test_a_named_input_file_is_detected():
+    assert pipeline._reads_input_file(FILE_READER) == "input.txt"
+
+
+def test_a_stdin_reader_names_no_file():
+    assert pipeline._reads_input_file(
+        "import sys\nprint(len(list(sys.stdin)))\n") is None
+
+
+def test_an_output_file_is_not_an_input():
+    assert pipeline._reads_input_file("open('out.txt','w').write('x')\n") is None
+    assert pipeline._reads_input_file(
+        "open('out.txt', mode='w').write('x')\n") is None
+
+
+def test_a_computed_path_is_left_alone():
+    """Guessing a path wrong is worse than the existing fallback."""
+    assert pipeline._reads_input_file(
+        "import sys\nopen(sys.argv[1]).read()\n") is None
+
+
+def test_the_case_input_is_written_to_that_file_not_stdin():
+    body = pipeline._make_self_test(FILE_READER, _case())
+    assert "open('input.txt','w')" in body, "the file the program reads must exist"
+    assert "_s.stdin=" not in body, "feeding stdin tests a contract the task never stated"
+
+
+def test_the_file_shape_actually_passes(tmp_path):
+    """End to end: the shape that was failing verification now passes it."""
+    import subprocess
+    import sys as _sys
+    tc = type("TC", (), {"input_str": "199\n200\n208", "expected_output": "2"})()
+    body = pipeline._make_self_test(FILE_READER, tc)
+    script = tmp_path / "t.py"
+    script.write_text(body)
+    run = subprocess.run([_sys.executable, "t.py"], cwd=tmp_path,
+                         capture_output=True, text=True)
+    assert "SELF_TEST_PASS" in run.stdout, run.stderr[:400]
+
+
+def test_the_stdin_shape_is_unchanged():
+    """Programs that really do read stdin must keep working."""
+    body = pipeline._make_self_test("import sys\nprint(len(list(sys.stdin)))\n",
+                                    _case())
+    assert "_s.stdin=" in body
