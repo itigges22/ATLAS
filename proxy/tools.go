@@ -947,10 +947,9 @@ func writeFileTool() *ToolDef {
 			}
 
 			// T1: Direct write — config, data, boilerplate
-			res, err := writeFileDirect(path, input.Content)
+			res, err := writeFileRecorded(path, input.Content, ctx)
 			if err == nil && res != nil && res.Success {
 				ctx.SessionWrites[input.Path] = true
-				ctx.RecordBodySeen(path)
 			}
 			return res, err
 		},
@@ -1086,6 +1085,23 @@ func isBinaryContent(data []byte) bool {
 		}
 	}
 	return false
+}
+
+// writeFileRecorded is writeFileDirect plus the body-seen record.
+//
+// Content the model authored is content it has seen, and that has to hold
+// whichever write path ran. Recording it only on the T1 direct write left
+// every V3-path write unmarked, so the evidence gate fired on files the
+// model had just created: measured on run 18, 11 of 12 gate firings were
+// solve.py or test_stats.py, each written through writeFileWithV3 moments
+// earlier. Wrapping the single function all four call sites funnel through
+// is what keeps a fifth from reintroducing it.
+func writeFileRecorded(path, content string, ctx *AgentContext) (*ToolResult, error) {
+	res, err := writeFileDirect(path, content)
+	if err == nil && res != nil && res.Success && ctx != nil {
+		ctx.RecordBodySeen(path)
+	}
+	return res, err
 }
 
 // writeFileDirect writes content to disk atomically (write tmp + rename).
@@ -1365,7 +1381,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 			msg = fmt.Sprintf("  \u2514\u2500 V3 exceeded %s cap, writing your version", v3CallTimeout())
 		}
 		ctx.Stream("text", map[string]string{"content": msg})
-		return writeFileDirect(path, baselineContent)
+		return writeFileRecorded(path, baselineContent, ctx)
 	}
 
 	// Write the winning candidate (or baseline if V3 didn't improve)
@@ -1468,7 +1484,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// score/phase/evidence don't attach to unverified content and the
 	// "V3 verified this edit" completion nudge (agent.go) doesn't fire.
 	if fellBack {
-		return writeFileDirect(path, baselineContent)
+		return writeFileRecorded(path, baselineContent, ctx)
 	}
 
 	// Stream V3 completion summary — after the gate, so a rejected write
@@ -1479,7 +1495,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		})
 	}
 
-	result, err := writeFileDirect(path, code)
+	result, err := writeFileRecorded(path, code, ctx)
 	if err != nil {
 		return nil, err
 	}

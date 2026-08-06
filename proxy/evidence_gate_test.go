@@ -161,3 +161,32 @@ func TestOutlineIsNotSoldAsACheaperRead(t *testing.T) {
 		t.Errorf("outline_file must state that it returns no code: %s", def.Description)
 	}
 }
+
+// Every write path has to record the body, not just the one I checked.
+//
+// The gate shipped recording only on the T1 direct write, so files written
+// through the V3 pipeline stayed unmarked and the gate fired on code the
+// model had authored moments earlier. Measured on run 18: 11 of 12 firings
+// were solve.py or test_stats.py, every one a V3-path write. This asserts
+// the funnel rather than the call sites, since the bug was a call site
+// nobody updated.
+func TestEveryWritePathRunsThroughTheRecorder(t *testing.T) {
+	src, err := os.ReadFile("tools.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, line := range strings.Split(string(src), "\n") {
+		if !strings.Contains(line, "writeFileDirect(") {
+			continue
+		}
+		// Its definition and the one call inside the recorder are the only
+		// legitimate mentions.
+		if strings.Contains(line, "func writeFileDirect") ||
+			strings.Contains(line, "res, err := writeFileDirect(path, content)") {
+			continue
+		}
+		t.Errorf("tools.go:%d calls writeFileDirect directly, so a write there "+
+			"never records the body and the evidence gate will fire on a file "+
+			"the model just wrote: %s", i+1, strings.TrimSpace(line))
+	}
+}
