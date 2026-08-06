@@ -155,7 +155,7 @@ In the default `strict` mode the proxy sends a full JSON schema — `oneOf` with
 | `find_file` | Regex search by file **name** / path (cheap existence + locate). Distinct from `search_files` which greps inside file contents. | Yes |
 | `search_files` | Regex search across file contents (max 200 matches, skips .git/node_modules) | Yes |
 | `list_directory` | List directory contents with type and size | Yes |
-| `run_command` | Execute shell command via sandbox container; 5 min timeout cap | No |
+| `run_command` | Execute shell command via sandbox container; 5 min timeout cap. A command the shell cannot parse at all returns why it could not run: when the cause is a program quoted inline after `-c`/`-e`, the rejection redirects to writing the snippet to a file, since a raw `syntax error near unexpected token` gives the model nothing to change and it re-sends the identical line | No |
 | `run_background` | Start a long-running process (e.g. `python app.py`) in the sandbox; returns a `job_id` immediately | No |
 | `tail_background` | Fetch new stdout/stderr from a backgrounded job by `job_id` | Yes |
 | `stop_background` | SIGTERM/SIGKILL a backgrounded job by `job_id` | No |

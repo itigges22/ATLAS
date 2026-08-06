@@ -514,6 +514,58 @@ func announcesImminentToolUse(text string) bool {
 	return false
 }
 
+// inlineProgramFlagRe matches an interpreter invoked with a program passed
+// inline on the command line rather than as a file.
+var inlineProgramFlagRe = regexp.MustCompile(`\b(python3?|node|perl|ruby)\s+-(c|e)\b`)
+
+// shellParseFailureSignatures are the messages bash emits when it cannot parse
+// the command at all, so nothing ran. Distinct from a command that ran and
+// failed: there is no output to reason about and no partial effect to undo.
+var shellParseFailureSignatures = []string{
+	"syntax error near unexpected token",
+	"unexpected EOF while looking for matching",
+	"syntax error: unexpected end of file",
+}
+
+// shellQuotingHint explains a command the shell could not parse, when the
+// cause is a program quoted inline after -c or -e.
+//
+// Measured across runs 14-16: run_command is the least reliable tool in the
+// harness at 86 failures in 156 calls, and 53 of those trace to this one
+// shape. Eight commands failed to parse and the model re-sent them 45 times.
+// The raw bash error names a token and a column, which says nothing the model
+// can act on, so it changed nothing and sent the identical line again. One
+// session did this twelve times before writing the code to a file instead,
+// which worked first try.
+//
+// Nesting is why the shape fails rather than any one typo: the outer shell
+// quotes, the quotes inside the program, and f-string braces all have to
+// agree. The observed commands were not merely mis-shell-quoted, they were
+// also invalid Python (`print(f'...{...}")` opens on a quote and closes on a
+// double quote), so no amount of re-quoting by the harness could rescue them.
+// The fix is to stop nesting: put the program in a file.
+func shellQuotingHint(command, errMsg string) string {
+	if command == "" || errMsg == "" {
+		return ""
+	}
+	parseFailed := false
+	for _, sig := range shellParseFailureSignatures {
+		if strings.Contains(errMsg, sig) {
+			parseFailed = true
+			break
+		}
+	}
+	if !parseFailed || !inlineProgramFlagRe.MatchString(command) {
+		return ""
+	}
+	return "\n\nThe shell could not parse this, so nothing ran and re-sending it " +
+		"unchanged fails identically. Quoting a program inline after -c is fragile: " +
+		"the shell's quotes, the quotes inside your code, and any braces all have to " +
+		"nest correctly. Write the snippet to a file with write_file (say check.py) " +
+		"and run it with `python3 check.py`. Then the quoting is only the language's " +
+		"problem, and whatever comes back is a real error in the code."
+}
+
 // fileCitationRe matches a filename as it appears in prose: `scoring.py`,
 // planning.py, src/app/main.go. The extension must start with a letter and run
 // 1-5 characters, so version strings ("V3.2") and decimals ("0.34") are not

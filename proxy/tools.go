@@ -3291,6 +3291,7 @@ func runCommandTool() *ToolDef {
 				}
 				errMsg = truncateStr(errMsg, 400)
 				errMsg += ownBackgroundJobHint(ctx, errMsg)
+				errMsg += shellQuotingHint(input.Command, errMsg)
 			}
 			return &ToolResult{
 				Success: out.ExitCode == 0,
