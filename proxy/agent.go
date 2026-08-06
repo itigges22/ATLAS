@@ -176,6 +176,13 @@ type runState struct {
 	// run_command failures are usually verification noise, not a
 	// genuinely stuck loop.
 	verifiedThisLoop bool
+	// verifiedByRedirect names the file a verification command piped into the
+	// program's stdin, when one did. verifiedStandalone records that some
+	// verification ran the program without a redirect. Both are needed: only
+	// a run that ONLY ever verified through a redirect has failed to check
+	// the artifact the way the caller will use it.
+	verifiedByRedirect  string
+	verifiedStandalone  bool
 	// Set when a verification command RAN AND FAILED and none has
 	// succeeded since. Observed session state, not a guess about the
 	// request: once a test has gone red in this loop, declaring done is
@@ -352,6 +359,13 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 		log.Printf("[agent] evidence gate: bouncing exit at turn %d — reply cites %v with no read (bounce %d/%d)",
 			s.turn, cited, s.gateBounces["evidence_gate"], maxGateBounces)
 		return "evidence_gate", unreadCitationMessage(cited)
+	}
+	// Verified only through a stdin redirect: the program was never run the
+	// way its caller will run it. See stdinRedirectSource for the measurement.
+	if s.verifiedByRedirect != "" && !s.verifiedStandalone && s.chargeBounce("contract_gate") {
+		log.Printf("[agent] contract gate: every verification piped %q into stdin (bounce %d/%d)",
+			s.verifiedByRedirect, s.gateBounces["contract_gate"], maxGateBounces)
+		return "contract_gate", redirectOnlyVerificationMessage(s.verifiedByRedirect)
 	}
 	if (s.userWantsVerification || s.sawFailedVerification) && !s.verifiedThisLoop && s.chargeBounce("verification_gate") {
 		log.Printf("[agent] verification gate: bouncing exit at turn %d (trigger=%s, no successful verification command this loop, bounce %d/%d)",
@@ -1495,6 +1509,14 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						st.verifiedThisLoop = true
 						ctx.VerifiedThisRun = true
 						st.sawFailedVerification = false
+						// A program run as `prog < data` is verified under a
+						// contract the caller may not use. Tracked so the exit
+						// can tell the two apart. See stdinRedirectSource.
+						if src := stdinRedirectSource(rc.Command); src != "" {
+							st.verifiedByRedirect = src
+						} else {
+							st.verifiedStandalone = true
+						}
 						log.Printf("[agent] verification recorded: turn=%d cmd=%q",
 							turn, truncateStr(rc.Command, 60))
 					} else {

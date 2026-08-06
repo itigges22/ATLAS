@@ -566,6 +566,50 @@ func shellQuotingHint(command, errMsg string) string {
 		"problem, and whatever comes back is a real error in the code."
 }
 
+// stdinRedirectRe matches a shell stdin redirect from a plain filename:
+// `python3 solve.py < input.txt`. Deliberately narrow — `<<` heredocs and
+// `<(...)` process substitution are not the shape this is about.
+var stdinRedirectRe = regexp.MustCompile(`[^<>]<\s*([A-Za-z0-9_./-]+)\s*$`)
+
+// stdinRedirectSource names the file a command pipes into a program's stdin,
+// or "" when it does not.
+//
+// A program run as `prog < data` is being verified under a contract the
+// caller may never use. Measured on the AoC tasks, whose prompt says the
+// program must read input.txt: 7 of 10 failures wrote a program that reads
+// stdin, ran it as `python3 solve.py < input.txt`, and got a successful
+// result — so the model had every reason to believe it was done. The checker
+// then ran `python solve.py` with no redirect and got 0. None of the sessions
+// that verified this way passed.
+//
+// The same model with no shell never does this: it writes code that opens the
+// file, because piping is not available to it. The tool is what makes the
+// wrong shape reachable, so the harness is what has to notice.
+func stdinRedirectSource(command string) string {
+	cmd := strings.TrimSpace(command)
+	if cmd == "" || strings.Contains(cmd, "<<") || strings.Contains(cmd, "<(") {
+		return ""
+	}
+	m := stdinRedirectRe.FindStringSubmatch(cmd)
+	if m == nil {
+		return ""
+	}
+	return m[1]
+}
+
+// redirectOnlyVerificationMessage tells the model to run the artifact the way
+// its caller will.
+func redirectOnlyVerificationMessage(source string) string {
+	return fmt.Sprintf(
+		"Every time you ran the program you piped a file into it: `< %s`. That "+
+			"verifies it as a filter reading stdin, which is not how it will be "+
+			"run. %s is sitting in the working directory, so run it standalone "+
+			"— `python3 <yourfile>` with no `<` — and make it open %s itself. "+
+			"If it prints nothing or 0 that way, it is reading stdin and needs "+
+			"to read the file instead.",
+		source, source, source)
+}
+
 // fileCitationRe matches a filename as it appears in prose: `scoring.py`,
 // planning.py, src/app/main.go. The extension must start with a letter and run
 // 1-5 characters, so version strings ("V3.2") and decimals ("0.34") are not
