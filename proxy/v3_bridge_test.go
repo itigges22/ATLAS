@@ -134,9 +134,14 @@ func TestV3StageToEventCoversPlanStages(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestV3CallTimeout(t *testing.T) {
-	t.Run("default is 180s", func(t *testing.T) {
+	// 300s, not 180s: PlanSearch spends two LLM calls per candidate, so k=3
+	// costs ~162s at the measured ~22s per call before the probe and
+	// self-test that precede it. At 180s, sessions spent a median 207s on
+	// generation alone and phase-3 repair was skipped 19 times with 7-9s
+	// left.
+	t.Run("default is 300s", func(t *testing.T) {
 		t.Setenv("ATLAS_V3_TIMEOUT", "")
-		if d := v3CallTimeout(); d != 180*time.Second {
+		if d := v3CallTimeout(); d != 300*time.Second {
 			t.Errorf("default = %v", d)
 		}
 	})
@@ -154,7 +159,7 @@ func TestV3CallTimeout(t *testing.T) {
 	})
 	t.Run("garbage falls back to default", func(t *testing.T) {
 		t.Setenv("ATLAS_V3_TIMEOUT", "soon")
-		if d := v3CallTimeout(); d != 180*time.Second {
+		if d := v3CallTimeout(); d != 300*time.Second {
 			t.Errorf("garbage value gave %v", d)
 		}
 	})

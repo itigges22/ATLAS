@@ -79,14 +79,14 @@ def _remaining_budget_ms(start: float) -> Optional[float]:
     """Remaining wall-clock (ms) in this run's ATLAS_V3_TIMEOUT budget.
 
     The proxy's V3 bridge abandons a live pipeline call after
-    ``ATLAS_V3_TIMEOUT`` seconds (default 180; 0 disables the cap).
+    ``ATLAS_V3_TIMEOUT`` seconds (default 300; 0 disables the cap).
     The service reads the same knob so late phases can skip work the
     bridge would abandon mid-flight anyway. Returns None when the cap
     is disabled.
     """
     raw = os.environ.get("ATLAS_V3_TIMEOUT", "").strip()
     try:
-        seconds = int(raw) if raw else 180
+        seconds = int(raw) if raw else 300
     except ValueError:
         seconds = 180
     if seconds <= 0:
