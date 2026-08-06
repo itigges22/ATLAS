@@ -984,6 +984,45 @@ var reSyntaxLineNo = regexp.MustCompile(`line (\d+)`)
 //   - a mid-content syntax bug → point at the offending line (quoted from
 //     `content` when the error carries a line number) and tell the model to
 //     FIX that line, explicitly forbidding an identical resend.
+// locateSyntaxLine resolves the 1-based line a syntax error points at, and
+// renders that line for quoting back. Returns (0, "") when the error carries
+// no location or the location is outside the content.
+//
+// The model cannot fix what it cannot see. Handing back its own broken line
+// is worth more than any guess at the cause: a session was told the likely
+// problem was nested quotes in an f-string when it had actually dropped
+// `self` from a method signature, and it re-sent the same signature four
+// times.
+func locateSyntaxLine(content, syntaxErr string) (int, string) {
+	m := reSyntaxLineNo.FindStringSubmatch(syntaxErr)
+	if m == nil {
+		return 0, ""
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil || n < 1 {
+		return 0, ""
+	}
+	lines := strings.Split(content, "\n")
+	if n > len(lines) {
+		return 0, ""
+	}
+	return n, fmt.Sprintf(" The offending line %d is:\n%s\n",
+		n, strings.TrimRight(lines[n-1], " \t"))
+}
+
+// lastContentLine is the 1-based index of the last non-blank line, which is
+// where a genuinely truncated write stops. Trailing newlines would otherwise
+// make every file look like it ends several lines after its real content.
+func lastContentLine(content string) int {
+	lines := strings.Split(content, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) != "" {
+			return i + 1
+		}
+	}
+	return 0
+}
+
 func fallbackSyntaxRejection(path, content, syntaxErr string) string {
 	// An embedded-script finding arrives pre-formatted (it already names the
 	// line and the fix); the truncation/syntax-bug fork below is about the
@@ -996,21 +1035,26 @@ func fallbackSyntaxRejection(path, content, syntaxErr string) string {
 		strings.Contains(low, "was never closed") ||
 		strings.Contains(low, "unterminated") ||
 		strings.Contains(low, "expected an indented block")
-	if truncationShape {
+
+	// Locate the offending line before choosing the advice: it decides which
+	// advice is even true, and it is the one concrete thing to hand back
+	// either way. The syntax check now carries "(line N)" for Python, so this
+	// resolves where it used to come up empty.
+	lineNo, quoted := locateSyntaxLine(content, syntaxErr)
+
+	// These error shapes are ambiguous. An unclosed brace on line 44 of a
+	// 60-line file is a real bug; the same message on the LAST line means the
+	// content really was cut off. Telling the model it was truncated when it
+	// was not sends it to resend the identical file, which is precisely what
+	// it did: three write_file calls, then the same call byte for byte until
+	// the repetition breaker ended the session. Only claim truncation when
+	// the failure is at the end, where truncation would put it.
+	if truncationShape && (lineNo == 0 || lineNo >= lastContentLine(content)-1) {
 		return fmt.Sprintf(
 			"Your content for %s does not parse (%s) — this looks like a "+
-				"truncated tool call (content cut off mid-way). Retry write_file "+
+				"truncated tool call (content cut off mid-way).%s Retry write_file "+
 				"with the COMPLETE file content; if it is long, write it in full, "+
-				"not in fragments.", path, truncateStr(syntaxErr, 200))
-	}
-	// Genuine syntax bug: quote the offending line if we can locate it.
-	quoted := ""
-	if m := reSyntaxLineNo.FindStringSubmatch(syntaxErr); m != nil {
-		if n, err := strconv.Atoi(m[1]); err == nil && n >= 1 {
-			if lines := strings.Split(content, "\n"); n <= len(lines) {
-				quoted = fmt.Sprintf(" The offending line %d is:\n%s\n", n, strings.TrimRight(lines[n-1], " \t"))
-			}
-		}
+				"not in fragments.", path, truncateStr(syntaxErr, 200), quoted)
 	}
 	// An f-string error is almost always quote nesting, and the model is not
 	// wrong so much as too new: `f"{d["k"]}"` is valid from Python 3.12
