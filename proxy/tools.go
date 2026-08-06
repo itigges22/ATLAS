@@ -859,7 +859,7 @@ func writeFileTool() *ToolDef {
 					if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
 						log.Printf("[write_file] new file %s does not parse — writing with a warning, skipping V3 (%s)",
 							logPath(input.Path), truncateStr(synErr, 80))
-						return writeNewFileWithWarning(path, input.Content, synErr, ctx)
+						return writeNewFileWithWarning(path, input.Path, input.Content, synErr, ctx)
 					}
 					log.Printf("[write_file] %s does not parse — rejecting before V3 (%s)",
 						logPath(input.Path), truncateStr(synErr, 80))
@@ -948,7 +948,7 @@ func writeFileTool() *ToolDef {
 				if synErr, ok := checkFallbackSyntax(ctx, input.Path, input.Content); !ok {
 					log.Printf("[write_file] new file %s does not parse — writing with a warning (%s)",
 						logPath(input.Path), truncateStr(synErr, 80))
-					return writeNewFileWithWarning(path, input.Content, synErr, ctx)
+					return writeNewFileWithWarning(path, input.Path, input.Content, synErr, ctx)
 				}
 			}
 
@@ -1134,12 +1134,20 @@ func readFileTruncationNotice(shown, totalLines, totalBytes int) string {
 // resent byte-identical content, and the repetition breaker ended the
 // session: three AoC sessions and a novel-arm session all died as
 // "solve.py was never created" — code on hand, nothing on disk.
-func writeNewFileWithWarning(path, content, synErr string, ctx *AgentContext) (*ToolResult, error) {
+func writeNewFileWithWarning(path, inputPath, content, synErr string, ctx *AgentContext) (*ToolResult, error) {
 	res, err := writeFileRecorded(path, content, ctx)
 	if err != nil || res == nil || !res.Success {
 		return res, err
 	}
-	ctx.SessionWrites[path] = true
+	// Keyed on the INPUT path: every SessionWrites reader and writer uses the
+	// path as the model sent it (input.Path / wfInput.Path). This helper
+	// briefly keyed on the resolved path, so the session-owned carveout
+	// missed and the model's own CORRECTION of a warned write was rejected
+	// as an overwrite of an unread existing file — fail-forward landed the
+	// broken file and then forbade fixing it. Measured: every early novel-arm
+	// session hit "rejecting write_file over unread existing solve.py"
+	// immediately after a warned write.
+	ctx.SessionWrites[inputPath] = true
 	out := WriteFileOutput{
 		BytesWritten: len(content),
 		Warning: fmt.Sprintf(

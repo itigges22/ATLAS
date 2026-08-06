@@ -22,7 +22,7 @@ func TestBrokenContentToANewFileLandsWithAWarning(t *testing.T) {
 	root := t.TempDir()
 	ctx := &AgentContext{WorkingDir: root, SessionWrites: map[string]bool{}, BodySeen: map[string]bool{}}
 	path := filepath.Join(root, "solve.py")
-	res, err := writeNewFileWithWarning(path, "def f(:\n", "SyntaxError: invalid syntax (line 1)", ctx)
+	res, err := writeNewFileWithWarning(path, "solve.py", "def f(:\n", "SyntaxError: invalid syntax (line 1)", ctx)
 	if err != nil || res == nil || !res.Success {
 		t.Fatalf("the write must land: res=%+v err=%v", res, err)
 	}
@@ -38,7 +38,9 @@ func TestBrokenContentToANewFileLandsWithAWarning(t *testing.T) {
 			t.Errorf("warning should say %q: %s", want, out.Warning)
 		}
 	}
-	if !ctx.SessionWrites[path] {
+	// The carveout that lets the model fix its own file reads SessionWrites
+	// by the path AS THE MODEL SENT IT, not the resolved one.
+	if !ctx.SessionWrites["solve.py"] {
 		t.Error("a landed write is the agent's own file and must be iterable")
 	}
 }
