@@ -980,11 +980,33 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
         fpath.write_text(code)
         result = _run_cmd(["python3", "-m", "py_compile", str(fpath)], timeout=5, cwd=workspace)
         if result["returncode"] != 0:
-            # Extract just the error line from py_compile output
+            # py_compile reports the location and the error on separate lines:
+            #
+            #   File "/w/check.py", line 5
+            #     def __init__(,filename="todos.json"):
+            #                  ^
+            #   SyntaxError: invalid syntax
+            #
+            # Keeping only the SyntaxError line drops the one fact that makes
+            # the error actionable. The caller quotes the offending source line
+            # back to the model, but it locates that line by finding "line N"
+            # in this string, so discarding the File frame left it with nothing
+            # to match and the model got a generic guess instead of its own
+            # broken line. Measured: a model dropped `self` from a method
+            # signature, was told the likely cause was nested quotes in an
+            # f-string, and re-sent the same signature four times.
             stderr = result.get("stderr", "")
+            lineno = None
             for line in stderr.splitlines():
                 line = line.strip()
+                if line.startswith('File "'):
+                    match = re.search(r"line (\d+)", line)
+                    if match:
+                        lineno = match.group(1)
+                    continue
                 if line and any(kind in line for kind in ("SyntaxError", "IndentationError", "TabError")):
+                    if lineno and "line " not in line:
+                        line = f"{line} (line {lineno})"
                     errors.append(line)
             if not errors and stderr.strip():
                 errors.append(stderr.strip().split("\n")[-1])
