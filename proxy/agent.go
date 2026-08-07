@@ -191,6 +191,13 @@ type runState struct {
 	// verify-then-modify, warned-write and stale-evidence holes (third-party
 	// audit finding: evidence must be a contract tied to the final artifact).
 	verifiedHashes map[string]string
+	// pendingWarnedRun holds paths whose LAST landed write carried a parse
+	// warning and has not been executed since. A warned landing is pending
+	// work, not advice: measured, a session wrote six times without a single
+	// run, ignoring "Run it now" in four consecutive warnings, then died on
+	// edit repeats. Further writes to such a path bounce until any
+	// verification command runs.
+	pendingWarnedRun map[string]bool
 	// Set when a verification command RAN AND FAILED and none has
 	// succeeded since. Observed session state, not a guess about the
 	// request: once a test has gone red in this loop, declaring done is
@@ -1096,6 +1103,14 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			if parsed.Name == "write_file" {
 				var wfInput WriteFileInput
 				if json.Unmarshal(parsed.Args, &wfInput) == nil {
+					if st.pendingWarnedRun[wfInput.Path] && st.chargeBounce("run_first_gate") {
+						log.Printf("[agent] run-first gate: %s has a warned, unexecuted version on disk (bounce %d/%d)",
+							wfInput.Path, st.gateBounces["run_first_gate"], maxGateBounces)
+						st.bounceToolCall(ctx, "write_file", fmt.Sprintf(
+							"The version of %s you wrote is on disk with a parse warning and has never been run. Run it first — `python3 %s` — and read the real error before writing again. Rewriting blind is how the last four attempts went nowhere.",
+							wfInput.Path, wfInput.Path))
+						continue
+					}
 					existingPath := resolveAgentPath(ctx, wfInput.Path)
 					if existing, err := os.ReadFile(existingPath); err == nil {
 						existingLines := strings.Count(string(existing), "\n") + 1
@@ -1513,6 +1528,24 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// insert_after and replace_lines were absent, so a turn whose only
 			// work was a successful insert did not count as productive and the
 			// action gate could bounce it for having "done nothing".
+			// A landed write whose result carries a parse warning is pending
+			// execution; a landed clean write clears its own pending mark.
+			if result.Success && parsed.Name == "write_file" {
+				var wf WriteFileInput
+				if json.Unmarshal(parsed.Args, &wf) == nil {
+					var out WriteFileOutput
+					warned := json.Unmarshal(result.Data, &out) == nil && out.Warning != ""
+					if st.pendingWarnedRun == nil {
+						st.pendingWarnedRun = map[string]bool{}
+					}
+					st.pendingWarnedRun[wf.Path] = warned
+				}
+			}
+			if parsed.Name == "run_command" && result != nil {
+				// Any execution discharges the pending marks: the model has
+				// seen real behaviour, whatever it was.
+				st.pendingWarnedRun = nil
+			}
 			if result.Success && (parsed.Name == "write_file" || parsed.Name == "edit_file" ||
 				parsed.Name == "structural_edit" || parsed.Name == "delete_file" ||
 				parsed.Name == "insert_after" || parsed.Name == "replace_lines") {
@@ -1549,7 +1582,14 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						// printed nothing and exited 0 — the session recorded
 						// that as verification and reported success on a
 						// program that provably produced no answer.
-						log.Printf("[agent] run exited 0 with no stdout on a print-demanding task — not counting as verification: %q",
+						// Latch, don't just decline: a silent run IS a failed
+						// verification of a print-demanding task. Merely not
+						// counting it left done free to pass when nothing
+						// else demanded verification — measured: the gate
+						// fired three times in one night and three silent
+						// finals still shipped.
+						st.sawFailedVerification = true
+						log.Printf("[agent] run exited 0 with no stdout on a print-demanding task — latching the verification gate: %q",
 							truncateStr(rc.Command, 60))
 					} else if result.Success {
 						st.verifiedThisLoop = true
