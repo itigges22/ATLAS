@@ -17,6 +17,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -565,6 +567,50 @@ func shellQuotingHint(command, errMsg string) string {
 		"nest correctly. Write the snippet to a file with write_file (say check.py) " +
 		"and run it with `python3 check.py`. Then the quoting is only the language's " +
 		"problem, and whatever comes back is a real error in the code."
+}
+
+// sessionWriteHashes snapshots the sha256 of every file this session wrote,
+// keyed by the path as the model sent it. Taken at the moment a verifying
+// run succeeds, it records WHICH bytes that run vouched for.
+func sessionWriteHashes(ctx *AgentContext) map[string]string {
+	if ctx == nil || len(ctx.SessionWrites) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(ctx.SessionWrites))
+	for p := range ctx.SessionWrites {
+		data, err := os.ReadFile(resolveAgentPath(ctx, p))
+		if err != nil {
+			continue
+		}
+		sum := sha256.Sum256(data)
+		out[p] = hex.EncodeToString(sum[:])
+	}
+	return out
+}
+
+// driftedSinceVerification names the first session-written file whose bytes
+// no longer match the verified snapshot, or "" when everything still does.
+// A file written AFTER the snapshot (absent from it) is drift by definition:
+// it has never been executed.
+func driftedSinceVerification(ctx *AgentContext, verified map[string]string) string {
+	if ctx == nil {
+		return ""
+	}
+	for p := range ctx.SessionWrites {
+		want, seen := verified[p]
+		if !seen {
+			return p
+		}
+		data, err := os.ReadFile(resolveAgentPath(ctx, p))
+		if err != nil {
+			return p
+		}
+		sum := sha256.Sum256(data)
+		if hex.EncodeToString(sum[:]) != want {
+			return p
+		}
+	}
+	return ""
 }
 
 // silentRunWhenOutputPromised reports a verification run that exited 0 while

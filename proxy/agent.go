@@ -183,6 +183,14 @@ type runState struct {
 	// the artifact the way the caller will use it.
 	verifiedByRedirect  string
 	verifiedStandalone  bool
+	// verifiedHashes binds the verification to the BYTES it verified: the
+	// sha256 of every session-written file, snapshotted when a verifying run
+	// succeeds. The exit re-hashes; any drift means the final artifact is not
+	// the one that was checked. Session-level booleans cannot express that —
+	// they verify a moment, not an artifact — which is the shared root of the
+	// verify-then-modify, warned-write and stale-evidence holes (third-party
+	// audit finding: evidence must be a contract tied to the final artifact).
+	verifiedHashes map[string]string
 	// Set when a verification command RAN AND FAILED and none has
 	// succeeded since. Observed session state, not a guess about the
 	// request: once a test has gone red in this loop, declaring done is
@@ -366,6 +374,19 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 		log.Printf("[agent] contract gate: every verification piped %q into stdin (bounce %d/%d)",
 			s.verifiedByRedirect, s.gateBounces["contract_gate"], maxGateBounces)
 		return "contract_gate", redirectOnlyVerificationMessage(s.verifiedByRedirect)
+	}
+	// Verification is of bytes, not of a moment. If any file this session
+	// wrote no longer matches the hash snapshotted when the verifying run
+	// succeeded, the final artifact is unverified whatever the booleans say.
+	if s.verifiedThisLoop {
+		if changed := driftedSinceVerification(ctx, s.verifiedHashes); changed != "" && s.chargeBounce("artifact_gate") {
+			log.Printf("[agent] artifact gate: %s changed after the run that verified it (bounce %d/%d)",
+				changed, s.gateBounces["artifact_gate"], maxGateBounces)
+			s.verifiedThisLoop = false
+			s.verifiedStandalone = false
+			return "artifact_gate", fmt.Sprintf(
+				"`%s` changed after the run that verified it, so what is on disk now has never been executed. Run it again and confirm the output before finishing.", changed)
+		}
 	}
 	if (s.userWantsVerification || s.sawFailedVerification) && !s.verifiedThisLoop && s.chargeBounce("verification_gate") {
 		log.Printf("[agent] verification gate: bouncing exit at turn %d (trigger=%s, no successful verification command this loop, bounce %d/%d)",
@@ -1534,6 +1555,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						st.verifiedThisLoop = true
 						ctx.VerifiedThisRun = true
 						st.sawFailedVerification = false
+						st.verifiedHashes = sessionWriteHashes(ctx)
 						// A program run as `prog < data` is verified under a
 						// contract the caller may not use. Tracked so the exit
 						// can tell the two apart. See stdinRedirectSource.

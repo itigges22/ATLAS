@@ -112,3 +112,40 @@ func TestAWorkingFileIsStillProtectedFromBrokenContent(t *testing.T) {
 		t.Errorf("the healthy file must survive, got %q", got)
 	}
 }
+
+// Verification is of bytes, not of a moment. The session-level booleans could
+// say "verified" while the file on disk was a later, never-executed rewrite —
+// the shared root of the verify-then-modify and warned-write holes (audit
+// finding: evidence must be a contract tied to the final artifact).
+func TestDriftAfterVerificationIsNamed(t *testing.T) {
+	dir := t.TempDir()
+	ctx := &AgentContext{WorkingDir: dir, SessionWrites: map[string]bool{"solve.py": true}}
+	if err := os.WriteFile(filepath.Join(dir, "solve.py"), []byte("print(1)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snap := sessionWriteHashes(ctx)
+	if len(snap) != 1 {
+		t.Fatalf("snapshot should cover the written file: %v", snap)
+	}
+	if got := driftedSinceVerification(ctx, snap); got != "" {
+		t.Fatalf("unchanged bytes are not drift: %q", got)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "solve.py"), []byte("print(2)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := driftedSinceVerification(ctx, snap); got != "solve.py" {
+		t.Fatalf("rewritten bytes must be drift, got %q", got)
+	}
+}
+
+func TestAFileWrittenAfterTheSnapshotIsDrift(t *testing.T) {
+	dir := t.TempDir()
+	ctx := &AgentContext{WorkingDir: dir, SessionWrites: map[string]bool{"solve.py": true}}
+	if err := os.WriteFile(filepath.Join(dir, "solve.py"), []byte("print(1)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Verified before this file was ever written: absent from the snapshot.
+	if got := driftedSinceVerification(ctx, map[string]string{}); got != "solve.py" {
+		t.Fatalf("a never-verified artifact is drift by definition, got %q", got)
+	}
+}
