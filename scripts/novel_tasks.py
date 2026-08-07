@@ -475,7 +475,8 @@ def build_tasks(count: int = 50, seed: int = 20260806) -> List[NovelTask]:
             f"input.txt holds one record per line. {FORMATS[fam]} "
             f"{_statement(solve)} "
             f"Write solve.py that reads input.txt and prints the answer on a "
-            f"single line. Then run it and confirm the answer."
+            f"single line, fields separated by single spaces. Then run it and "
+            f"confirm the answer."
         )
         out.append(NovelTask(
             name=f"{fam}{variant + 1}", family=fam, prompt=prompt,

@@ -63,6 +63,17 @@ def _extract(reply: str) -> str:
     return (max(blocks, key=len).strip() + "\n") if blocks else reply.strip() + "\n"
 
 
+def _answer_tokens(text: str):
+    """Answer content, format-blind: split on whitespace and commas.
+
+    The statements originally specified input formats and not the output
+    separator, so "42, 242" was a defensible reading that the exact-match
+    checker failed. Measured: the ATLAS arm lost multiple walk sessions to a
+    comma the statement never forbade, while the bare arm happened to prefer
+    spaces. Both arms are scored on computed content."""
+    return [t for t in text.replace(",", " ").split() if t]
+
+
 def _run_against(work: Path, data: str, timeout=60):
     """Run solve.py with `data` as input.txt. Returns (ok, output_or_reason)."""
     (work / "input.txt").write_text(data)
@@ -81,13 +92,13 @@ def _check(work: Path, task) -> tuple:
     ok, got = _run_against(work, task.input_text)
     if not ok:
         return False, got
-    if got != task.expected:
+    if _answer_tokens(got) != _answer_tokens(task.expected):
         return False, f"got {got!r}, want {task.expected!r}"
     # Same program, an input it never saw. A hardcoded answer dies here.
     ok2, got2 = _run_against(work, task.holdout_text)
     if not ok2:
         return False, f"correct on its own input but broke on the holdout: {got2}"
-    if got2 != task.holdout_expected:
+    if _answer_tokens(got2) != _answer_tokens(task.holdout_expected):
         return False, (f"holdout mismatch: got {got2!r}, want "
                        f"{task.holdout_expected!r} — answer looks hardcoded")
     return True, f"{got} correct, and correct on the holdout"

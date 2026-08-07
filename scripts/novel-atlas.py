@@ -24,6 +24,17 @@ sys.path.insert(0, str(REPO / "scripts"))
 from novel_tasks import build_tasks  # noqa: E402
 
 
+def _answer_tokens(text: str):
+    """Answer content, format-blind: split on whitespace and commas.
+
+    The statements originally specified input formats and not the output
+    separator, so "42, 242" was a defensible reading that the exact-match
+    checker failed. Measured: the ATLAS arm lost multiple walk sessions to a
+    comma the statement never forbade, while the bare arm happened to prefer
+    spaces. Both arms are scored on computed content."""
+    return [t for t in text.replace(",", " ").split() if t]
+
+
 def _load_e2e():
     spec = importlib.util.spec_from_file_location(
         "e2e_suite", REPO / "scripts" / "e2e-reliability.py")
@@ -78,11 +89,11 @@ def main() -> int:
                 ok, got = run(nt.input_text)
                 if not ok:
                     return False, got
-                if got != nt.expected:
+                if _answer_tokens(got) != _answer_tokens(nt.expected):
                     return False, f"got {got!r}, want {nt.expected!r}"
                 ok2, got2 = run(nt.holdout_text)
                 (ws / "input.txt").write_text(nt.input_text)
-                if not ok2 or got2 != nt.holdout_expected:
+                if not ok2 or _answer_tokens(got2) != _answer_tokens(nt.holdout_expected):
                     return False, (f"holdout mismatch: got {got2!r}, want "
                                    f"{nt.holdout_expected!r}")
                 return True, f"{got} correct, and correct on the holdout"
