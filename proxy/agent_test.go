@@ -2414,3 +2414,33 @@ func TestACutTextAnswerIsSalvagedRatherThanDiscarded(t *testing.T) {
 		t.Error("mistook a truncated tool call for a text answer")
 	}
 }
+
+// Code inside a tool_call stream is legitimately self-similar — a grid
+// walker's four elif-direction branches repeat a 48-char window 4 times in a
+// perfectly healthy file. With one threshold for everything, the detector
+// cut healthy write_file drafts at the same structural spot every session:
+// measured across one 50-task run, 17 cuts, 10 truncating write_file code,
+// and the two most self-similar families (walk, debounce) went 0/5 each.
+// A real spiral runs to max_tokens — hundreds of repeats — so demanding 10
+// inside tool calls keeps the guard without shooting healthy code.
+func TestBranchShapedCodeIsNotALoop(t *testing.T) {
+	branch := "\\n    elif direction == '%s':\\n        y = (y + 1) %% 20"
+	code := `{"type":"tool_call","name":"write_file","args":{"path":"solve.py","content":"`
+	for _, d := range []string{"N", "S", "E", "W"} {
+		code += fmt.Sprintf(branch, d)
+	}
+	code += `"}}`
+	if n := loopingTailCount(code); n >= toolCallLoopThreshold {
+		t.Fatalf("4 branch repeats must stay under the tool-call threshold, count=%d", n)
+	}
+}
+
+func TestASpiralInsideAToolCallStillCuts(t *testing.T) {
+	code := `{"type":"tool_call","name":"write_file","args":{"content":"`
+	for i := 0; i < 40; i++ {
+		code += "# I'll just print the answer. Wait, I can't see it.\\n"
+	}
+	if n := loopingTailCount(code); n < toolCallLoopThreshold {
+		t.Fatalf("a 40x repeat is a spiral at any threshold, count=%d", n)
+	}
+}

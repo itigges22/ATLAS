@@ -2773,7 +2773,14 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 			// to keep it O(n) overall.
 			if !contentLoopCut && contentBuf.Len() > 600 && contentBuf.Len()-lastLoopCheck > 200 {
 				lastLoopCheck = contentBuf.Len()
-				if isLoopingTail(contentBuf.String()) {
+				buffered := contentBuf.String()
+				threshold := 3
+				if strings.Contains(buffered, `"tool_call"`) {
+					// Code in tool args is legitimately self-similar; only
+					// spiral-grade repetition is degeneration there.
+					threshold = toolCallLoopThreshold
+				}
+				if loopingTailCount(buffered) >= threshold {
 					contentLoopCut = true
 				}
 			}
@@ -3103,16 +3110,39 @@ func conversationTokenBudget() int {
 // say X. Wait, I can't see..."). Takes a chunk from the tail and counts its
 // occurrences; 3+ verbatim repeats is a loop a real response never produces.
 func isLoopingTail(s string) bool {
+	return loopingTailCount(s) >= 3
+}
+
+// loopingTailCount is how many times the stream's 48-char tail appears in
+// the whole buffer. The threshold belongs to the CALLER because it depends
+// on what is streaming. Prose degeneration ("...I'll just say X. Wait, I
+// can't...") repeats until max_tokens, so 3 occurrences is already strong
+// evidence. CODE is legitimately self-similar: a grid walker's four
+// elif-direction branches, a debouncer's run_ bookkeeping lines — 48-char
+// windows repeat 3-4 times in perfectly healthy files. With the threshold
+// at 3 for everything, the detector cut healthy write_file drafts at the
+// same structural spot every time: measured across one 50-task run, 17
+// cuts, 10 of them truncating write_file code, and the two families whose
+// code is most self-similar (walk, debounce) went 0/5 each — the cut
+// stump landed, the model patched the cut line instead of rewriting, and
+// the patch drifted (a comma in the print, spaces lost from a join).
+func loopingTailCount(s string) int {
 	const probe = 48
 	if len(s) < probe*3 {
-		return false
+		return 0
 	}
 	tail := s[len(s)-probe:]
 	if strings.TrimSpace(tail) == "" {
-		return false
+		return 0
 	}
-	return strings.Count(s, tail) >= 3
+	return strings.Count(s, tail)
 }
+
+// toolCallLoopThreshold is the repeat count that counts as degeneration
+// inside a tool_call stream. A real spiral runs to max_tokens — hundreds
+// of repeats — so demanding 10 keeps the guard while making 3-4 branch-
+// shaped repeats of healthy code invisible to it.
+const toolCallLoopThreshold = 10
 
 // agentMaxTokens is the per-turn generation ceiling (ATLAS_MAX_TOKENS,
 // default 8192). Shared by the LLM request and conversationTokenBudget so the

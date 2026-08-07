@@ -45,6 +45,8 @@ def main() -> int:
     ap.add_argument("--start", type=int, default=0,
                     help="skip the first N tasks (resume support)")
     ap.add_argument("--json", dest="json_out", default="")
+    ap.add_argument("--save-events", default="",
+                    help="directory for per-session event dumps")
     args = ap.parse_args()
 
     import os
@@ -99,6 +101,12 @@ def main() -> int:
         t0 = time.time()
         session = e2e.run_session(task, 1, url, workspace, args.subdir,
                                   args.timeout)
+        if args.save_events:
+            evdir = Path(args.save_events)
+            evdir.mkdir(parents=True, exist_ok=True)
+            with open(evdir / f"{nt.name}.jsonl", "w") as fh:
+                for ev in getattr(session, "events", []):
+                    fh.write(json.dumps(ev) + "\n")
         ok, detail = task.check(workspace)
         results.append({
             "task": nt.name, "family": nt.family, "passed": ok,
