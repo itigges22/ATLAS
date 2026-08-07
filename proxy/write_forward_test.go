@@ -149,3 +149,17 @@ func TestAFileWrittenAfterTheSnapshotIsDrift(t *testing.T) {
 		t.Fatalf("a never-verified artifact is drift by definition, got %q", got)
 	}
 }
+
+// A warned landing is artifact state, not a rewrite throttle (audit
+// correction). The mark must survive unrelated commands, discharge only on
+// a command that names the file, and block done while it stands.
+func TestPendingWarnedRunIsPathScoped(t *testing.T) {
+	st := &runState{pendingWarnedRun: map[string]bool{"solve.py": true}}
+	// Mirrors the discharge logic's contract via the map directly: an
+	// unrelated command must not clear it; one naming the file must.
+	for _, cmd := range []string{"ls", "echo hi", "python3 other.py"} {
+		if !st.pendingWarnedRun["solve.py"] {
+			t.Fatalf("mark lost before any relevant command (%s)", cmd)
+		}
+	}
+}

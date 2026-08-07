@@ -399,13 +399,23 @@ def _make_output_probe(code: str, tc, task_input_file: str = "") -> str:
     setup = ((f"_s.stdin=_o.StringIO('')\n"
               f"open({repr(infile)},'w').write({repr(inp)})\n") if infile
              else f"_s.stdin=_o.StringIO({repr(inp)})\n")
+    # The marker is emitted ONLY on clean completion, and only for non-empty
+    # output. Swallowing exceptions and printing the marker regardless let two
+    # CRASHING candidates agree: repr('') is the two-character string "''",
+    # which is truthy, so their empty outputs clustered and crash consensus
+    # won (third-party audit reproduction: two ordinary-exception candidates,
+    # WINNERS [0, 1]). A crash now prints a CRASH line the clustering
+    # explicitly refuses, and silence emits nothing.
     return ("import sys as _s,io as _o\n" + setup
             + "_c=_o.StringIO()\n_old=_s.stdout\n_s.stdout=_c\n"
             + f"_src={repr(code)}\n"
+            + "_crashed=False\n"
             + "try:\n    exec(compile(_src,'solution.py','exec'),globals())\n"
-            + "except Exception:\n    pass\n"
+            + "except BaseException:\n    _crashed=True\n"
             + "finally:\n _s.stdout=_old\n"
-            + f"print({repr(_CONSENSUS_MARK)}+repr(_c.getvalue().strip()))\n")
+            + "_out=_c.getvalue().strip()\n"
+            + f"if _crashed:\n    print({repr(_CONSENSUS_MARK)}+'CRASH')\n"
+            + f"elif _out:\n    print({repr(_CONSENSUS_MARK)}+repr(_out))\n")
 
 
 def _consensus_winners(candidates, test_cases, sandbox, emit,
@@ -431,6 +441,9 @@ def _consensus_winners(candidates, test_cases, sandbox, emit,
             marker = ""
             if ok and _CONSENSUS_MARK in (out or ""):
                 marker = out.split(_CONSENSUS_MARK)[-1].strip()
+            if marker == "CRASH" or marker == "''":
+                # A crash or empty output is not an answer to agree on.
+                marker = ""
             outs.append(marker)
         if any(outs):
             sigs.setdefault(tuple(outs), []).append(c)

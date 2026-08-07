@@ -375,6 +375,20 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 			s.turn, cited, s.gateBounces["evidence_gate"], maxGateBounces)
 		return "evidence_gate", unreadCitationMessage(cited)
 	}
+	// A warned, never-executed artifact is not a deliverable. Without this a
+	// session whose prompt carried no verification wording could end with a
+	// file that never parsed and was never run, reported as success (audit
+	// finding: warned state must be a terminal integrity condition, not a
+	// rewrite throttle).
+	for p := range s.pendingWarnedRun {
+		if s.chargeBounce("run_first_gate") {
+			log.Printf("[agent] run-first gate at exit: %s warned and never executed (bounce %d/%d)",
+				p, s.gateBounces["run_first_gate"], maxGateBounces)
+			return "run_first_gate", fmt.Sprintf(
+				"`%s` is on disk with a parse warning and has never been run. Run it, read the result, and fix it before finishing — as written it cannot work.", p)
+		}
+		break
+	}
 	// Verified only through a stdin redirect: the program was never run the
 	// way its caller will run it. See stdinRedirectSource for the measurement.
 	if s.verifiedByRedirect != "" && !s.verifiedStandalone && s.chargeBounce("contract_gate") {
@@ -1100,6 +1114,21 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// because there's no edit-vs-rewrite distinction at that
 			// size — anything below that is faster to overwrite than
 			// to surgically edit.
+			if parsed.Name == "edit_file" || parsed.Name == "structural_edit" ||
+				parsed.Name == "insert_after" || parsed.Name == "replace_lines" {
+				var ed struct {
+					Path string `json:"path"`
+				}
+				if json.Unmarshal(parsed.Args, &ed) == nil && st.pendingWarnedRun[ed.Path] &&
+					st.chargeBounce("run_first_gate") {
+					log.Printf("[agent] run-first gate (%s): %s has a warned, unexecuted version on disk (bounce %d/%d)",
+						parsed.Name, ed.Path, st.gateBounces["run_first_gate"], maxGateBounces)
+					st.bounceToolCall(ctx, parsed.Name, fmt.Sprintf(
+						"The version of %s on disk carries a parse warning and has never been run. Run it first — `python3 %s` — and read the real error before editing further.",
+						ed.Path, ed.Path))
+					continue
+				}
+			}
 			if parsed.Name == "write_file" {
 				var wfInput WriteFileInput
 				if json.Unmarshal(parsed.Args, &wfInput) == nil {
@@ -1542,9 +1571,20 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				}
 			}
 			if parsed.Name == "run_command" && result != nil {
-				// Any execution discharges the pending marks: the model has
-				// seen real behaviour, whatever it was.
-				st.pendingWarnedRun = nil
+				// Discharge only the marks this command plausibly exercised.
+				// Clearing on ANY command let `ls` or an unrelated script
+				// bless a warned file sight unseen (audit finding): the mark
+				// survives recon and unrelated runs, and clears when the
+				// command names the file or its basename.
+				var rc RunCommandInput
+				if json.Unmarshal(parsed.Args, &rc) == nil {
+					for p := range st.pendingWarnedRun {
+						if strings.Contains(rc.Command, p) ||
+							strings.Contains(rc.Command, filepath.Base(p)) {
+							delete(st.pendingWarnedRun, p)
+						}
+					}
+				}
 			}
 			if result.Success && (parsed.Name == "write_file" || parsed.Name == "edit_file" ||
 				parsed.Name == "structural_edit" || parsed.Name == "delete_file" ||
