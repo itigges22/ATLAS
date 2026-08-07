@@ -75,3 +75,16 @@ func TestASilentRunIsNotVerificationWhenOutputWasPromised(t *testing.T) {
 		t.Error("build steps legitimately print nothing")
 	}
 }
+
+// Past the streak threshold the advice flips from edit-the-fix to rewrite —
+// the no-tool retry baseline's whole advantage is the fresh sheet.
+func TestARedStreakFlipsToRewriteAdvice(t *testing.T) {
+	msg := verificationRejectionWithStreak(true, false, "", 3)
+	if !strings.Contains(msg, "Rewrite the file from scratch") {
+		t.Errorf("streak 3 must advise a rewrite: %s", msg)
+	}
+	msg = verificationRejectionWithStreak(true, false, "", 1)
+	if strings.Contains(msg, "from scratch") {
+		t.Errorf("streak 1 keeps the edit advice: %s", msg)
+	}
+}

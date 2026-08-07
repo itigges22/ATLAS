@@ -1186,6 +1186,24 @@ func verificationRejectionMessage(sawFailedVerification bool) string {
 // verificationRejection is verificationRejectionMessage with the two facts
 // that change the advice: whether the red command was a blocking server
 // start, and the job id if one is already running in the background.
+// rewriteThreshold is how many consecutive red verifications exhaust the
+// benefit of incremental edits. The no-tool retry baseline regenerates from
+// scratch on every failure and scores 78% where incremental nibbling
+// plateaued at 66-68: past this streak the advice flips from "apply the fix"
+// to "rewrite the file from a clean sheet".
+const rewriteThreshold = 2
+
+// verificationRejectionWithStreak is verificationRejection plus the red-run
+// streak that decides between edit-the-fix and start-over advice.
+func verificationRejectionWithStreak(sawFailedVerification, serverBlocked bool, bgJobID string, redStreak int) string {
+	if !serverBlocked && sawFailedVerification && redStreak > rewriteThreshold {
+		return fmt.Sprintf(
+			"Cannot declare `done` — the verification command has now failed %d times in a row and your incremental edits are not converging. Stop patching. Rewrite the file from scratch with write_file: re-read the task statement, take a fresh approach, and keep it simple. A clean rewrite finds bugs that ten small edits walk past.",
+			redStreak)
+	}
+	return verificationRejection(sawFailedVerification, serverBlocked, bgJobID)
+}
+
 func verificationRejection(sawFailedVerification, serverBlocked bool, bgJobID string) string {
 	if serverBlocked {
 		probe := "Start it with `run_background` (it returns a job_id), then probe it with " +

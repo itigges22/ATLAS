@@ -198,6 +198,12 @@ type runState struct {
 	// edit repeats. Further writes to such a path bounce until any
 	// verification command runs.
 	pendingWarnedRun map[string]bool
+	// redRunStreak counts consecutive FAILED verification commands with no
+	// green in between. Past a threshold, incremental edits have had their
+	// chance: the bare-model retry loop's whole advantage is the fresh
+	// rewrite, and sessions here were observed re-running a broken program
+	// five times while nibbling at it with edits.
+	redRunStreak int
 	// Set when a verification command RAN AND FAILED and none has
 	// succeeded since. Observed session state, not a guess about the
 	// request: once a test has gone red in this loop, declaring done is
@@ -412,8 +418,8 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 	if (s.userWantsVerification || s.sawFailedVerification) && !s.verifiedThisLoop && s.chargeBounce("verification_gate") {
 		log.Printf("[agent] verification gate: bouncing exit at turn %d (trigger=%s, no successful verification command this loop, bounce %d/%d)",
 			s.turn, gateTrigger(s.userWantsVerification, s.sawFailedVerification), s.gateBounces["verification_gate"], maxGateBounces)
-		return "verification_gate", verificationRejection(
-			s.sawFailedVerification, s.serverStartBlocked, anyBackgroundJobID(ctx))
+		return "verification_gate", verificationRejectionWithStreak(
+			s.sawFailedVerification, s.serverStartBlocked, anyBackgroundJobID(ctx), s.redRunStreak)
 	}
 	// Steps the plan named and no tool call ever satisfied. Same shape as the
 	// verification gate: a fact the run already holds, used at the exit
@@ -1635,6 +1641,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						st.verifiedThisLoop = true
 						ctx.VerifiedThisRun = true
 						st.sawFailedVerification = false
+						st.redRunStreak = 0
 						st.verifiedHashes = sessionWriteHashes(ctx)
 						// A program run as `prog < data` is verified under a
 						// contract the caller may not use. Tracked so the exit
@@ -1650,6 +1657,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						// Red test/build. Latches the verification gate on
 						// for this loop until something verifies green.
 						st.sawFailedVerification = true
+						st.redRunStreak++
 						st.serverStartBlocked = blockedServerStart(result.Error + string(result.Data))
 						log.Printf("[agent] verification FAILED: turn=%d cmd=%q server_blocked=%v — done is gated until it passes",
 							turn, truncateStr(rc.Command, 60), st.serverStartBlocked)
