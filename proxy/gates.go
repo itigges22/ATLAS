@@ -984,6 +984,31 @@ var reSyntaxLineNo = regexp.MustCompile(`line (\d+)`)
 //   - a mid-content syntax bug → point at the offending line (quoted from
 //     `content` when the error carries a line number) and tell the model to
 //     FIX that line, explicitly forbidding an identical resend.
+// fusedLineRe finds a literal backslash-n inside a comment with code-shaped
+// text after it: `# ...it's a transition\n        if current_run[0][1] != ...`.
+// One mis-escaped newline in the model's JSON traps the next statement inside
+// the comment. The file often still parses (comments swallow anything), or
+// dies later with an IndentationError whose reported line is a downstream
+// casualty — measured: a rejection quoted "line 45", which was blank, while
+// the fused comment sat at line 40; the model re-sent the identical content
+// until the repetition breaker ended the session. The pattern is the
+// two-character sequence backslash-n, not a newline.
+var fusedLineRe = regexp.MustCompile(`#[^\n]*?\\n\s*(?:if |for |while |return |def |class |[A-Za-z_][A-Za-z0-9_]*\s*[=(+])`)
+
+// fusedLineHint names the first comment-trapped statement, or "".
+func fusedLineHint(content string) string {
+	for i, line := range strings.Split(content, "\n") {
+		if fusedLineRe.MatchString(line) {
+			return fmt.Sprintf(
+				" Before anything else, look at line %d: its comment contains a "+
+					"literal \\n followed by code, so the statement after it is "+
+					"trapped INSIDE the comment. You escaped a newline that should "+
+					"be real — split that into two lines.", i+1)
+		}
+	}
+	return ""
+}
+
 // locateSyntaxLine resolves the 1-based line a syntax error points at, and
 // renders that line for quoting back. Returns (0, "") when the error carries
 // no location or the location is outside the content.
@@ -1041,6 +1066,7 @@ func fallbackSyntaxRejection(path, content, syntaxErr string) string {
 	// either way. The syntax check now carries "(line N)" for Python, so this
 	// resolves where it used to come up empty.
 	lineNo, quoted := locateSyntaxLine(content, syntaxErr)
+	quoted += fusedLineHint(content)
 
 	// These error shapes are ambiguous. An unclosed brace on line 44 of a
 	// 60-line file is a real bug; the same message on the LAST line means the

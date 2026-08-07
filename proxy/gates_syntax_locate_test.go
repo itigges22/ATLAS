@@ -77,3 +77,36 @@ func TestLocateSyntaxLineRejectsOutOfRange(t *testing.T) {
 		t.Errorf("line 99 of a 3-line file is not locatable: %d %q", n, q)
 	}
 }
+
+// One mis-escaped newline traps the next statement inside a comment. The file
+// may still parse, or dies with an IndentationError whose reported line is a
+// downstream casualty: measured, the rejection quoted line 45 (blank) while
+// the fused comment sat at line 40, and the model re-sent identical content
+// until the repetition breaker ended the session.
+func TestAFusedCommentLineIsNamed(t *testing.T) {
+	content := "x = 1\n" +
+		"# If the value changes, it's a transition\\n        if a != b:\n" +
+		"    y = 2\n"
+	hint := fusedLineHint(content)
+	if hint == "" {
+		t.Fatal("the fused line must be named")
+	}
+	if !strings.Contains(hint, "line 2") {
+		t.Errorf("must point at the comment line, got: %s", hint)
+	}
+	if !strings.Contains(hint, "trapped INSIDE the comment") {
+		t.Errorf("must say what happened: %s", hint)
+	}
+}
+
+func TestAnOrdinaryCommentMentioningBackslashNIsLeftAlone(t *testing.T) {
+	for _, content := range []string{
+		"# split the input on \\n characters\nx = 1\n",
+		"s = 'a\\nb'\n",
+		"# plain comment\nif a != b:\n    pass\n",
+	} {
+		if hint := fusedLineHint(content); hint != "" {
+			t.Errorf("false positive on %q: %s", content, hint)
+		}
+	}
+}
