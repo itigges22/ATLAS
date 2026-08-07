@@ -1519,7 +1519,18 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			if parsed.Name == "run_command" {
 				var rc RunCommandInput
 				if json.Unmarshal(parsed.Args, &rc) == nil && isVerificationCommand(rc.Command) {
-					if result.Success {
+					if result.Success && silentRunWhenOutputPromised(ctx, userMessage, rc.Command, result.Data) {
+						// Exit 0 with empty stdout is not verification of a
+						// task whose prompt demands printed output. Measured:
+						// a generation drifted into comment-reasoning, the
+						// tail of the file (including the solve() call) was
+						// swallowed by a comment, and the program parsed, ran,
+						// printed nothing and exited 0 — the session recorded
+						// that as verification and reported success on a
+						// program that provably produced no answer.
+						log.Printf("[agent] run exited 0 with no stdout on a print-demanding task — not counting as verification: %q",
+							truncateStr(rc.Command, 60))
+					} else if result.Success {
 						st.verifiedThisLoop = true
 						ctx.VerifiedThisRun = true
 						st.sawFailedVerification = false

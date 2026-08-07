@@ -17,6 +17,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -564,6 +565,34 @@ func shellQuotingHint(command, errMsg string) string {
 		"nest correctly. Write the snippet to a file with write_file (say check.py) " +
 		"and run it with `python3 check.py`. Then the quoting is only the language's " +
 		"problem, and whatever comes back is a real error in the code."
+}
+
+// silentRunWhenOutputPromised reports a verification run that exited 0 while
+// printing nothing, on a task whose prompt demands printed output.
+//
+// A file whose tail has been swallowed by a comment (one drifting "#" line
+// eating the solve() call) still parses, runs, and exits 0. Empty stdout is
+// then indistinguishable from success unless someone asks whether output was
+// promised. Only run_commands that execute a program are held to it —
+// build/compile steps legitimately print nothing.
+func silentRunWhenOutputPromised(ctx *AgentContext, userMessage, command string, data json.RawMessage) bool {
+	lower := strings.ToLower(userMessage)
+	if !strings.Contains(lower, "print") && !strings.Contains(lower, "output") {
+		return false
+	}
+	cmd := strings.TrimSpace(command)
+	runsProgram := strings.Contains(cmd, "python") || strings.Contains(cmd, "node ") ||
+		strings.Contains(cmd, "go run") || strings.HasPrefix(cmd, "./")
+	if !runsProgram {
+		return false
+	}
+	var out struct {
+		Stdout string `json:"stdout"`
+	}
+	if json.Unmarshal(data, &out) != nil {
+		return false
+	}
+	return strings.TrimSpace(out.Stdout) == ""
 }
 
 // stdinRedirectRe matches a shell stdin redirect from a plain filename:

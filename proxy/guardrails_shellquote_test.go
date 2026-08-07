@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -50,5 +51,27 @@ func TestOtherInlineInterpretersAreCovered(t *testing.T) {
 func TestEmptyInputsAreSafe(t *testing.T) {
 	if shellQuotingHint("", bashParseErr) != "" || shellQuotingHint(brokenOneLiner, "") != "" {
 		t.Error("empty command or error must not produce a hint")
+	}
+}
+
+// A file whose tail is swallowed by a drifting comment still parses, runs and
+// exits 0 with no output. Measured: a session recorded that as verification
+// and reported success on a program that provably printed no answer.
+func TestASilentRunIsNotVerificationWhenOutputWasPromised(t *testing.T) {
+	ctx := &AgentContext{}
+	prompt := "Write solve.py that reads input.txt and prints the answer on a single line."
+	data := json.RawMessage(`{"stdout":"","stderr":"","exit_code":0}`)
+	if !silentRunWhenOutputPromised(ctx, prompt, "python3 solve.py", data) {
+		t.Error("empty stdout on a print-demanding task must not verify")
+	}
+	withOut := json.RawMessage(`{"stdout":"42 7","exit_code":0}`)
+	if silentRunWhenOutputPromised(ctx, prompt, "python3 solve.py", withOut) {
+		t.Error("real output verifies")
+	}
+	if silentRunWhenOutputPromised(ctx, "fix the bug in app.py", "python3 app.py", data) {
+		t.Error("no printed-output promise, no requirement")
+	}
+	if silentRunWhenOutputPromised(ctx, prompt, "go build ./...", data) {
+		t.Error("build steps legitimately print nothing")
 	}
 }
