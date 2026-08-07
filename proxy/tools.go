@@ -2280,7 +2280,14 @@ func structuralEditTool() *ToolDef {
 					fileTier = refined
 				}
 			}
-			if fileTier >= Tier2Medium && editWarrantsV3(finalContent, cc, ccOK) && ctx.V3URL != "" && !ctx.BypassV3 {
+			// A session iterating on its own file after a failed run is in
+			// the write-run-fix loop; V3's toll there only delays the next
+			// execution. The write path has had this fast-track since PC-190;
+			// the edit path never consulted it. Measured: three 900s timeout
+			// deaths whose sessions each paid one full V3 run and then
+			// V3-improve on every corrective edit until the clock died.
+			if fileTier >= Tier2Medium && editWarrantsV3(finalContent, cc, ccOK) && ctx.V3URL != "" && !ctx.BypassV3 &&
+				!isActiveDebugIteration(ctx, input.Path) {
 				log.Printf("[structural_edit] V3 pipeline activating for %s (oldTier=%d newTier=%d max=%d, req_tier=%d, cc=%d) post-structural-edit", input.Path, oldTier, newTier, fileTier, ctx.Tier, cc)
 				improved, meta, err := improveContentWithV3(path, finalContent, ctx)
 				if err != nil {
@@ -4607,6 +4614,12 @@ func runEditPipeline(ctx *AgentContext, tool, path, relPath, original, edited st
 		}
 	}
 	if fileTier < Tier2Medium || !editWarrantsV3(edited, cc, ccOK) || ctx.V3URL == "" || ctx.BypassV3 {
+		return edited, meta, nil
+	}
+	// Same debug fast-track the write path has: mid-iteration edits skip the
+	// V3 toll so the session's clock goes to executions, not candidates.
+	if isActiveDebugIteration(ctx, relPath) {
+		log.Printf("[%s] %s mid-debug iteration — skipping V3, execution is the feedback", tool, relPath)
 		return edited, meta, nil
 	}
 
