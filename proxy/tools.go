@@ -861,6 +861,24 @@ func writeFileTool() *ToolDef {
 							logPath(input.Path), truncateStr(synErr, 80))
 						return writeNewFileWithWarning(path, input.Path, input.Content, synErr, ctx)
 					}
+					// The strictness on existing files protects WORKING code.
+					// When what is on disk is itself unparseable, there is
+					// nothing to protect, and rejecting an imperfect fix
+					// guarantees the broken version survives. Same
+					// healthy->broken rule the fast-path below already uses.
+					// Measured twice on the novel benchmark: a broken first
+					// draft landed, the corrective write carried a new syntax
+					// slip, the rejection fed the model a line it could not
+					// act on, and it re-sent byte-identical content until the
+					// repetition breaker ended the session with the ORIGINAL
+					// broken file still on disk.
+					if prior, priorOK := readOriginalForGate(path); priorOK {
+						if _, wasHealthy := checkFallbackSyntax(ctx, input.Path, prior); !wasHealthy {
+							log.Printf("[write_file] %s already broken on disk — landing the repair attempt with a warning (%s)",
+								logPath(input.Path), truncateStr(synErr, 80))
+							return writeNewFileWithWarning(path, input.Path, input.Content, synErr, ctx)
+						}
+					}
 					log.Printf("[write_file] %s does not parse — rejecting before V3 (%s)",
 						logPath(input.Path), truncateStr(synErr, 80))
 					return &ToolResult{

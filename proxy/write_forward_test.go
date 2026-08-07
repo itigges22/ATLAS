@@ -44,3 +44,71 @@ func TestBrokenContentToANewFileLandsWithAWarning(t *testing.T) {
 		t.Error("a landed write is the agent's own file and must be iterable")
 	}
 }
+
+// The strict syntax gate on existing files protects WORKING code. When the
+// file on disk is itself unparseable, rejecting an imperfect fix guarantees
+// the broken version survives: measured twice on the novel benchmark, a
+// broken first draft landed, the corrective write carried a new syntax slip,
+// and the model re-sent identical content until the repetition breaker ended
+// the session with the original stump still on disk.
+//
+// Both tests need T2-sized content (def/loop/if) or classifyFileTier routes
+// them down the ungated T1 path and the gate under test never runs.
+
+func t2Body(marker string) string {
+	return "from chunk import chunks\n\n\ndef main():\n    data = [1, 2, " + marker + ", 4, 5]\n" +
+		"    size = 2\n    result = chunks(data, size)\n    print(result)\n" +
+		"    for row in result:\n        if len(row) != size:\n            print('short')\n" +
+		"        else:\n            print('full')\n    return result\n\n\n" +
+		"if __name__ == '__main__':\n    main()\n"
+}
+
+func TestARepairOfABrokenFileLandsEvenWhenImperfect(t *testing.T) {
+	dir := t.TempDir()
+	sb := fakeSyntaxSandbox(t, "**") // markdown bold marks content invalid
+	defer sb.Close()
+	// V3URL set so the T2 pre-V3 gate is the code under test; the gate
+	// decides before any V3 request, so nothing ever calls this address.
+	ctx := writeGateCtx(t, "http://127.0.0.1:1", sb.URL, dir)
+
+	// A broken file is already on disk (landed via fail-forward earlier).
+	if err := os.WriteFile(filepath.Join(dir, "s.py"), []byte(t2Body("**1**")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The repair attempt is also imperfect — it must still land.
+	repair := t2Body("**2**")
+	args, _ := json.Marshal(map[string]string{"path": "s.py", "content": repair})
+	res, err := writeFileTool().Execute(json.RawMessage(args), ctx)
+	if err != nil {
+		t.Fatalf("write_file: %v", err)
+	}
+	if res == nil || !res.Success {
+		t.Fatalf("an imperfect repair of a broken file must land, got %+v", res)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "s.py"))
+	if string(got) != repair {
+		t.Errorf("the repair attempt must be what is on disk, got %q", got)
+	}
+}
+
+func TestAWorkingFileIsStillProtectedFromBrokenContent(t *testing.T) {
+	dir := t.TempDir()
+	sb := fakeSyntaxSandbox(t, "**")
+	defer sb.Close()
+	ctx := writeGateCtx(t, "http://127.0.0.1:1", sb.URL, dir)
+
+	healthy := t2Body("3")
+	if err := os.WriteFile(filepath.Join(dir, "s.py"), []byte(healthy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx.RecordFileRead(filepath.Join(dir, "s.py"), healthy)
+	args, _ := json.Marshal(map[string]string{"path": "s.py", "content": t2Body("**3**")})
+	res, _ := writeFileTool().Execute(json.RawMessage(args), ctx)
+	if res != nil && res.Success {
+		t.Error("working code must not be clobbered with broken content")
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "s.py"))
+	if string(got) != healthy {
+		t.Errorf("the healthy file must survive, got %q", got)
+	}
+}
