@@ -24,15 +24,10 @@ sys.path.insert(0, str(REPO / "scripts"))
 from novel_tasks import build_tasks  # noqa: E402
 
 
-def _answer_tokens(text: str):
-    """Answer content, format-blind: split on whitespace and commas.
-
-    The statements originally specified input formats and not the output
-    separator, so "42, 242" was a defensible reading that the exact-match
-    checker failed. Measured: the ATLAS arm lost multiple walk sessions to a
-    comma the statement never forbade, while the bare arm happened to prefer
-    spaces. Both arms are scored on computed content."""
-    return [t for t in text.replace(",", " ").split() if t]
+# Scoring is EXACT MATCH by decision. The output-separator ambiguity that
+# once made "42, 242" a defensible reading is fixed at the source: every
+# prompt now states "fields separated by single spaces". A benchmark pass
+# must be the answer a user would actually see, byte for byte.
 
 
 def _load_e2e():
@@ -89,11 +84,11 @@ def main() -> int:
                 ok, got = run(nt.input_text)
                 if not ok:
                     return False, got
-                if _answer_tokens(got) != _answer_tokens(nt.expected):
+                if got != nt.expected:
                     return False, f"got {got!r}, want {nt.expected!r}"
                 ok2, got2 = run(nt.holdout_text)
                 (ws / "input.txt").write_text(nt.input_text)
-                if not ok2 or _answer_tokens(got2) != _answer_tokens(nt.holdout_expected):
+                if not ok2 or got2 != nt.holdout_expected:
                     return False, (f"holdout mismatch: got {got2!r}, want "
                                    f"{nt.holdout_expected!r}")
                 return True, f"{got} correct, and correct on the holdout"
