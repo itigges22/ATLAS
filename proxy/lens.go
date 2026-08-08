@@ -40,6 +40,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -312,6 +313,53 @@ type PassWrite struct {
 	Tool    string
 	Path    string
 	Content string
+}
+
+// VerificationRecord binds one green verification command to what it
+// exercised. Covered maps each session-written path the command named to
+// the sha256 of its bytes at the moment the command passed — the bytes the
+// run vouched for, nothing else.
+type VerificationRecord struct {
+	Command  string            // the run_command line that exited green
+	Redirect string            // stdin redirect source ("" = ran standalone)
+	Covered  map[string]string // session-written path -> sha256 at pass time
+	Turn     int
+}
+
+// verifiedFinalWrites selects the PassWrites behavioral evidence actually
+// vouches for: per path, the LAST write (the one that produced the final
+// content), included only when the bytes on disk still hash to a value some
+// green verification covered for that path. Write A and B, run only A:
+// B has no record and gets nothing. Verify A1, rewrite to A2 without another
+// run: disk no longer matches the covered hash and the path gets nothing —
+// a label must never outlive the bytes it was earned by.
+func verifiedFinalWrites(ctx *AgentContext) []PassWrite {
+	if ctx == nil || len(ctx.PassWrites) == 0 || len(ctx.VerificationEvidence) == 0 {
+		return nil
+	}
+	lastByPath := map[string]int{}
+	for i, w := range ctx.PassWrites {
+		lastByPath[w.Path] = i
+	}
+	indices := make([]int, 0, len(lastByPath))
+	for p, i := range lastByPath {
+		disk := fileSHA256(ctx, p)
+		if disk == "" {
+			continue
+		}
+		for _, rec := range ctx.VerificationEvidence {
+			if rec.Covered[p] == disk {
+				indices = append(indices, i)
+				break
+			}
+		}
+	}
+	sort.Ints(indices)
+	out := make([]PassWrite, 0, len(indices))
+	for _, i := range indices {
+		out = append(out, ctx.PassWrites[i])
+	}
+	return out
 }
 
 var lensSampleMu sync.Mutex

@@ -61,3 +61,27 @@ func TestTheRejectionSaysWhatToDoInstead(t *testing.T) {
 		}
 	}
 }
+
+// Widened contract detection: a redirect anywhere in the segment and the
+// cat-pipe idiom are the same stdin contract the trailing-only rule caught.
+func TestStdinRedirectSourceWiderShapes(t *testing.T) {
+	cases := []struct {
+		cmd  string
+		want string
+	}{
+		{"python3 solve.py < input.txt > out.txt", "input.txt"},
+		{"python3 solve.py <input.txt 2>err.log", "input.txt"},
+		{"cat input.txt | python3 solve.py", "input.txt"},
+		{"cd /w && python3 solve.py < data.txt", "data.txt"},
+		// Not stdin contracts:
+		{"python3 solve.py", ""},
+		{"python3 solve.py <<EOF\n1 2\nEOF", ""},
+		{"diff <(sort a) <(sort b)", ""},
+		{"cat notes.txt || echo missing", ""},
+	}
+	for _, c := range cases {
+		if got := stdinRedirectSource(c.cmd); got != c.want {
+			t.Errorf("stdinRedirectSource(%q) = %q, want %q", c.cmd, got, c.want)
+		}
+	}
+}

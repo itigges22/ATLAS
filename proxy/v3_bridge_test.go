@@ -423,3 +423,35 @@ func TestGeneratePlanWithoutV3URLIsNil(t *testing.T) {
 		t.Errorf("expected nil plan with no V3URL, got %+v", p)
 	}
 }
+
+// V3 must generate against the human's request, never a harness note.
+// ATLAS rides correctives/manifests on user-role messages for chat-template
+// compatibility, so "last user turn" is the wrong question to ask the
+// conversation (third-party audit finding: V3 received "run the program
+// standalone" as its task).
+func TestLatestUserMessagePrefersHumanTask(t *testing.T) {
+	ctx := &AgentContext{
+		HumanTask: "write a debounce filter over readings.txt",
+		Messages: []AgentMessage{
+			{Role: "user", Content: "write a debounce filter over readings.txt"},
+			{Role: "assistant", Content: `{"type":"tool_call"}`},
+			{Role: "user", Content: "[system note]: run the program standalone"},
+			{Role: "user", Content: "[system note]: session file manifest: solve.py"},
+		},
+	}
+	if got := latestUserMessage(ctx); got != ctx.HumanTask {
+		t.Fatalf("V3 task resolved to %q, want the human request", got)
+	}
+}
+
+func TestLatestUserMessageFallbackSkipsSyntheticNotes(t *testing.T) {
+	ctx := &AgentContext{ // no HumanTask: context built outside the loop
+		Messages: []AgentMessage{
+			{Role: "user", Content: "the real task"},
+			{Role: "user", Content: "[system note]: lessons from previous sessions"},
+		},
+	}
+	if got := latestUserMessage(ctx); got != "the real task" {
+		t.Fatalf("fallback resolved to %q, want the real task", got)
+	}
+}

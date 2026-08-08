@@ -1230,17 +1230,31 @@ func v3CandidatesTested(r *V3GenerateResponse) int {
 	return r.CandidatesTested
 }
 
-// latestUserMessage is the most recent user turn's text, for handing the V3
-// pipeline the requirement it is generating against. Reads the conversation
-// rather than adding state, so it cannot drift from what the model was told.
+// latestUserMessage is the HUMAN's request, for handing the V3 pipeline the
+// requirement it is generating against. ctx.HumanTask is authoritative: the
+// loop stores the request verbatim before appending anything, because the
+// conversation itself cannot answer this question — correctives, manifests
+// and re-injected file content all ride user-role messages for chat-template
+// compatibility, and "last user turn" was observed resolving to "[system
+// note]: run the program standalone" mid-session, sending V3 off to generate
+// against harness feedback instead of the task (third-party audit finding).
+// The scan below is a fallback for contexts built without the loop (tests,
+// direct bridge calls) and skips synthetic notes.
 func latestUserMessage(ctx *AgentContext) string {
 	if ctx == nil {
 		return ""
 	}
+	if ctx.HumanTask != "" {
+		return ctx.HumanTask
+	}
 	for i := len(ctx.Messages) - 1; i >= 0; i-- {
-		if ctx.Messages[i].Role == "user" {
-			return ctx.Messages[i].Content
+		if ctx.Messages[i].Role != "user" {
+			continue
 		}
+		if strings.HasPrefix(ctx.Messages[i].Content, "[system note]:") {
+			continue
+		}
+		return ctx.Messages[i].Content
 	}
 	return ""
 }

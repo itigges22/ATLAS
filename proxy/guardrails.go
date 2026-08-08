@@ -569,6 +569,17 @@ func shellQuotingHint(command, errMsg string) string {
 		"problem, and whatever comes back is a real error in the code."
 }
 
+// fileSHA256 hashes the current on-disk bytes of a session path, "" when
+// the file can't be read.
+func fileSHA256(ctx *AgentContext, path string) string {
+	data, err := os.ReadFile(resolveAgentPath(ctx, path))
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
 // sessionWriteHashes snapshots the sha256 of every file this session wrote,
 // keyed by the path as the model sent it. Taken at the moment a verifying
 // run succeeds, it records WHICH bytes that run vouched for.
@@ -578,14 +589,30 @@ func sessionWriteHashes(ctx *AgentContext) map[string]string {
 	}
 	out := make(map[string]string, len(ctx.SessionWrites))
 	for p := range ctx.SessionWrites {
-		data, err := os.ReadFile(resolveAgentPath(ctx, p))
-		if err != nil {
-			continue
+		if h := fileSHA256(ctx, p); h != "" {
+			out[p] = h
 		}
-		sum := sha256.Sum256(data)
-		out[p] = hex.EncodeToString(sum[:])
 	}
 	return out
+}
+
+// commandNamesPath reports whether the command line names the file as a
+// whole token (path, basename, or */basename) in any shell segment. Within
+// a command already classified as verification, a named file participated
+// in what was verified — passed to an interpreter, a test runner, or a
+// grader as an argument. Substring matching is deliberately avoided:
+// "solve.py" must not match "solve.py.bak".
+func commandNamesPath(command, path string) bool {
+	base := filepath.Base(path)
+	for _, segment := range splitShellSegments(command) {
+		for _, tok := range strings.Fields(segment) {
+			tok = strings.Trim(tok, `"'`)
+			if tok == path || tok == base || strings.HasSuffix(tok, "/"+base) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // driftedSinceVerification names the first session-written file whose bytes
@@ -641,10 +668,17 @@ func silentRunWhenOutputPromised(ctx *AgentContext, userMessage, command string,
 	return strings.TrimSpace(out.Stdout) == ""
 }
 
-// stdinRedirectRe matches a shell stdin redirect from a plain filename:
-// `python3 solve.py < input.txt`. Deliberately narrow — `<<` heredocs and
-// `<(...)` process substitution are not the shape this is about.
-var stdinRedirectRe = regexp.MustCompile(`[^<>]<\s*([A-Za-z0-9_./-]+)\s*$`)
+// stdinRedirectRe matches a shell stdin redirect from a plain filename
+// anywhere in a segment: `python3 solve.py < input.txt`, including with
+// trailing redirections after it (`< input.txt > out.txt`) — the
+// trailing-only anchor missed those and the contract gate stayed silent
+// (audit finding). `<<` heredocs and `<(...)` process substitution are not
+// the shape this is about and are excluded by the caller.
+var stdinRedirectRe = regexp.MustCompile(`(?:^|[^<>])<\s*([A-Za-z0-9_./-]+)`)
+
+// pipeCatRe matches the pipe idiom that feeds a file to the next command's
+// stdin: `cat input.txt | prog`. Same contract as `prog < input.txt`.
+var pipeCatRe = regexp.MustCompile(`(?:^|&&|\|\||;)\s*cat\s+([A-Za-z0-9_./-]+)\s*\|[^|]`)
 
 // stdinRedirectSource names the file a command pipes into a program's stdin,
 // or "" when it does not.
@@ -662,14 +696,22 @@ var stdinRedirectRe = regexp.MustCompile(`[^<>]<\s*([A-Za-z0-9_./-]+)\s*$`)
 // wrong shape reachable, so the harness is what has to notice.
 func stdinRedirectSource(command string) string {
 	cmd := strings.TrimSpace(command)
-	if cmd == "" || strings.Contains(cmd, "<<") || strings.Contains(cmd, "<(") {
+	if cmd == "" {
 		return ""
 	}
-	m := stdinRedirectRe.FindStringSubmatch(cmd)
-	if m == nil {
-		return ""
+	// `cat file | prog` feeds prog's stdin exactly like `prog < file`.
+	if m := pipeCatRe.FindStringSubmatch(cmd); m != nil {
+		return m[1]
 	}
-	return m[1]
+	for _, seg := range splitShellSegments(cmd) {
+		if strings.Contains(seg, "<<") || strings.Contains(seg, "<(") {
+			continue
+		}
+		if m := stdinRedirectRe.FindStringSubmatch(seg); m != nil {
+			return m[1]
+		}
+	}
+	return ""
 }
 
 // redirectOnlyVerificationMessage tells the model to run the artifact the way
@@ -1193,13 +1235,65 @@ func verificationRejectionMessage(sawFailedVerification bool) string {
 // to "rewrite the file from a clean sheet".
 const rewriteThreshold = 2
 
+// executorNames are commands that run a file handed to them as an argument.
+// Wrappers like timeout/env don't qualify on their own — the real interpreter
+// still has to appear between them and the file.
+var executorNames = map[string]bool{
+	"python": true, "python3": true, "python2": true, "py": true,
+	"node": true, "nodejs": true, "deno": true, "bun": true,
+	"ruby": true, "perl": true, "php": true, "lua": true,
+	"bash": true, "sh": true, "zsh": true, "dash": true,
+	"pytest": true, "go": true, "cargo": true, "java": true, "dotnet": true,
+}
+
+// executionAttempt reports whether the command actually attempts to RUN the
+// file at path — an interpreter invocation (`python3 solve.py`, with or
+// without wrapper/flag tokens in between) or direct execution (`./solve.py`).
+// Merely naming the file proves nothing about its runtime behavior: `cat`,
+// `grep`, `ls`, `wc` all name it and were all discharging the warned-run
+// mark under the old substring rule (audit finding).
+func executionAttempt(command, path string) bool {
+	base := filepath.Base(path)
+	for _, segment := range splitShellSegments(command) {
+		toks := strings.Fields(segment)
+		fileAt := -1
+		for i, tok := range toks {
+			tok = strings.Trim(tok, `"'`)
+			if tok == path || tok == base || strings.HasSuffix(tok, "/"+base) {
+				if strings.HasPrefix(tok, "./") {
+					return true // direct execution
+				}
+				fileAt = i
+				break
+			}
+		}
+		if fileAt <= 0 {
+			continue // absent, or the file itself is the first token without ./
+		}
+		for _, prev := range toks[:fileAt] {
+			prev = strings.Trim(prev, `"'`)
+			if executorNames[filepath.Base(prev)] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// freshRewriteAdvice is the start-over guidance shared by the done-gate
+// rejection and the immediate mid-loop corrective. One source of truth so
+// the model hears the same instruction at the crossing and at the gate.
+func freshRewriteAdvice(redStreak int) string {
+	return fmt.Sprintf(
+		"the verification command has now failed %d times in a row and your incremental edits are not converging. Stop patching. Rewrite the file from scratch with write_file: re-read the task statement, take a fresh approach, and keep it simple. A clean rewrite finds bugs that ten small edits walk past.",
+		redStreak)
+}
+
 // verificationRejectionWithStreak is verificationRejection plus the red-run
 // streak that decides between edit-the-fix and start-over advice.
 func verificationRejectionWithStreak(sawFailedVerification, serverBlocked bool, bgJobID string, redStreak int) string {
 	if !serverBlocked && sawFailedVerification && redStreak > rewriteThreshold {
-		return fmt.Sprintf(
-			"Cannot declare `done` — the verification command has now failed %d times in a row and your incremental edits are not converging. Stop patching. Rewrite the file from scratch with write_file: re-read the task statement, take a fresh approach, and keep it simple. A clean rewrite finds bugs that ten small edits walk past.",
-			redStreak)
+		return "Cannot declare `done` — " + freshRewriteAdvice(redStreak)
 	}
 	return verificationRejection(sawFailedVerification, serverBlocked, bgJobID)
 }

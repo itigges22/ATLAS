@@ -502,6 +502,37 @@ type AgentContext struct {
 	FilesRead     map[string]string    // cache of read file contents
 	TotalTokens   int
 
+	// VerificationEvidence holds one record per GREEN verification command,
+	// binding the result to what the command actually exercised: the
+	// command line, its stdin contract, and the sha256 of each covered
+	// session-written file at the moment it passed. Lens labels are drawn
+	// from these records, never from a session-wide boolean — a flag can't
+	// answer "verified WHAT, at WHICH bytes", and labeling on it trained
+	// the lens on files the passing command never touched (third-party
+	// audit finding).
+	VerificationEvidence []VerificationRecord
+
+	// HumanTask is the CURRENT request's actual human instruction, captured
+	// once at the top of runAgentLoop before the loop appends anything.
+	// ATLAS represents internal correctives, manifests and re-injected file
+	// content as user-role messages for chat-template compatibility, so
+	// "last user message" stops meaning "what the human asked" the moment
+	// the first [system note] lands — V3 was observed generating against
+	// "run the program standalone" instead of the task (third-party audit
+	// finding). Role conversion is a serialization concern; this field
+	// preserves the provenance the role field erases.
+	HumanTask string
+
+	// FencedCalls / FencedTokens account the @fenced sub-calls
+	// (fetchFencedContent): every attempt is a full model generation, and
+	// before these existed the run totals silently omitted that spend — a
+	// session's reported token count could be off by one whole generation
+	// per written file (third-party audit finding). FencedTokens is also
+	// folded into TotalTokens; these two exist so the fenced share is
+	// visible on its own.
+	FencedCalls  int
+	FencedTokens int
+
 	// BodySeen records the files whose CONTENTS were put in front of the
 	// model. FilesRead answers a different question: outline_file caches a
 	// file's full source for staleness tracking while showing the model only

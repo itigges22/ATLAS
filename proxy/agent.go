@@ -537,6 +537,11 @@ func fetchPatternContext(ctx *AgentContext, userMessage string) (string, []strin
 }
 
 func runAgentLoop(ctx *AgentContext, userMessage string) error {
+	// Capture the human's actual instruction before the loop appends
+	// anything: correctives, manifests and re-injected content all ride
+	// user-role messages, and everything downstream that needs "what was
+	// I asked" (the V3 bridge above all) must not confuse those with this.
+	ctx.HumanTask = userMessage
 	// Emit a stage_start envelope so the TUI's pipeline pane shows
 	// the agent is working. Mirrors the typed-event broker.
 	loopStart := time.Now()
@@ -557,8 +562,10 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			Stage:      "agent",
 			DurationMS: dur,
 			Payload: map[string]interface{}{
-				"success":      true,
-				"total_tokens": ctx.TotalTokens,
+				"success":       true,
+				"total_tokens":  ctx.TotalTokens,
+				"fenced_calls":  ctx.FencedCalls,
+				"fenced_tokens": ctx.FencedTokens,
 			},
 		})
 		Emit(Envelope{
@@ -571,6 +578,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				"success":           true,
 				"total_duration_ms": dur,
 				"total_tokens":      ctx.TotalTokens,
+				"fenced_calls":      ctx.FencedCalls,
+				"fenced_tokens":     ctx.FencedTokens,
 			},
 		})
 	}()
@@ -1135,21 +1144,36 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					continue
 				}
 			}
-			// Fenced-content resolution FIRST: everything downstream (the
-			// gates, tier classification, execution) must see real bytes.
-			// "@fenced" is the model routing the file body around the JSON
-			// channel — one unconstrained sub-call fetches it in a fenced
-			// block, its native emission format. See fetchFencedContent.
+			// write_file preflight. Order matters: the run-first gate is
+			// checked BEFORE fenced resolution, because "@fenced" resolution
+			// costs a full model sub-call — paying that for a write the gate
+			// is about to bounce is pure waste (audit finding: the gate sat
+			// after resolution and every bounced warned-file rewrite burned
+			// a generation first).
 			if parsed.Name == "write_file" {
 				var wfInput WriteFileInput
 				if json.Unmarshal(parsed.Args, &wfInput) == nil {
+					if st.pendingWarnedRun[wfInput.Path] && st.chargeBounce("run_first_gate") {
+						log.Printf("[agent] run-first gate: %s has a warned, unexecuted version on disk (bounce %d/%d)",
+							wfInput.Path, st.gateBounces["run_first_gate"], maxGateBounces)
+						st.bounceToolCall(ctx, "write_file", fmt.Sprintf(
+							"The version of %s you wrote is on disk with a parse warning and has never been run. Run it first — `python3 %s` — and read the real error before writing again. Rewriting blind is how the last four attempts went nowhere.",
+							wfInput.Path, wfInput.Path))
+						continue
+					}
+					// Fenced-content resolution: everything downstream (the
+					// remaining gates, tier classification, execution) must see
+					// real bytes. "@fenced" is the model routing the file body
+					// around the JSON channel — one unconstrained sub-call
+					// fetches it in a fenced block, its native emission format.
+					// See fetchFencedContent.
 					trimmed := strings.TrimSpace(wfInput.Content)
 					if trimmed == "@fenced" {
 						fetched, ferr := fetchFencedContent(ctx, rawResponseForFence(parsed), wfInput.Path)
 						if ferr != nil {
 							log.Printf("[agent] fenced-content fetch failed for %s: %v", wfInput.Path, ferr)
 							st.bounceToolCall(ctx, "write_file",
-								"You wrote \"content\": \"@fenced\" but no fenced block followed. Either reply with the complete file in one ```python fenced block when asked, or re-issue write_file with the full content inline.")
+								"You wrote \"content\": \"@fenced\" but no fenced block followed. Either reply with the complete file in one fenced code block when asked, or re-issue write_file with the full content inline.")
 							continue
 						}
 						wfInput.Content = fetched
@@ -1174,14 +1198,6 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			if parsed.Name == "write_file" {
 				var wfInput WriteFileInput
 				if json.Unmarshal(parsed.Args, &wfInput) == nil {
-					if st.pendingWarnedRun[wfInput.Path] && st.chargeBounce("run_first_gate") {
-						log.Printf("[agent] run-first gate: %s has a warned, unexecuted version on disk (bounce %d/%d)",
-							wfInput.Path, st.gateBounces["run_first_gate"], maxGateBounces)
-						st.bounceToolCall(ctx, "write_file", fmt.Sprintf(
-							"The version of %s you wrote is on disk with a parse warning and has never been run. Run it first — `python3 %s` — and read the real error before writing again. Rewriting blind is how the last four attempts went nowhere.",
-							wfInput.Path, wfInput.Path))
-						continue
-					}
 					existingPath := resolveAgentPath(ctx, wfInput.Path)
 					if existing, err := os.ReadFile(existingPath); err == nil {
 						existingLines := strings.Count(string(existing), "\n") + 1
@@ -1613,16 +1629,19 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				}
 			}
 			if parsed.Name == "run_command" && result != nil {
-				// Discharge only the marks this command plausibly exercised.
-				// Clearing on ANY command let `ls` or an unrelated script
-				// bless a warned file sight unseen (audit finding): the mark
-				// survives recon and unrelated runs, and clears when the
-				// command names the file or its basename.
+				// Discharge only the marks this command actually attempted to
+				// EXECUTE. Two prior rules both failed an audit: clearing on
+				// any command let `ls` bless a warned file, and clearing on a
+				// filename substring let `cat solve.py` or `grep main solve.py`
+				// do the same — naming a file is not running it. The mark is
+				// "this version has never been executed"; only an execution
+				// attempt (interpreter invocation or ./file) changes that fact,
+				// and the attempt itself suffices — pass or fail, the model has
+				// now seen the real runtime behavior.
 				var rc RunCommandInput
 				if json.Unmarshal(parsed.Args, &rc) == nil {
 					for p := range st.pendingWarnedRun {
-						if strings.Contains(rc.Command, p) ||
-							strings.Contains(rc.Command, filepath.Base(p)) {
+						if executionAttempt(rc.Command, p) {
 							delete(st.pendingWarnedRun, p)
 						}
 					}
@@ -1679,6 +1698,23 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						st.sawFailedVerification = false
 						st.redRunStreak = 0
 						st.verifiedHashes = sessionWriteHashes(ctx)
+						// Evidence record: bind this green run to the files it
+						// actually named and the exact bytes they held. Lens
+						// labeling reads these — never the session-wide flag.
+						covered := map[string]string{}
+						for p := range ctx.SessionWrites {
+							if commandNamesPath(rc.Command, p) {
+								if h := fileSHA256(ctx, p); h != "" {
+									covered[p] = h
+								}
+							}
+						}
+						ctx.VerificationEvidence = append(ctx.VerificationEvidence, VerificationRecord{
+							Command:  rc.Command,
+							Redirect: stdinRedirectSource(rc.Command),
+							Covered:  covered,
+							Turn:     turn,
+						})
 						// A program run as `prog < data` is verified under a
 						// contract the caller may not use. Tracked so the exit
 						// can tell the two apart. See stdinRedirectSource.
@@ -1697,6 +1733,16 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						st.serverStartBlocked = blockedServerStart(result.Error + string(result.Data))
 						log.Printf("[agent] verification FAILED: turn=%d cmd=%q server_blocked=%v — done is gated until it passes",
 							turn, truncateStr(rc.Command, 60), st.serverStartBlocked)
+						// Advice at the crossing, not at the done-gate: waiting
+						// for the model to attempt `done` meant it kept nibbling
+						// edits for turns after the streak already proved the
+						// approach dead. Queue once, on the transition — the
+						// done-gate text repeats it if the model still tries to
+						// exit red.
+						if st.redRunStreak == rewriteThreshold+1 && !st.serverStartBlocked {
+							st.queueCorrective(freshRewriteAdvice(st.redRunStreak))
+							log.Printf("[agent] red streak crossed %d — fresh-rewrite advice injected now", rewriteThreshold)
+						}
 					}
 				}
 			}
@@ -3092,7 +3138,7 @@ func buildSystemPrompt(ctx *AgentContext) string {
 
 	// Rules
 	sb.WriteString("## Rules\n\n")
-	sb.WriteString("- **Writing a whole file**: in write_file, set content to EXACTLY the 7 characters `@fenced` and NOTHING else — do NOT put the file itself in the JSON. After the tool call you will be asked for the file; reply then with ONE ```python fenced block containing the complete file. Code inside a JSON string gets corrupted by escaping (lost parens, broken newlines); the fenced reply is the reliable channel. Only trivially short content (under 5 lines) may be inlined in the JSON.\n")
+	sb.WriteString("- **Writing a whole file**: in write_file, set content to EXACTLY the 7 characters `@fenced` and NOTHING else — do NOT put the file itself in the JSON. After the tool call you will be asked for the file; reply then with ONE fenced code block containing the complete file. Code inside a JSON string gets corrupted by escaping (lost parens, broken newlines); the fenced reply is the reliable channel. Only trivially short content (under 5 lines) may be inlined in the JSON.\n")
 	sb.WriteString("- To work on an EXISTING file, `read_file` it. Reading is the default and the context window is large; `read_file` caps itself on a file too big to load and tells you how to narrow the range, so you do not need to ration reads. Reach for `outline_file` only to locate a target inside a file that large — it returns line ranges and no code, so it can tell you where to read but never what the code does. Never re-read the same file in a loop; if a read's content is already in the conversation, act on it.\n")
 	sb.WriteString("- Always read the relevant code before editing it (outline_file → read_file, then edit_file/structural_edit).\n")
 	sb.WriteString("- MANDATORY: Use `edit_file` (targeted old_str/new_str) for any change to a file that already exists, no matter how small. `write_file` is ONLY for creating brand-new files. The agent layer rejects every `write_file` call against an existing file >5 lines — your call won't execute and you'll get a tool error directing you to edit_file. Don't re-emit a whole file to change a few lines.\n")
@@ -3676,9 +3722,15 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 	// runs — the corpus was empty after twelve of them. A human verdict
 	// arriving later carries more weight and refines these rather than
 	// competing with them.
-	if ctx.VerifiedThisRun && len(ctx.PassWrites) > 0 {
-		if n := recordVerifiedPass(modelName, ctx.PassWrites); n > 0 {
-			log.Printf("[lens] recorded %d verified-run sample(s) for %s", n, modelName)
+	//
+	// Selection is evidence-bound, not flag-bound: only the final write of
+	// a path whose on-disk bytes a green verification actually covered.
+	// The session-wide VerifiedThisRun flag stayed true through unverified
+	// rewrites and labeled files the passing command never touched.
+	if verified := verifiedFinalWrites(ctx); len(verified) > 0 {
+		if n := recordVerifiedPass(modelName, verified); n > 0 {
+			log.Printf("[lens] recorded %d verified-run sample(s) for %s (of %d writes)",
+				n, modelName, len(ctx.PassWrites))
 		}
 	}
 
@@ -3879,7 +3931,71 @@ func rawResponseForFence(parsed ModelResponse) string {
 const rawEmissionSentinel = "__raw_text__"
 
 // fencedContentRe grabs the first fenced code block of the sub-call reply.
-var fencedContentRe = regexp.MustCompile("(?s)```(?:[a-zA-Z0-9]+)?\\s*\\n(.*?)```")
+// The tag charset includes +, #, . and - so c++, c#, objective-c and
+// asp.net-style tags open a block instead of failing the match entirely.
+var fencedContentRe = regexp.MustCompile("(?s)```(?:[a-zA-Z0-9+#._-]+)?\\s*\\n(.*?)```")
+
+// fencedContentTrailingRe is the greedy variant, anchored to a closing fence
+// at the very end of the reply. Preferred over fencedContentRe when it
+// matches: the sub-call asks for ONE block holding the whole file, so a
+// file that itself contains ``` (markdown, a docstring with an example)
+// must not be cut at its first interior fence.
+var fencedContentTrailingRe = regexp.MustCompile("(?s)```(?:[a-zA-Z0-9+#._-]+)?\\s*\\n(.*)\\n```\\s*$")
+
+// extractFencedContent pulls the file body out of a fenced sub-call reply:
+// the whole-reply greedy form first, the first-block form as fallback.
+func extractFencedContent(reply string) string {
+	if m := fencedContentTrailingRe.FindStringSubmatch(reply); m != nil && strings.TrimSpace(m[1]) != "" {
+		return m[1] + "\n"
+	}
+	if m := fencedContentRe.FindStringSubmatch(reply); m != nil && strings.TrimSpace(m[1]) != "" {
+		return m[1]
+	}
+	return ""
+}
+
+// fenceTagForPath picks the fence language tag the sub-call prompt asks
+// for, from the target file's extension. The prompt hardcoded ```python
+// whatever the file was — a .html or .go target got asked for a python
+// block (audit finding). Empty means "use a bare fence".
+func fenceTagForPath(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".py":
+		return "python"
+	case ".js", ".mjs":
+		return "javascript"
+	case ".ts":
+		return "typescript"
+	case ".html", ".htm":
+		return "html"
+	case ".css":
+		return "css"
+	case ".go":
+		return "go"
+	case ".rs":
+		return "rust"
+	case ".c", ".h":
+		return "c"
+	case ".cpp", ".cc", ".hpp":
+		return "c++"
+	case ".java":
+		return "java"
+	case ".rb":
+		return "ruby"
+	case ".sh":
+		return "bash"
+	case ".json":
+		return "json"
+	case ".md":
+		return "markdown"
+	case ".sql":
+		return "sql"
+	case ".yaml", ".yml":
+		return "yaml"
+	default:
+		return ""
+	}
+}
 
 // fetchFencedContent asks the model for a file's contents in its native
 // channel: one unconstrained call whose reply is a single fenced block.
@@ -3896,22 +4012,50 @@ var fencedContentRe = regexp.MustCompile("(?s)```(?:[a-zA-Z0-9]+)?\\s*\\n(.*?)``
 // the main conversation's view the model wrote "@fenced" and the write
 // simply happened.
 func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error) {
+	tag := fenceTagForPath(path)
 	note := AgentMessage{Role: "user", Content: fmt.Sprintf(
 		"[system note]: Now provide ONLY the complete contents of %s, as plain "+
-			"code in a single fenced block (```python ... ```). No JSON, no "+
-			"commentary, no partial file.", path)}
+			"code in a single fenced block (```%s ... ```). No JSON, no "+
+			"commentary, no partial file.", path, tag)}
 	msgs := append(append([]AgentMessage{}, ctx.Messages...),
 		AgentMessage{Role: "assistant", Content: rawCall}, note)
 	for attempt := 0; attempt < 2; attempt++ {
-		reply, _, err := callLLMOnceWithGrammar(ctx, msgs, 0.2, rawEmissionSentinel)
+		attemptStart := time.Now()
+		reply, tokens, err := callLLMOnceWithGrammar(ctx, msgs, 0.2, rawEmissionSentinel)
+		elapsed := time.Since(attemptStart)
+		// Every attempt is a real generation and is accounted whether or
+		// not it yielded a usable block — an unaccounted sub-call made the
+		// run totals lie by one generation per written file.
+		ctx.TotalTokens += tokens
+		ctx.FencedCalls++
+		ctx.FencedTokens += tokens
+		content := extractFencedContent(reply)
+		got := content != ""
+		contentBytes := len(content)
+		Emit(Envelope{
+			EventID:    NewEventID(),
+			Timestamp:  float64(time.Now().UnixNano()) / 1e9,
+			Type:       EvtStageEnd,
+			Stage:      "fenced_fetch",
+			DurationMS: elapsed.Milliseconds(),
+			Payload: map[string]interface{}{
+				"success":          err == nil && got,
+				"path":             path,
+				"attempt":          attempt + 1,
+				"generated_tokens": tokens,
+				"content_bytes":    contentBytes,
+				"total_tokens":     ctx.TotalTokens,
+			},
+		})
 		if err != nil {
 			return "", err
 		}
-		if m := fencedContentRe.FindStringSubmatch(reply); m != nil && strings.TrimSpace(m[1]) != "" {
-			return m[1], nil
+		if got {
+			return content, nil
 		}
 		msgs = append(msgs, AgentMessage{Role: "assistant", Content: reply},
-			AgentMessage{Role: "user", Content: "[system note]: That had no fenced block. Reply with ONE ```python fenced block containing the complete file, nothing else."})
+			AgentMessage{Role: "user", Content: fmt.Sprintf(
+				"[system note]: That had no fenced block. Reply with ONE ```%s fenced block containing the complete file, nothing else.", tag)})
 	}
 	return "", fmt.Errorf("no fenced block after 2 attempts")
 }

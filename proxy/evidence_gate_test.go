@@ -190,3 +190,72 @@ func TestEveryWritePathRunsThroughTheRecorder(t *testing.T) {
 			"the model just wrote: %s", i+1, strings.TrimSpace(line))
 	}
 }
+
+// Lens labels must be earned by behavioral evidence, path by path, hash by
+// hash. Regression pair from the third-party audit: (1) write A and B,
+// execute only A — B must not be labeled; (2) verify A1, rewrite to A2
+// without another run — A2 must not be labeled.
+func TestOnlyExercisedFilesEarnLabels(t *testing.T) {
+	dir := t.TempDir()
+	writeTemp := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeTemp("a.py", "print('a')\n")
+	writeTemp("b.py", "print('b')\n")
+	ctx := &AgentContext{
+		WorkingDir:    dir,
+		SessionWrites: map[string]bool{"a.py": true, "b.py": true},
+		PassWrites: []PassWrite{
+			{Tool: "write_file", Path: "a.py", Content: "print('a')\n"},
+			{Tool: "write_file", Path: "b.py", Content: "print('b')\n"},
+		},
+	}
+	// The green run named only a.py.
+	covered := map[string]string{}
+	for p := range ctx.SessionWrites {
+		if commandNamesPath("python3 a.py", p) {
+			covered[p] = fileSHA256(ctx, p)
+		}
+	}
+	ctx.VerificationEvidence = []VerificationRecord{
+		{Command: "python3 a.py", Covered: covered, Turn: 3}}
+
+	got := verifiedFinalWrites(ctx)
+	if len(got) != 1 || got[0].Path != "a.py" {
+		t.Fatalf("only the exercised file may be labeled, got %+v", got)
+	}
+}
+
+func TestUnverifiedRewriteEarnsNoLabel(t *testing.T) {
+	dir := t.TempDir()
+	a1 := "print('v1')\n"
+	if err := os.WriteFile(filepath.Join(dir, "a.py"), []byte(a1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := &AgentContext{
+		WorkingDir:    dir,
+		SessionWrites: map[string]bool{"a.py": true},
+		PassWrites:    []PassWrite{{Tool: "write_file", Path: "a.py", Content: a1}},
+	}
+	ctx.VerificationEvidence = []VerificationRecord{{
+		Command: "python3 a.py",
+		Covered: map[string]string{"a.py": fileSHA256(ctx, "a.py")}, Turn: 2}}
+
+	// Verified at A1: the label is available.
+	if got := verifiedFinalWrites(ctx); len(got) != 1 {
+		t.Fatalf("verified bytes must be labelable, got %+v", got)
+	}
+
+	// Rewritten to A2 with no further run: the label must vanish.
+	a2 := "print('v2, never executed')\n"
+	if err := os.WriteFile(filepath.Join(dir, "a.py"), []byte(a2), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx.PassWrites = append(ctx.PassWrites,
+		PassWrite{Tool: "write_file", Path: "a.py", Content: a2})
+	if got := verifiedFinalWrites(ctx); len(got) != 0 {
+		t.Fatalf("a label must never outlive the bytes it was earned by, got %+v", got)
+	}
+}

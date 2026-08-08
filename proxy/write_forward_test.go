@@ -151,15 +151,41 @@ func TestAFileWrittenAfterTheSnapshotIsDrift(t *testing.T) {
 }
 
 // A warned landing is artifact state, not a rewrite throttle (audit
-// correction). The mark must survive unrelated commands, discharge only on
-// a command that names the file, and block done while it stands.
-func TestPendingWarnedRunIsPathScoped(t *testing.T) {
-	st := &runState{pendingWarnedRun: map[string]bool{"solve.py": true}}
-	// Mirrors the discharge logic's contract via the map directly: an
-	// unrelated command must not clear it; one naming the file must.
-	for _, cmd := range []string{"ls", "echo hi", "python3 other.py"} {
-		if !st.pendingWarnedRun["solve.py"] {
-			t.Fatalf("mark lost before any relevant command (%s)", cmd)
+// correction). The mark must survive everything short of an actual
+// execution attempt of the file — naming it (cat/grep/ls) proves nothing
+// about runtime behavior and must not discharge it.
+func TestExecutionAttemptDischarge(t *testing.T) {
+	cases := []struct {
+		cmd  string
+		path string
+		want bool
+	}{
+		{"python3 solve.py", "solve.py", true},
+		{"python solve.py < input.txt", "solve.py", true},
+		{"timeout 10 python3 solve.py", "solve.py", true},
+		{"python3 -u solve.py", "solve.py", true},
+		{"./solve.py", "solve.py", true},
+		{"cd /w && python3 ./solve.py", "solve.py", true},
+		{"python3 sub/solve.py", "sub/solve.py", true},
+		{"pytest test_solve.py", "test_solve.py", true},
+		{"node app.js", "app.js", true},
+		{"bash run.sh", "run.sh", true},
+		// Naming is not running.
+		{"cat solve.py", "solve.py", false},
+		{"grep main solve.py", "solve.py", false},
+		{"ls solve.py", "solve.py", false},
+		{"wc -l solve.py", "solve.py", false},
+		{"echo solve.py", "solve.py", false},
+		{"ls", "solve.py", false},
+		{"python3 other.py", "solve.py", false},
+		// Execution in one chain segment doesn't bless a file only
+		// named in another.
+		{"cat solve.py && python3 other.py", "solve.py", false},
+		{"python3 solve.py && cat notes.txt", "solve.py", true},
+	}
+	for _, c := range cases {
+		if got := executionAttempt(c.cmd, c.path); got != c.want {
+			t.Errorf("executionAttempt(%q, %q) = %v, want %v", c.cmd, c.path, got, c.want)
 		}
 	}
 }
