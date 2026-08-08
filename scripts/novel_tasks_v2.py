@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import heapq
 import random
-from typing import Callable, List
+from typing import List
 
 from novel_tasks import NovelTask, _statement
 
