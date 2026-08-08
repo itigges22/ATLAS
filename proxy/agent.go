@@ -1142,19 +1142,33 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// block, its native emission format. See fetchFencedContent.
 			if parsed.Name == "write_file" {
 				var wfInput WriteFileInput
-				if json.Unmarshal(parsed.Args, &wfInput) == nil && strings.TrimSpace(wfInput.Content) == "@fenced" {
-					fetched, ferr := fetchFencedContent(ctx, rawResponseForFence(parsed), wfInput.Path)
-					if ferr != nil {
-						log.Printf("[agent] fenced-content fetch failed for %s: %v", wfInput.Path, ferr)
-						st.bounceToolCall(ctx, "write_file",
-							"You wrote \"content\": \"@fenced\" but no fenced block followed. Either reply with the complete file in one ```python fenced block when asked, or re-issue write_file with the full content inline.")
-						continue
+				if json.Unmarshal(parsed.Args, &wfInput) == nil {
+					trimmed := strings.TrimSpace(wfInput.Content)
+					if trimmed == "@fenced" {
+						fetched, ferr := fetchFencedContent(ctx, rawResponseForFence(parsed), wfInput.Path)
+						if ferr != nil {
+							log.Printf("[agent] fenced-content fetch failed for %s: %v", wfInput.Path, ferr)
+							st.bounceToolCall(ctx, "write_file",
+								"You wrote \"content\": \"@fenced\" but no fenced block followed. Either reply with the complete file in one ```python fenced block when asked, or re-issue write_file with the full content inline.")
+							continue
+						}
+						wfInput.Content = fetched
+						if rebuilt, merr := json.Marshal(wfInput); merr == nil {
+							parsed.Args = rebuilt
+						}
+						log.Printf("[agent] fenced content resolved for %s (%d bytes via sub-call)", wfInput.Path, len(fetched))
+					} else if strings.HasPrefix(trimmed, "@fenced") {
+						// Observed on the first live session: the model put
+						// the sentinel AND the file in the same string. The
+						// file is already here — strip the sentinel line so
+						// the literal "@fenced" does not hit the syntax gate
+						// as a broken decorator and start a repeat loop.
+						wfInput.Content = strings.TrimLeft(strings.TrimPrefix(trimmed, "@fenced"), "\r\n")
+						if rebuilt, merr := json.Marshal(wfInput); merr == nil {
+							parsed.Args = rebuilt
+						}
+						log.Printf("[agent] fenced sentinel stripped for %s (content arrived inline)", wfInput.Path)
 					}
-					wfInput.Content = fetched
-					if rebuilt, merr := json.Marshal(wfInput); merr == nil {
-						parsed.Args = rebuilt
-					}
-					log.Printf("[agent] fenced content resolved for %s (%d bytes via sub-call)", wfInput.Path, len(fetched))
 				}
 			}
 			if parsed.Name == "write_file" {
