@@ -203,3 +203,7 @@ docs/reports/ablation/condition_[a-d]*/summary.json
 # these, so a contributor never needs the same set resolved.
 .aider-desk/
 skills-lock.json
+
+# External-eval / red-teaming workbench: measurement tooling only,
+# never part of shipped ATLAS. Promote pieces deliberately or not at all.
+redteam/
