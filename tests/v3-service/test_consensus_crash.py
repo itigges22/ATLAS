@@ -54,6 +54,23 @@ def test_agreeing_healthy_candidates_still_win_over_crashers():
     assert sorted(c["index"] for c in winners) == [1, 2], winners
 
 
+def test_partial_validity_is_not_agreement_material():
+    """A candidate must answer EVERY probe case to enter clustering.
+
+    Third-party audit follow-up: with any() a pair of candidates that
+    crashed on one case but matched on the other formed the winning
+    cluster — code proven broken on half the consensus inputs won it.
+    """
+    crash_on_empty = ("data = open('input.txt').read().split()\n"
+                      "print(data[2])\n")  # IndexError when input is short
+    case_long = _case()
+    case_short = type("TC", (), {"input_str": "1", "expected_output": "1"})()
+    winners = pipeline._consensus_winners(
+        _cands(crash_on_empty, crash_on_empty, GOOD_A),
+        [case_long, case_short], _sandbox, lambda *a, **k: None, "input.txt")
+    assert not any(c["index"] in (0, 1) for c in winners), winners
+
+
 def test_the_probe_marks_crashes_distinctly():
     body = pipeline._make_output_probe(CRASH_RUNTIME, _case(), "input.txt")
     work = tempfile.mkdtemp()

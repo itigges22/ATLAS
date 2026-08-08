@@ -60,13 +60,16 @@ class FakeEmbed:
 
 
 class RecordingPlanSearch:
-    """Records the k the allocator asked generation for."""
+    """Records the k and tier the allocator asked generation for."""
 
     def __init__(self):
         self.num_plans = None
+        self.budget_tier = None
 
-    def generate(self, problem, task_id, llm, num_plans=None):
+    def generate(self, problem, task_id, llm, num_plans=None,
+                 budget_tier="standard"):
         self.num_plans = num_plans
+        self.budget_tier = budget_tier
         return SimpleNamespace(candidates=["def a():\n    pass\n"],
                                total_tokens=0)
 
@@ -111,8 +114,11 @@ def test_gx_escalation_reaches_allocation_and_generation(monkeypatch):
     assert data["capped_from"] == ""
     assert data["reason"] == "gated"
     # The allocation is what generation actually runs on, not a label:
-    # the probe already holds slot 0, so PlanSearch fills k-1.
+    # the probe already holds slot 0, so PlanSearch fills k-1 — at the
+    # allocator's tier, not the signature default (the tier was silently
+    # dropped at the production call before; third-party audit finding).
     assert plan_search.num_plans == 7
+    assert plan_search.budget_tier == "extreme"
 
 
 def test_short_wall_clock_caps_the_tier(monkeypatch):

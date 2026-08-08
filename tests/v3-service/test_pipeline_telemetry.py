@@ -65,7 +65,7 @@ def _make_service(monkeypatch):
         generate=lambda problem, llm, task_id:
             (_ for _ in ()).throw(RuntimeError("unavailable")))
     service.plan_search = SimpleNamespace(
-        generate=lambda problem, task_id, llm, num_plans=None:
+        generate=lambda problem, task_id, llm, num_plans=None, budget_tier="standard":
             SimpleNamespace(candidates=["def a():\n    pass\n",
                                         "def b():\n    pass\n",
                                         "def c():\n    pass\n"],

@@ -426,6 +426,12 @@ def _consensus_winners(candidates, test_cases, sandbox, emit,
     no case produced output, or every candidate disagreed with every other.
     Agreement between independently generated programs is evidence; one
     program agreeing with itself is not, so a lone cluster does not win.
+
+    A candidate enters clustering only if it produced a real answer on EVERY
+    probe case. Partial validity is not agreement material: with any(), two
+    candidates that crashed on most cases but happened to match on one could
+    form the winning cluster, promoting code proven broken on the majority of
+    the very inputs the consensus ran (third-party audit finding).
     """
     if len(candidates) < 2 or not test_cases:
         return []
@@ -445,7 +451,7 @@ def _consensus_winners(candidates, test_cases, sandbox, emit,
                 # A crash or empty output is not an answer to agree on.
                 marker = ""
             outs.append(marker)
-        if any(outs):
+        if all(outs):
             sigs.setdefault(tuple(outs), []).append(c)
     if not sigs:
         return []
@@ -455,6 +461,57 @@ def _consensus_winners(candidates, test_cases, sandbox, emit,
     emit("consensus", f"{len(best)}/{len(candidates)} candidates agree",
          cluster=len(best), clusters=len(sigs))
     return best
+
+
+def _dead_oracle_consensus(problem, task_id, llm, plan_search, probe_code,
+                           test_cases, sandbox, emit, task_input_file, start):
+    """Bounded input-only consensus for the dead-oracle condition.
+
+    When the generated oracle scores uniformly 0/N, the fast return
+    preserves latency at the cost of making consensus — the mechanism built
+    for exactly this condition — unreachable (third-party audit finding).
+    This is the bounded middle: at most two extra candidates, at most four
+    generated inputs, every step gated on the remaining wall-clock, and an
+    immediate unverified return when no cluster forms.
+
+    Feature-flagged (ATLAS_V3_DEAD_ORACLE_CONSENSUS=1) and OFF by default:
+    the unbounded ancestor of this path was the ~300s dead-oracle tax, and
+    this variant has to earn the default in an A/B before it gets it.
+
+    Returns (winning candidate or None, extra tokens spent).
+    """
+    left = _remaining_budget_ms(start)
+    if left is not None and left < 45000:
+        emit("dead_oracle_skip",
+             f"only {round(left)}ms of budget left — not starting")
+        return None, 0
+    tokens = 0
+    cands = []
+    if probe_code:
+        cands.append({"index": 0, "code": probe_code})
+    try:
+        ps = plan_search.generate(problem, task_id, llm, num_plans=2)
+        tokens += ps.total_tokens
+        for code in ps.candidates:
+            if code:
+                cands.append({"index": len(cands), "code": code})
+    except Exception as exc:
+        emit("dead_oracle_generation_failed", str(exc)[:120])
+    left = _remaining_budget_ms(start)
+    if len(cands) < 2 or (left is not None and left < 15000):
+        emit("dead_oracle_skip",
+             f"{len(cands)} candidate(s), {round(left) if left is not None else 'unlimited'}ms left — nothing to compare")
+        return None, tokens
+    # _consensus_winners already enforces the hard rules: a candidate joins
+    # clustering only with a real answer on EVERY case, and a cluster needs
+    # at least two members. "No strong cluster" falls out as [].
+    agreed = _consensus_winners(cands, test_cases[:4], sandbox, emit,
+                                task_input_file)
+    if not agreed:
+        emit("dead_oracle_no_cluster",
+             f"{len(cands)} candidates, no agreement — returning unverified")
+        return None, tokens
+    return agreed[0], tokens
 
 
 class V3PipelineService:
@@ -876,6 +933,28 @@ class V3PipelineService:
         # stand. A partial oracle score (some case passed) still runs the
         # full pipeline, because there the suite can actually rank.
         if "inconclusive" in (probe_stderr or ""):
+            # Flagged recovery before the fast return: bounded input-only
+            # consensus (see _dead_oracle_consensus). Default off until an
+            # A/B shows the bounded version pays for its latency.
+            if (os.environ.get("ATLAS_V3_DEAD_ORACLE_CONSENSUS", "0") == "1"
+                    and self_tests and self_tests.test_cases):
+                chosen, extra_tokens = _dead_oracle_consensus(
+                    problem, task_id, llm, self.plan_search, probe_code,
+                    self_tests.test_cases, sandbox, emit, task_input_file,
+                    start)
+                result["total_tokens"] += extra_tokens
+                if chosen is not None:
+                    emit("dead_oracle_consensus",
+                         "consensus cluster formed under a dead oracle — "
+                         "returning the agreed candidate")
+                    result["passed"] = True
+                    result["code"] = chosen["code"]
+                    result["phase_solved"] = "dead_oracle_consensus"
+                    result["candidates_generated"] = max(
+                        1, chosen["index"] + 1)
+                    result["total_time_ms"] = (time.time() - start) * 1000
+                    result["events"] = events
+                    return result
             emit("probe_unverifiable",
                  "self-test cannot certify anything (0/N) and the probe "
                  "executes — skipping candidate generation, returning "
@@ -1023,6 +1102,10 @@ class V3PipelineService:
                 try:
                     ps_result = self.plan_search.generate(
                         problem, task_id, llm, num_plans=remaining_k,
+                        # The allocator's tier, not the signature default:
+                        # generate() was silently running "standard" thinking
+                        # depth whatever the CxGx gate decided (audit finding).
+                        budget_tier=budget_tier,
                     )
                     for i, code in enumerate(ps_result.candidates):
                         if code:

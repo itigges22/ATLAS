@@ -122,7 +122,7 @@ def _make_service(monkeypatch, plan_codes, pr_cot):
     service = v3pipeline.V3PipelineService()
     service.self_test_gen = FakeSelfTestGen()
     service.plan_search = SimpleNamespace(
-        generate=lambda problem, task_id, llm, num_plans=None:
+        generate=lambda problem, task_id, llm, num_plans=None, budget_tier="standard":
             SimpleNamespace(candidates=list(plan_codes), total_tokens=0))
     service.pr_cot = pr_cot
     service.refinement_loop = RecordingRefinement()

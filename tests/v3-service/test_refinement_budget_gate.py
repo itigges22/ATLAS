@@ -98,7 +98,7 @@ def _run_pipeline(monkeypatch):
         generate=lambda problem, llm, task_id:
             SimpleNamespace(test_cases=[], generation_tokens=0))
     service.plan_search = SimpleNamespace(
-        generate=lambda problem, task_id, llm, num_plans=None:
+        generate=lambda problem, task_id, llm, num_plans=None, budget_tier="standard":
             SimpleNamespace(candidates=["def a():\n    pass\n"],
                             total_tokens=0))
     service.pr_cot = SimpleNamespace(
