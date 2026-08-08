@@ -737,6 +737,9 @@ func writeFileTool() *ToolDef {
 	return &ToolDef{
 		Name: "write_file",
 		Description: "Create a NEW file from scratch. Creates parent directories if needed. " +
+			"For any file longer than a few lines, set content to \"@fenced\" and provide " +
+			"the file as a plain fenced code block when asked — code embedded in a JSON " +
+			"string loses parens and newlines to escaping. " +
 			"DO NOT use to overwrite existing files — for existing files use structural_edit (whole function/class/element rewrite) or edit_file (≤10-line surgical change). " +
 			"If a write_file call is rejected because the path already exists, switch to structural_edit (whole-block rewrite) or edit_file (surgical change). DO NOT retry with edit_file simply because the file is large.",
 		InputSchema: WriteFileInput{},

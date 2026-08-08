@@ -1135,6 +1135,28 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					continue
 				}
 			}
+			// Fenced-content resolution FIRST: everything downstream (the
+			// gates, tier classification, execution) must see real bytes.
+			// "@fenced" is the model routing the file body around the JSON
+			// channel — one unconstrained sub-call fetches it in a fenced
+			// block, its native emission format. See fetchFencedContent.
+			if parsed.Name == "write_file" {
+				var wfInput WriteFileInput
+				if json.Unmarshal(parsed.Args, &wfInput) == nil && strings.TrimSpace(wfInput.Content) == "@fenced" {
+					fetched, ferr := fetchFencedContent(ctx, rawResponseForFence(parsed), wfInput.Path)
+					if ferr != nil {
+						log.Printf("[agent] fenced-content fetch failed for %s: %v", wfInput.Path, ferr)
+						st.bounceToolCall(ctx, "write_file",
+							"You wrote \"content\": \"@fenced\" but no fenced block followed. Either reply with the complete file in one ```python fenced block when asked, or re-issue write_file with the full content inline.")
+						continue
+					}
+					wfInput.Content = fetched
+					if rebuilt, merr := json.Marshal(wfInput); merr == nil {
+						parsed.Args = rebuilt
+					}
+					log.Printf("[agent] fenced content resolved for %s (%d bytes via sub-call)", wfInput.Path, len(fetched))
+				}
+			}
 			if parsed.Name == "write_file" {
 				var wfInput WriteFileInput
 				if json.Unmarshal(parsed.Args, &wfInput) == nil {
@@ -2697,7 +2719,13 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 		reqBody["top_k"] = 1
 	}
 
-	if grammar != "" {
+	if grammar == rawEmissionSentinel {
+		// Free-text reply: neither grammar nor response_format. Used for
+		// the fenced-content sub-call, where the whole point is escaping
+		// the JSON channel — measured on the served model, a debounce
+		// solution parses 6/6 when emitted in a fenced block and 0/6 when
+		// emitted inside a JSON string.
+	} else if grammar != "" {
 		// Token-level restriction wins over response_format. llama-server
 		// rejects requests that pass both response_format=json_object and
 		// a non-trivial grammar; pass only the grammar in restricted mode.
@@ -2896,9 +2924,13 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 				lastLoopCheck = contentBuf.Len()
 				buffered := contentBuf.String()
 				threshold := 3
-				if strings.Contains(buffered, `"tool_call"`) {
-					// Code in tool args is legitimately self-similar; only
-					// spiral-grade repetition is degeneration there.
+				if strings.Contains(buffered, `"tool_call"`) || strings.Contains(buffered, "```") {
+					// Code is legitimately self-similar; only spiral-grade
+					// repetition is degeneration there. Covers both channels
+					// code streams through: tool_call JSON args, and the
+					// fenced block of the @fenced sub-call — without the
+					// fence case the prose threshold would re-cut healthy
+					// code in the channel built to avoid exactly that.
 					threshold = toolCallLoopThreshold
 				}
 				if loopingTailCount(buffered) >= threshold {
@@ -3046,6 +3078,7 @@ func buildSystemPrompt(ctx *AgentContext) string {
 
 	// Rules
 	sb.WriteString("## Rules\n\n")
+	sb.WriteString("- **Writing a whole file**: in write_file, set `\"content\": \"@fenced\"`. You will immediately be asked for the file as plain code — reply with ONE ```python fenced block containing the complete file. This is the reliable way to write code: JSON-escaping a whole file corrupts it (lost parens, broken newlines). Only inline short content (a few lines) directly in the JSON.\n")
 	sb.WriteString("- To work on an EXISTING file, `read_file` it. Reading is the default and the context window is large; `read_file` caps itself on a file too big to load and tells you how to narrow the range, so you do not need to ration reads. Reach for `outline_file` only to locate a target inside a file that large — it returns line ranges and no code, so it can tell you where to read but never what the code does. Never re-read the same file in a loop; if a read's content is already in the conversation, act on it.\n")
 	sb.WriteString("- Always read the relevant code before editing it (outline_file → read_file, then edit_file/structural_edit).\n")
 	sb.WriteString("- MANDATORY: Use `edit_file` (targeted old_str/new_str) for any change to a file that already exists, no matter how small. `write_file` is ONLY for creating brand-new files. The agent layer rejects every `write_file` call against an existing file >5 lines — your call won't execute and you'll get a tool error directing you to edit_file. Don't re-emit a whole file to change a few lines.\n")
@@ -3816,6 +3849,59 @@ func classifyParseFailure(raw, streamCut string) (category, feedback string) {
 // extractModelResponse extracts a ModelResponse from the LLM output,
 // handling cases where the model adds text before/after the JSON or
 // where the JSON is truncated.
+// rawResponseForFence renders the tool call as the assistant turn the
+// fenced-content sub-call replays. Marshalling the parsed struct rather than
+// reusing raw model text keeps the sub-call deterministic.
+func rawResponseForFence(parsed ModelResponse) string {
+	b, err := json.Marshal(parsed)
+	if err != nil {
+		return "{\"type\":\"tool_call\",\"name\":\"write_file\"}"
+	}
+	return string(b)
+}
+
+// rawEmissionSentinel, passed as the grammar argument, sends the request with
+// neither GBNF nor response_format: the model replies in free text.
+const rawEmissionSentinel = "__raw_text__"
+
+// fencedContentRe grabs the first fenced code block of the sub-call reply.
+var fencedContentRe = regexp.MustCompile("(?s)```(?:[a-zA-Z0-9]+)?\\s*\\n(.*?)```")
+
+// fetchFencedContent asks the model for a file's contents in its native
+// channel: one unconstrained call whose reply is a single fenced block.
+//
+// Code emitted INSIDE a JSON string pays escaping pressure on every dense
+// line, and the served model measurably cannot sustain it: the same debounce
+// solution parses 6/6 emitted fenced and 0/6 emitted as a JSON string. The
+// slip catalogue of three benchmark arms — a missing close-paren on an
+// append, a literal \n fusing a statement into a comment, list joins losing
+// their spaces — is this one channel problem. The envelope stays under the
+// JSON constraint; only the file body moves to plain text.
+//
+// The sub-call is ephemeral: nothing is appended to ctx.Messages, so from
+// the main conversation's view the model wrote "@fenced" and the write
+// simply happened.
+func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error) {
+	note := AgentMessage{Role: "user", Content: fmt.Sprintf(
+		"[system note]: Now provide ONLY the complete contents of %s, as plain "+
+			"code in a single fenced block (```python ... ```). No JSON, no "+
+			"commentary, no partial file.", path)}
+	msgs := append(append([]AgentMessage{}, ctx.Messages...),
+		AgentMessage{Role: "assistant", Content: rawCall}, note)
+	for attempt := 0; attempt < 2; attempt++ {
+		reply, _, err := callLLMOnceWithGrammar(ctx, msgs, 0.2, rawEmissionSentinel)
+		if err != nil {
+			return "", err
+		}
+		if m := fencedContentRe.FindStringSubmatch(reply); m != nil && strings.TrimSpace(m[1]) != "" {
+			return m[1], nil
+		}
+		msgs = append(msgs, AgentMessage{Role: "assistant", Content: reply},
+			AgentMessage{Role: "user", Content: "[system note]: That had no fenced block. Reply with ONE ```python fenced block containing the complete file, nothing else."})
+	}
+	return "", fmt.Errorf("no fenced block after 2 attempts")
+}
+
 func extractModelResponse(raw string) (ModelResponse, error) {
 	raw = strings.TrimSpace(raw)
 
