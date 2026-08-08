@@ -12,6 +12,7 @@ task source differs.
 """
 
 import argparse
+import importlib
 import importlib.util
 import json
 import sys
@@ -20,8 +21,6 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
-
-from novel_tasks import build_tasks  # noqa: E402
 
 
 # Scoring is EXACT MATCH by decision. The output-separator ambiguity that
@@ -43,6 +42,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--count", type=int, default=50)
     ap.add_argument("--seed", type=int, default=20260806)
+    ap.add_argument("--tasks-module", default="novel_tasks",
+                    help="task generator module exposing build_tasks() "
+                         "(novel_tasks, novel_tasks_v2, ...)")
     ap.add_argument("--url", default="")
     ap.add_argument("--workspace", required=True,
                     help="host path the proxy has mounted (e.g. ~/demo2/e2e)")
@@ -59,6 +61,7 @@ def main() -> int:
     e2e = _load_e2e()
     url = args.url or os.environ.get("ATLAS_PROXY_URL", "http://localhost:8090")
 
+    build_tasks = importlib.import_module(args.tasks_module).build_tasks
     tasks = build_tasks(args.count, args.seed)[args.start:]
     workspace = Path(args.workspace).expanduser()
 

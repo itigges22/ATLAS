@@ -10,6 +10,7 @@ Two arms, because "the bare model" is ambiguous:
 """
 
 import argparse
+import importlib
 import json
 import re
 import shutil
@@ -22,8 +23,6 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
-
-from novel_tasks import build_tasks  # noqa: E402
 
 SYSTEM = ("You are a Python programmer. Reply with the complete contents of "
           "solve.py in a single ```python fenced block and nothing else. The "
@@ -131,12 +130,16 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--count", type=int, default=50)
     ap.add_argument("--seed", type=int, default=20260806)
+    ap.add_argument("--tasks-module", default="novel_tasks",
+                    help="task generator module exposing build_tasks() "
+                         "(novel_tasks, novel_tasks_v2, ...)")
     ap.add_argument("--arms", default="oneshot,loop")
     ap.add_argument("--attempts", type=int, default=4)
     ap.add_argument("--json", dest="json_out", default="")
     args = ap.parse_args()
 
     url = _llama_url()
+    build_tasks = importlib.import_module(args.tasks_module).build_tasks
     tasks = build_tasks(args.count, args.seed)
     arms = [a.strip() for a in args.arms.split(",") if a.strip()]
 
