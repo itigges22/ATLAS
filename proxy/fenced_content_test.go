@@ -139,3 +139,27 @@ func TestFenceTagFollowsExtension(t *testing.T) {
 		t.Errorf("python tag: %q", got)
 	}
 }
+
+// A file's own leading blank lines are the file's content, not part of the
+// fence line. Found by fuzzing: the tag was followed by `\s*\n`, and \s
+// matches newlines, so a greedy match ate every blank line at the top of the
+// file before the capture began — silent mutation in the channel that
+// carries every whole file ATLAS writes.
+func TestFencedExtractionKeepsLeadingBlankLines(t *testing.T) {
+	// Whitespace-only content is out of contract by design: an empty block
+	// is what makes the sub-call ask again, so it is not a case here.
+	for _, content := range []string{"\nx = 1\n", "\n\n\nx = 1\n", "\n\ndef f():\n    pass\n"} {
+		reply := "```python\n" + content + "```"
+		if got := extractFencedContent(reply); got != content {
+			t.Errorf("leading blank lines dropped\n want=%q\n  got=%q", content, got)
+		}
+	}
+}
+
+// A CRLF reply must not leave the \r glued to the fence line or lose it
+// from the content.
+func TestFencedExtractionHandlesCRLFFenceLine(t *testing.T) {
+	if got := extractFencedContent("```python\r\nx = 1\n```"); got != "x = 1\n" {
+		t.Errorf("CRLF fence line mishandled: %q", got)
+	}
+}

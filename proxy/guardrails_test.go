@@ -1892,3 +1892,36 @@ func TestSalvagedTextStillSaysNothingWasWritten(t *testing.T) {
 		t.Error("must match what the checker recognises as saying it stopped")
 	}
 }
+
+// The sanitizer must never destroy a write. Found by fuzzing: content whose
+// only fence was an unmatched opener took "everything after the opener" —
+// nothing — and returned an empty string with modified=true, so a generation
+// truncated right after ```python would have landed on disk as an empty file.
+func TestSanitizeNeverEmptiesAFile(t *testing.T) {
+	for _, content := range []string{"```python\n", "```", "```python", "```\n```"} {
+		cleaned, _ := sanitizeFileContent("solve.py", content)
+		if strings.TrimSpace(content) != "" && strings.TrimSpace(cleaned) == "" {
+			t.Errorf("sanitizer emptied a non-empty write\n  in=%q\n out=%q",
+				content, cleaned)
+		}
+	}
+}
+
+// Sanitizing already-sanitized content must be a no-op. A single pass strips
+// one wrapper layer, so doubly-wrapped content came back still carrying a
+// ``` line — a syntax error in every language this runs on.
+func TestSanitizeIsIdempotent(t *testing.T) {
+	for _, content := range []string{
+		"```python\nx = 1\n```\n",
+		"```\n```python\nx = 1\n```\n```\n",
+		"```\n```0\n```0\n```0\n```0\n0",
+		"Here it is:\n```python\nx = 1\n```\n",
+	} {
+		once, _ := sanitizeFileContent("solve.py", content)
+		twice, _ := sanitizeFileContent("solve.py", once)
+		if once != twice {
+			t.Errorf("sanitize is not a fixpoint\n   in=%q\n once=%q\ntwice=%q",
+				content, once, twice)
+		}
+	}
+}

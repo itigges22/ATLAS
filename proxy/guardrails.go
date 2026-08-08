@@ -54,7 +54,45 @@ import (
 // and the closing fence may be followed only by a short prose trailer.
 // A fence deeper in the file — e.g. a fenced example inside a docstring
 // — is legitimate content and passes through unchanged.
+// Two properties hold over the whole operation, both established by fuzzing
+// (a single pass satisfied neither):
+//
+//   - It never empties a file. One pass on content whose only fence is an
+//     unmatched opener took "everything after the opener" — nothing — and
+//     returned "", so a generation truncated right after ```python would
+//     have landed on disk as an empty file with modified=true.
+//   - It is idempotent. One pass strips one layer, so doubly-wrapped content
+//     came back still carrying a ``` line, which is a syntax error in every
+//     language this runs on. Stripping to a fixpoint means the result never
+//     needs another pass.
 func sanitizeFileContent(filePath, content string) (string, bool) {
+	// Strip to a fixpoint rather than to a fixed number of layers: any fixed
+	// bound is a case where the result still needs another pass, which is
+	// the non-idempotence this is here to avoid. Termination is not a
+	// question of taste — every successful strip consumes at least the
+	// opener line, so the content strictly shrinks, and the line count is a
+	// hard upper bound on how many layers can exist at all.
+	cleaned := content
+	modified := false
+	maxLayers := strings.Count(content, "\n") + 2
+	for i := 0; i < maxLayers; i++ {
+		next, changed := stripOneFenceLayer(filePath, cleaned)
+		if !changed || next == cleaned {
+			break
+		}
+		// A sanitizer that empties a file is destroying the write, not
+		// cleaning it. Keep the last non-empty form.
+		if strings.TrimSpace(next) == "" && strings.TrimSpace(cleaned) != "" {
+			break
+		}
+		cleaned, modified = next, true
+	}
+	return cleaned, modified
+}
+
+// stripOneFenceLayer removes a single whole-file markdown wrapper. Callers
+// want sanitizeFileContent, which drives this to a fixpoint.
+func stripOneFenceLayer(filePath, content string) (string, bool) {
 	ext := strings.ToLower(filepath.Ext(filePath))
 	switch ext {
 	case ".md", ".markdown", ".rst", ".txt":

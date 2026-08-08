@@ -3933,14 +3933,19 @@ const rawEmissionSentinel = "__raw_text__"
 // fencedContentRe grabs the first fenced code block of the sub-call reply.
 // The tag charset includes +, #, . and - so c++, c#, objective-c and
 // asp.net-style tags open a block instead of failing the match entirely.
-var fencedContentRe = regexp.MustCompile("(?s)```(?:[a-zA-Z0-9+#._-]+)?\\s*\\n(.*?)```")
+//
+// The run after the tag is `[ \t]*\r?\n`, NOT `\s*\n`: \s matches newlines,
+// so a greedy \s* swallowed the file's own leading blank lines along with
+// the fence line's terminator and silently dropped them from what landed on
+// disk (fuzzed). Only the remainder of the fence line belongs to the fence.
+var fencedContentRe = regexp.MustCompile("(?s)```(?:[a-zA-Z0-9+#._-]+)?[ \\t]*\\r?\\n(.*?)```")
 
 // fencedContentTrailingRe is the greedy variant, anchored to a closing fence
 // at the very end of the reply. Preferred over fencedContentRe when it
 // matches: the sub-call asks for ONE block holding the whole file, so a
 // file that itself contains ``` (markdown, a docstring with an example)
 // must not be cut at its first interior fence.
-var fencedContentTrailingRe = regexp.MustCompile("(?s)```(?:[a-zA-Z0-9+#._-]+)?\\s*\\n(.*)\\n```\\s*$")
+var fencedContentTrailingRe = regexp.MustCompile("(?s)```(?:[a-zA-Z0-9+#._-]+)?[ \\t]*\\r?\\n(.*)\\r?\\n```[ \\t\\r\\n]*$")
 
 // extractFencedContent pulls the file body out of a fenced sub-call reply:
 // the whole-reply greedy form first, the first-block form as fallback.
@@ -4407,10 +4412,18 @@ func recoverTruncatedWriteFile(partial string) (ModelResponse, error) {
 	// The pattern is: {"type":"tool_call","name":"write_file","args":{"path":"...","content":"...
 	// We need to close the content string and the JSON objects
 
-	// Find the "content":" part
-	idx := strings.Index(partial, `"content":"`)
+	// Find the content field, remembering WHICH spelling matched so the
+	// value's offset is known exactly. Re-deriving it afterwards by probing
+	// a fixed 15-byte window read past the end of any buffer whose content
+	// marker sat within 15 bytes of the end — a panic, and net/http answers
+	// a panicking handler by closing the connection, so the session died
+	// mid-stream with no `done` event. Truncation puts the marker near the
+	// end by definition, which is exactly when this function runs.
+	marker := `"content":"`
+	idx := strings.Index(partial, marker)
 	if idx < 0 {
-		idx = strings.Index(partial, `"content": "`)
+		marker = `"content": "`
+		idx = strings.Index(partial, marker)
 	}
 	if idx < 0 {
 		return ModelResponse{}, fmt.Errorf("cannot find content field in truncated write_file")
@@ -4428,12 +4441,8 @@ func recoverTruncatedWriteFile(partial string) (ModelResponse, error) {
 		}
 	}
 
-	// Extract content: everything after "content":" until the end
-	contentStart := idx + len(`"content":"`)
-	if strings.Contains(partial[idx:idx+15], `: "`) {
-		contentStart = idx + len(`"content": "`)
-	}
-	content := partial[contentStart:]
+	// Extract content: everything after the marker until the end.
+	content := partial[idx+len(marker):]
 
 	// Unescape the content string (it's JSON-escaped)
 	// Remove trailing incomplete escape sequences

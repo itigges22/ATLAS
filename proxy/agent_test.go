@@ -2444,3 +2444,36 @@ func TestASpiralInsideAToolCallStillCuts(t *testing.T) {
 		t.Fatalf("a 40x repeat is a spiral at any threshold, count=%d", n)
 	}
 }
+
+// Truncation recovery must never panic on the buffers it exists to handle.
+//
+// Found by fuzzing: the content offset was re-derived by probing a fixed
+// 15-byte window (`partial[idx:idx+15]`), which reads past the end whenever
+// the content marker lands within 15 bytes of the buffer's end. Truncation
+// puts the marker near the end by definition, so the panic sat in the one
+// path built for truncated output — and net/http answers a panicking handler
+// by closing the connection, so the user's session died mid-stream with no
+// `done` event and no error.
+func TestTruncationRecoveryNeverPanicsNearTheBufferEnd(t *testing.T) {
+	cases := []string{
+		`{"name":"write_file"content":"`,
+		`{"type":"tool_call","name":"write_file","args":{"path":"a.py","content":"`,
+		`{"type":"tool_call","name":"write_file","args":{"path":"a.py","content": "`,
+		`"content":"`,
+		`"content": "`,
+		`{"content":"x`,
+	}
+	for _, partial := range cases {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("panic on truncated buffer %q: %v", partial, r)
+				}
+			}()
+			// Both entry points: the recovery helper and the parser that
+			// reaches it when ordinary JSON parsing fails.
+			_, _ = recoverTruncatedToolCall(partial)
+			_, _ = extractModelResponse(partial)
+		}()
+	}
+}

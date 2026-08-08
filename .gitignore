@@ -207,3 +207,7 @@ skills-lock.json
 # External-eval / red-teaming workbench: measurement tooling only,
 # never part of shipped ATLAS. Promote pieces deliberately or not at all.
 redteam/
+
+# Exploratory fuzz targets (red-team hunt, not shipped test surface).
+proxy/fuzz_redteam_test.go
+proxy/testdata/fuzz/
