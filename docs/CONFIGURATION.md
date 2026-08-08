@@ -377,6 +377,7 @@ the V3 service.
 | `ATLAS_MODEL_NAME` | `local-model` | Neutral fallback request identifier; deployments pass the selected model explicitly |
 | `ATLAS_PLAN_THINKING` | `0` | Enable template-level reasoning during V3 plan generation for models that support it. `0` keeps planner `max_tokens=2048`; `1` raises it to `8192` so reasoning does not consume the plan JSON budget. |
 | `ATLAS_V3_TELEMETRY_DIR` | `/data/telemetry` | Container-side directory for live-pipeline stage telemetry: the same per-stage `*.jsonl` files the bench runner writes (`plan_search_events.jsonl`, `pr_cot_events.jsonl`, …) plus one `pipeline_summary.jsonl` line per task (task id, phases run with outcome and duration, veto events, final `phase_solved`). Compose mounts the `v3-telemetry` named volume at the default path so lines survive container restarts. Set `0`/`off`/`none` to disable. Fail-soft: an unwritable directory disables telemetry and never affects generation. |
+| `ATLAS_V3_DEAD_ORACLE_CONSENSUS` | `0` | Experimental. When the generated self-test oracle scores uniformly 0/N while the probe executes (`oracle_inconclusive`), `1` runs a bounded input-only consensus attempt before the fast unverified return: at most two extra candidates and four generated inputs, every step gated on the remaining `ATLAS_V3_TIMEOUT` budget, immediate unverified return when no agreement cluster of ≥2 forms. Off by default: the unbounded ancestor of this path was the ~300s dead-oracle stall, and the bounded variant must earn the default in an A/B. |
 
 ### Internal Constants
 
