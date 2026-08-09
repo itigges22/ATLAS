@@ -1218,7 +1218,19 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				var wfInput WriteFileInput
 				if json.Unmarshal(parsed.Args, &wfInput) == nil {
 					existingPath := resolveAgentPath(ctx, wfInput.Path)
-					if existing, err := os.ReadFile(existingPath); err == nil {
+					existing, readErr := os.ReadFile(existingPath)
+					if readErr != nil && !os.IsNotExist(readErr) {
+						// Every existing-file protection lives inside the
+						// success branch below, so a read that fails for any
+						// reason other than "the file is genuinely new" silently
+						// disarms all of them and the write lands unguarded.
+						// A ~100-line file was replaced by three lines this way
+						// with no guard log at all, and the guard has never once
+						// fired in a full session log.
+						log.Printf("[agent] write_file pre-check could not read %q (resolved %q): %v — existing-file guards are NOT applied to this write",
+							wfInput.Path, existingPath, readErr)
+					}
+					if readErr == nil {
 						existingLines := strings.Count(string(existing), "\n") + 1
 						// Exempt corrupted files. If the existing file
 						// looks like it has prose preamble or stray
