@@ -1168,30 +1168,49 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					// fetches it in a fenced block, its native emission format.
 					// See fetchFencedContent.
 					trimmed := strings.TrimSpace(wfInput.Content)
-					if trimmed == "@fenced" {
-						fetched, ferr := fetchFencedContent(ctx, rawResponseForFence(parsed), wfInput.Path)
-						if ferr != nil {
-							log.Printf("[agent] fenced-content fetch failed for %s: %v", wfInput.Path, ferr)
-							st.bounceToolCall(ctx, "write_file",
-								"You wrote \"content\": \"@fenced\" but no fenced block followed. Either reply with the complete file in one fenced code block when asked, or re-issue write_file with the full content inline.")
-							continue
+					if strings.HasPrefix(trimmed, "@fenced") {
+						// Anything after the sentinel is the model inlining
+						// the file anyway. Exactly one of two things arrived,
+						// and only one of them is a file:
+						//
+						//   * a complete body, bare or in its own fence — use it
+						//   * a body cut off mid-emission, which is precisely
+						//     what the JSON channel does and the whole reason
+						//     @fenced exists. Trusting that wrote truncated
+						//     programs to disk: `@fenced\n```python\nprint(`
+						//     had its fence line removed by the sanitizer and
+						//     landed as a one-line `print(`, so the session
+						//     shipped a file that could not parse and then
+						//     repeated the identical write for five more turns.
+						//     Measured at 6 of 20 create sessions.
+						//
+						// An opening fence with no closing fence is the
+						// signature of the truncated case; fall back to the
+						// sub-call, which is the channel that can carry it.
+						inline := strings.TrimLeft(strings.TrimPrefix(trimmed, "@fenced"), "\r\n")
+						if body := extractFencedContent(inline); body != "" {
+							inline = body
+						} else if strings.Contains(inline, "```") {
+							log.Printf("[agent] inline @fenced body for %s is truncated (fence opened, never closed) — falling back to the sub-call", wfInput.Path)
+							inline = ""
 						}
-						wfInput.Content = fetched
+						if inline != "" {
+							wfInput.Content = inline
+							log.Printf("[agent] fenced sentinel stripped for %s (%d bytes arrived inline)", wfInput.Path, len(inline))
+						} else {
+							fetched, ferr := fetchFencedContent(ctx, rawResponseForFence(parsed), wfInput.Path)
+							if ferr != nil {
+								log.Printf("[agent] fenced-content fetch failed for %s: %v", wfInput.Path, ferr)
+								st.bounceToolCall(ctx, "write_file",
+									"You wrote \"content\": \"@fenced\" but no fenced block followed. Either reply with the complete file in one fenced code block when asked, or re-issue write_file with the full content inline.")
+								continue
+							}
+							wfInput.Content = fetched
+							log.Printf("[agent] fenced content resolved for %s (%d bytes via sub-call)", wfInput.Path, len(fetched))
+						}
 						if rebuilt, merr := json.Marshal(wfInput); merr == nil {
 							parsed.Args = rebuilt
 						}
-						log.Printf("[agent] fenced content resolved for %s (%d bytes via sub-call)", wfInput.Path, len(fetched))
-					} else if strings.HasPrefix(trimmed, "@fenced") {
-						// Observed on the first live session: the model put
-						// the sentinel AND the file in the same string. The
-						// file is already here — strip the sentinel line so
-						// the literal "@fenced" does not hit the syntax gate
-						// as a broken decorator and start a repeat loop.
-						wfInput.Content = strings.TrimLeft(strings.TrimPrefix(trimmed, "@fenced"), "\r\n")
-						if rebuilt, merr := json.Marshal(wfInput); merr == nil {
-							parsed.Args = rebuilt
-						}
-						log.Printf("[agent] fenced sentinel stripped for %s (content arrived inline)", wfInput.Path)
 					}
 				}
 			}
@@ -2875,6 +2894,7 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 		firstTokenSent bool
 		reasoningCut   bool
 		contentLoopCut bool
+		noFenceCut     bool
 		lastLoopCheck  int
 	)
 
@@ -2980,6 +3000,19 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 			// (that's content, not reasoning_content), so it ran to max_tokens.
 			// Detect a verbatim repeating tail and cut. Checked periodically
 			// to keep it O(n) overall.
+			// Raw-emission sub-call: we asked for exactly one fenced block
+			// and nothing else, so a reply with no fence opener after a few
+			// hundred characters is prose that will run to max_tokens. At
+			// 8192 tokens and ~25 tok/s that is ~5 minutes, and the fetch
+			// makes two attempts, so a failed @fenced resolution cost a
+			// user's session 10 minutes of silence before bouncing.
+			// Measured: 03:21:25 request, 03:31:46 "no fenced block after 2
+			// attempts" — 621 seconds, and 8 of 20 create sessions hit it.
+			if grammar == rawEmissionSentinel && !noFenceCut &&
+				contentBuf.Len() > rawFenceGraceChars &&
+				!strings.Contains(contentBuf.String(), "```") {
+				noFenceCut = true
+			}
 			if !contentLoopCut && contentBuf.Len() > 600 && contentBuf.Len()-lastLoopCheck > 200 {
 				lastLoopCheck = contentBuf.Len()
 				buffered := contentBuf.String()
@@ -3008,6 +3041,12 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 				"reasoning_chars": reasoningBuf.Len(),
 			})
 			ctx.LastStreamCut = "reasoning_budget"
+			break
+		}
+		if noFenceCut {
+			log.Printf("[agent] raw sub-call produced %d chars with no fenced block — cutting rather than running to max_tokens",
+				contentBuf.Len())
+			ctx.LastStreamCut = "no_fence"
 			break
 		}
 		if contentLoopCut {
@@ -3929,6 +3968,12 @@ func rawResponseForFence(parsed ModelResponse) string {
 // rawEmissionSentinel, passed as the grammar argument, sends the request with
 // neither GBNF nor response_format: the model replies in free text.
 const rawEmissionSentinel = "__raw_text__"
+
+// rawFenceGraceChars is how much prose the raw-emission sub-call may emit
+// before a missing fence opener is treated as "not coming". Generous enough
+// for a short preamble the model sometimes writes ahead of the block, far
+// short of the multi-minute run to max_tokens it replaces.
+const rawFenceGraceChars = 800
 
 // fencedContentRe grabs the first fenced code block of the sub-call reply.
 // The tag charset includes +, #, . and - so c++, c#, objective-c and

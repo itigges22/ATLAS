@@ -163,3 +163,36 @@ func TestFencedExtractionHandlesCRLFFenceLine(t *testing.T) {
 		t.Errorf("CRLF fence line mishandled: %q", got)
 	}
 }
+
+// A truncated inline body must never reach disk.
+//
+// Found by the session hunt: the model emitted
+// `"content": "@fenced\n```python\nprint("` — it began inlining the file and
+// the JSON string was cut off mid-expression, which is the exact failure
+// @fenced exists to avoid. The old strip declared "content arrived inline",
+// the sanitizer then removed the fence line, and a one-line `print(` landed
+// on disk. Six of twenty create sessions shipped an unparseable file that
+// way, each repeating the identical write for five more turns.
+func TestInlineFencedBodyDetectsTruncation(t *testing.T) {
+	cases := []struct {
+		name     string
+		inline   string
+		wantBody string // "" means: must fall back to the sub-call
+	}{
+		{"truncated fence", "```python\nprint(", ""},
+		{"opener only", "```python", ""},
+		{"complete fence", "```python\nprint(\"hi\")\n```", "print(\"hi\")\n"},
+		{"bare complete body", "print(\"hi\")\n", "print(\"hi\")\n"},
+	}
+	for _, c := range cases {
+		got := extractFencedContent(c.inline)
+		if got == "" && strings.Contains(c.inline, "```") {
+			got = "" // truncated: the caller falls back to the sub-call
+		} else if got == "" {
+			got = c.inline // bare body, no fence involved
+		}
+		if got != c.wantBody {
+			t.Errorf("%s: resolved %q, want %q", c.name, got, c.wantBody)
+		}
+	}
+}
