@@ -196,3 +196,37 @@ func TestInlineFencedBodyDetectsTruncation(t *testing.T) {
 		}
 	}
 }
+
+// A sub-call that ran to the token ceiling without closing its fence must
+// not be retried. Found in the session hunt: six sessions spent ~650s each
+// on two full-budget attempts that failed identically, and the model
+// recovered on the NEXT turn anyway once the bounce put it back on the tool
+// call. The retry bought nothing and cost five minutes.
+func TestFencedFetchDoesNotRetryAfterTokenCeiling(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/v1/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		calls++
+		w.Header().Set("Content-Type", "text/event-stream")
+		// An opened fence that never closes, cut off by max_tokens.
+		delta, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"delta": map[string]string{"content": "```python\nprint("},
+					"finish_reason": "length"}},
+		})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", delta)
+	}))
+	defer srv.Close()
+	t.Setenv("ATLAS_LLAMA_URL", srv.URL)
+
+	ctx := &AgentContext{}
+	if _, err := fetchFencedContent(ctx, `{"type":"tool_call"}`, "a.py"); err == nil {
+		t.Fatal("expected an error when the fence never closed")
+	}
+	if calls != 1 {
+		t.Fatalf("a ceiling-truncated attempt must not be retried: %d calls", calls)
+	}
+}
