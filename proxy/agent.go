@@ -2895,7 +2895,6 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 		reasoningCut   bool
 		contentLoopCut bool
 		noFenceCut     bool
-		hitTokenCeil   bool
 		lastLoopCheck  int
 	)
 
@@ -2949,9 +2948,6 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 			continue
 		}
 		for _, c := range chunk.Choices {
-			if c.FinishReason != nil && *c.FinishReason == "length" {
-				hitTokenCeil = true
-			}
 			if c.Delta.ReasoningContent != "" {
 				// First output of ANY kind means prompt eval is done — for
 				// reasoning models (some stream their whole chain as
@@ -3113,9 +3109,6 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 		// Truly nothing (or only narration). Caller's empty-response
 		// retry path (callLLMConstrained) will handle.
 		return "", totalTokens, nil
-	}
-	if hitTokenCeil && ctx.LastStreamCut == "" {
-		ctx.LastStreamCut = "max_tokens"
 	}
 	return contentBuf.String(), totalTokens, nil
 }
@@ -4109,17 +4102,6 @@ func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error)
 		}
 		if got {
 			return content, nil
-		}
-		// An attempt that ran to the token ceiling without ever closing its
-		// fence is a degenerate generation, not an unlucky one: retrying
-		// buys the identical outcome for another full budget. Measured at
-		// 8192 tokens and ~25 tok/s that is ~5 minutes per attempt, and
-		// six sessions in one run spent ~650s here before bouncing. Stop
-		// after the first, and let the caller's bounce put the model back
-		// on the tool call — which is what actually recovered these
-		// sessions on the following turn.
-		if ctx.LastStreamCut == "max_tokens" {
-			return "", fmt.Errorf("fenced reply hit the token ceiling with no closed fence — not retrying")
 		}
 		msgs = append(msgs, AgentMessage{Role: "assistant", Content: reply},
 			AgentMessage{Role: "user", Content: fmt.Sprintf(
