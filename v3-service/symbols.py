@@ -769,6 +769,34 @@ def cyclomatic_complexity(path: str, source_text: str) -> dict:
     return {"ok": True, "language": "python", "cyclomatic_complexity": cc}
 
 
+def _duplicate_definitions(before_text: str, after_text: str) -> str:
+    """Names defined more than once after the splice that were not before.
+
+    Compares counts rather than presence: a file that already defined a name
+    twice is the caller's business, but a splice that ADDS a second
+    definition is the edit duplicating code it should have left alone.
+    Returns a human-readable name list, or "" when nothing was duplicated.
+    """
+    import ast as _ast
+    from collections import Counter
+
+    def counts(text: str):
+        try:
+            tree = _ast.parse(text)
+        except SyntaxError:
+            return None
+        return Counter(
+            n.name for n in tree.body
+            if isinstance(n, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef))
+        )
+
+    b, a = counts(before_text), counts(after_text)
+    if b is None or a is None:
+        return ""      # unparseable either side: the syntax gate owns that
+    dupes = [name for name, n in a.items() if n > 1 and n > b.get(name, 0)]
+    return ", ".join(sorted(dupes))
+
+
 def structural_edit(path: str, source_text: str, selector: str, content: str) -> dict:
     """Apply a friendly-selector structural edit. Stateless transform — caller provides
     the source bytes (read from their own filesystem) and gets back new content.
@@ -902,6 +930,27 @@ def structural_edit(path: str, source_text: str, selector: str, content: str) ->
     # broken file; return the parse error so the model can fix its quoting
     # on the retry. Keyed off file type, not the model.
     if language == "python":
+        # Duplicate-definition guard. A replacement that carries its
+        # neighbours along splices them in a second time: the node is
+        # replaced, but the originals after it survive, so the file ends up
+        # defining the same names twice. Observed live: `function:a` was
+        # replaced with a body containing a, b AND c, and the file came back
+        # 10 -> 18 lines with b and c duplicated. It compiles, every other
+        # gate passes, and the later definition silently wins at import time.
+        #
+        # This is the same "whole file wearing a selector" failure
+        # _replacement_dwarfs_node exists for, caught by its actual signature
+        # rather than by a size ratio — a 3x replacement is well under any
+        # sane size threshold but still corrupts the file.
+        if dup := _duplicate_definitions(source_text, new_content):
+            return {"success": False, "error": (
+                f"structural_edit: replacing '{selector}' this way would define "
+                f"{dup} twice in {path}. Your replacement carries code that is "
+                f"already in the file outside the node being replaced, so it "
+                f"gets spliced in a second time while the original stays. Send "
+                f"ONLY the new body of {selector} — nothing that already exists "
+                f"elsewhere in the file."
+            )}
         try:
             compile(new_content, path, "exec")
         except SyntaxError as e:
