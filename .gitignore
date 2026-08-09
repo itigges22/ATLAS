@@ -210,4 +210,5 @@ redteam/
 
 # Exploratory fuzz targets (red-team hunt, not shipped test surface).
 proxy/fuzz_redteam_test.go
+proxy/fuzz_redteam2_test.go
 proxy/testdata/fuzz/
