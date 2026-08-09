@@ -4103,6 +4103,14 @@ func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error)
 		if got {
 			return content, nil
 		}
+		// What the model sent instead is the whole diagnosis, and without it
+		// "no fenced block after 2 attempts" says only that something went
+		// wrong. Measured a 56% failure rate on this fetch with no way to see
+		// why: the same request reproduced in a short context returns a clean
+		// block every time, so the cause lives in the session context and
+		// cannot be found without the reply.
+		log.Printf("[agent] fenced attempt %d/2 for %s produced no block (%d chars, cut=%q): %q",
+			attempt+1, path, len(reply), ctx.LastStreamCut, truncateStr(reply, 400))
 		msgs = append(msgs, AgentMessage{Role: "assistant", Content: reply},
 			AgentMessage{Role: "user", Content: fmt.Sprintf(
 				"[system note]: That had no fenced block. Reply with ONE ```%s fenced block containing the complete file, nothing else.", tag)})
