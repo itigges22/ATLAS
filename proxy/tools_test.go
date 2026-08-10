@@ -1715,3 +1715,42 @@ func TestFinishedBackgroundNote(t *testing.T) {
 		}
 	})
 }
+
+// A refusal the model cannot act on is a loop. It copies old_str into
+// new_str precisely because it cannot reproduce a span AND change it, so
+// "they are identical" tells it nothing it can use and it re-sends the same
+// call until the breaker kills the session. Measured on a "build me a snake
+// game" run: refused at turn 11, re-sent at 12 and 13, dead at 757s.
+func TestIdenticalEditRefusalNamesAWayOut(t *testing.T) {
+	dir := t.TempDir()
+	ctx := &AgentContext{WorkingDir: dir, BypassV3: true,
+		FilesRead:     map[string]string{},
+		BodySeen:      map[string]bool{},
+		FileReadTimes: map[string]time.Time{}}
+	for _, tc := range []struct{ name, want string }{
+		{"game.js", "replace_lines"},
+		{"app.py", "structural_edit"},
+		{"page.html", "structural_edit"},
+	} {
+		p := filepath.Join(dir, tc.name)
+		if err := os.WriteFile(p, []byte("const x = 1;\nconst y = 2;\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		ctx.FilesRead[p] = "const x = 1;\nconst y = 2;\n"
+		ctx.BodySeen[tc.name] = true
+		ctx.FileReadTimes[p] = time.Now().Add(time.Minute)
+		in, _ := json.Marshal(EditFileInput{
+			Path: tc.name, OldStr: "const x = 1;", NewStr: "const x = 1;"})
+		_, err := getTool("edit_file").Execute(in, ctx)
+		if err == nil {
+			t.Fatalf("%s: a no-op edit must be refused", tc.name)
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, tc.want) {
+			t.Errorf("%s: refusal should name %s, got: %s", tc.name, tc.want, msg)
+		}
+		if !strings.Contains(msg, "not help") {
+			t.Errorf("%s: refusal should say re-sending will not help: %s", tc.name, msg)
+		}
+	}
+}

@@ -1903,9 +1903,26 @@ func editFileTool() *ToolDef {
 				return nil, fmt.Errorf("found %d matches of the string to replace. Set replace_all=true to replace all, or provide more context to uniquely identify the instance", count)
 			}
 
-			// No-op check
+			// No-op check. The bare diagnosis was a dead end: the model
+			// copies old_str into new_str precisely because it cannot
+			// reproduce a span with a change applied, so telling it only
+			// that the two match gives it nothing to do differently and it
+			// re-sends the identical call until the loop breaker kills the
+			// session. Measured on a "build me a snake game" run: refused at
+			// turn 11, re-sent at 12 and 13, session dead at 757s with
+			// game.js half-written. Name the tool that removes the
+			// requirement it just failed.
 			if input.OldStr == input.NewStr {
-				return nil, fmt.Errorf("old_str and new_str are identical — no change to make")
+				alt := "`replace_lines` with the line numbers read_file printed — you assert only the FIRST and LAST line of the range, so there is no span to reproduce"
+				if ext := strings.ToLower(filepath.Ext(input.Path)); ext == ".py" || ext == ".html" || ext == ".htm" {
+					alt = "`structural_edit` with a selector (e.g. `function:update`) and the new body — it needs no old_str at all, so there is nothing to copy"
+				}
+				return nil, fmt.Errorf(
+					"old_str and new_str are identical, so this edit would change nothing. "+
+						"Re-sending it will not help. You are being asked to reproduce a span "+
+						"verbatim AND change it, which is what just failed — use %s. "+
+						"If you meant to REPLACE the whole file, use write_file with the "+
+						"complete new contents.", alt)
 			}
 
 			// Sanitise the replacement string before splicing it in. The
