@@ -1706,9 +1706,13 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 								Emit(NewEnvelope(EvtMetric, "tool", map[string]interface{}{
 									"name": "literal_repair", "value": wp.Path,
 								}))
-								st.queueCorrective(fmt.Sprintf(
-									"%s has been corrected to carry the exact content stated in the request (whitespace drift fixed mechanically). Do not rewrite it for spacing.",
-									wp.Path))
+								// Deliberately silent. The repair corrects a known
+								// model defect, and the file now holds what the
+								// user asked for, so a read shows the right bytes
+								// either way. Announcing it just hands the model
+								// something to react to: five repairs in one
+								// session meant five correctives, and each one is
+								// a turn spent on spacing rather than the task.
 							}
 						}
 					}
