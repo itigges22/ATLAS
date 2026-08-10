@@ -2043,3 +2043,17 @@ func repairLiteralDrift(content string, literals []string) (string, []string, bo
 	}
 	return content, repaired, len(repaired) > 0
 }
+
+// toolBanNote tells the model a tool is gone for a file and names what is
+// left. Written as a fact rather than a suggestion, because the suggestion
+// form was measured to be ignored: an explicit "re-sending will not help,
+// use structural_edit" was followed by the identical call on the next turn.
+func toolBanNote(tool, path string) string {
+	alt := "`replace_lines` (assert only the first and last line of the range) or `write_file` with the complete new contents"
+	if ext := strings.ToLower(filepath.Ext(path)); ext == ".py" || ext == ".html" || ext == ".htm" {
+		alt = "`structural_edit` (a selector such as `function:update` plus the new body — no old_str to reproduce) or `write_file` with the complete new contents"
+	}
+	return fmt.Sprintf(
+		"%s is no longer available for %s in this session: it was sent and rejected unchanged, so it is not a path to a working edit here. Use %s.",
+		tool, path, alt)
+}

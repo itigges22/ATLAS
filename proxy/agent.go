@@ -198,6 +198,16 @@ type runState struct {
 	// edit repeats. Further writes to such a path bounce until any
 	// verification command runs.
 	pendingWarnedRun map[string]bool
+	// toolBanned records (tool, path) pairs the loop has taken away from the
+	// model after it proved it cannot use them on that file. Advice is not a
+	// fix when the model ignores advice: measured dogfooding "build me a
+	// snake game", a no-op edit_file was refused with an explicit "re-sending
+	// will not help, use structural_edit instead" and the model re-sent the
+	// identical call on the very next turn, twice, until the breaker killed a
+	// 48-minute session. A tool the harness removes is a contract; a tool the
+	// harness merely discourages is a suggestion.
+	toolBanned map[string]bool
+
 	// redRunStreak counts consecutive FAILED verification commands with no
 	// green in between. Past a threshold, incremental edits have had their
 	// chance: the bare-model retry loop's whole advantage is the fresh
@@ -1405,12 +1415,37 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					}
 				}
 			}
+			// A tool the loop has taken away for this file stays taken away.
+			// Enforced before the identical-resend check so a model that
+			// varies one byte cannot walk around the ban.
+			if p := extractFailurePath(parsed.Name, parsed.Args); p != "" &&
+				st.toolBanned[parsed.Name+"\x00"+p] {
+				log.Printf("[agent] turn=%d blocked %s on %s (tool withdrawn for this file)", turn, parsed.Name, p)
+				st.bounceToolCall(ctx, parsed.Name, toolBanNote(parsed.Name, p))
+				consecutiveErrors++
+				totalFailures++
+				continue
+			}
 			// Refuse an exact re-send of an already-rejected call before it
 			// executes. Checked ahead of the repetition detector because that
 			// one needs three occurrences and only steers the NEXT turn,
 			// which a two-turn identical pair never reaches.
 			if refusal := identicalRetryRefusal(ctx, parsed.Name, parsed.Args); refusal != "" {
 				log.Printf("[agent] turn=%d refusing an identical re-send of a rejected %s", turn, parsed.Name)
+				// Escalate from refusing THIS call to removing the tool for
+				// THIS file. The model has now sent the same rejected call
+				// twice, so a third refusal buys another identical turn.
+				if p := extractFailurePath(parsed.Name, parsed.Args); p != "" {
+					if st.toolBanned == nil {
+						st.toolBanned = map[string]bool{}
+					}
+					key := parsed.Name + "\x00" + p
+					if !st.toolBanned[key] {
+						st.toolBanned[key] = true
+						log.Printf("[agent] %s is now unavailable for %s — identical rejected call re-sent", parsed.Name, p)
+					}
+					refusal += " " + toolBanNote(parsed.Name, p)
+				}
 				st.bounceToolCall(ctx, parsed.Name, refusal)
 				// A refusal is a failure and has to count as one. Skipping
 				// the counters would leave a model that spams one rejected

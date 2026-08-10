@@ -2010,3 +2010,24 @@ func TestHeadOnlyProbeIsNotVerification(t *testing.T) {
 		}
 	}
 }
+
+// A tool the model proved it cannot use on a file is withdrawn, not
+// re-explained. Measured dogfooding "build me a snake game": a no-op
+// edit_file was refused with an explicit "re-sending will not help, use
+// structural_edit instead", and the model re-sent the identical call on the
+// next turn, twice, until the breaker ended a 48-minute session.
+func TestToolBanNoteNamesTheRemainingTools(t *testing.T) {
+	py := toolBanNote("edit_file", "app.py")
+	if !strings.Contains(py, "structural_edit") || !strings.Contains(py, "write_file") {
+		t.Errorf(".py ban should offer structural_edit and write_file: %s", py)
+	}
+	js := toolBanNote("edit_file", "game.js")
+	if !strings.Contains(js, "replace_lines") || strings.Contains(js, "structural_edit") {
+		t.Errorf(".js ban should offer replace_lines, not structural_edit: %s", js)
+	}
+	for _, s := range []string{py, js} {
+		if !strings.Contains(s, "no longer available") {
+			t.Errorf("ban must state the tool is gone, not suggest: %s", s)
+		}
+	}
+}
