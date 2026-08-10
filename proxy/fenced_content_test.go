@@ -196,3 +196,29 @@ func TestInlineFencedBodyDetectsTruncation(t *testing.T) {
 		}
 	}
 }
+
+// A fence containing only the sentinel is not a file. Measured live: asked
+// for the contents of test_banner.py, the model replied
+// "```python\n@fenced\n```", which extracts as non-empty and would have
+// landed a file whose entire contents are the word @fenced.
+func TestSentinelOnlyFenceIsNotContent(t *testing.T) {
+	calls := 0
+	srv := stubInference(t, []string{
+		"```python\n@fenced\n```",
+		"```python\nprint(\"real\")\n```",
+	}, 50, &calls)
+	defer srv.Close()
+	t.Setenv("ATLAS_LLAMA_URL", srv.URL)
+
+	ctx := &AgentContext{}
+	got, err := fetchFencedContent(ctx, `{"type":"tool_call"}`, "a.py")
+	if err != nil {
+		t.Fatalf("expected the retry to succeed: %v", err)
+	}
+	if got != "print(\"real\")\n" {
+		t.Fatalf("sentinel-only fence was accepted as content: %q", got)
+	}
+	if calls != 2 {
+		t.Fatalf("expected a retry after the sentinel-only fence, got %d calls", calls)
+	}
+}

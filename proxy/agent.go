@@ -3122,6 +3122,21 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 	ctx.LastTurnReasoning = reasoningBuf.String()
 
 	if contentBuf.Len() == 0 {
+		// Raw-emission sub-call: the recovery below only salvages a JSON
+		// tool_call envelope, which is the right rule for the agent loop and
+		// the wrong one here — this call asked for a fenced block, so a
+		// block sitting in reasoning_content is exactly the answer and was
+		// being thrown away. Observed: sub-call attempts returning 0 content
+		// characters after minutes of generation, with no stream cut, which
+		// is tokens going somewhere that is not `content`.
+		if grammar == rawEmissionSentinel && reasoningBuf.Len() > 0 {
+			if body := extractFencedContent(reasoningBuf.String()); body != "" &&
+				strings.TrimSpace(body) != rawEmissionSentinel {
+				log.Printf("[agent] raw sub-call emitted its fenced block into reasoning_content (%d chars) — salvaging",
+					reasoningBuf.Len())
+				return reasoningBuf.String(), totalTokens, nil
+			}
+		}
 		// No content deltas — check reasoning_content. Two distinct cases:
 		//
 		//   (a) Model dumped its actual response into the thinking
@@ -4132,6 +4147,15 @@ func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error)
 		ctx.FencedCalls++
 		ctx.FencedTokens += tokens
 		content := extractFencedContent(reply)
+		// The model sometimes wraps the SENTINEL in the fence instead of the
+		// file — measured: "```python\n@fenced\n```". That extracts as
+		// non-empty and would land a file whose entire contents are the word
+		// @fenced, so it counts as no block and the attempt is retried.
+		if strings.TrimSpace(content) == rawEmissionSentinel ||
+			strings.TrimSpace(content) == "@fenced" {
+			log.Printf("[agent] fenced reply for %s contained only the sentinel — treating as no block", path)
+			content = ""
+		}
 		got := content != ""
 		contentBytes := len(content)
 		Emit(Envelope{
