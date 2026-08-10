@@ -1931,3 +1931,96 @@ func verifiedPhase(phase string) bool {
 	}
 	return false
 }
+
+// ---------------------------------------------------------------------------
+// Literal-content contracts: the model plans, the harness copies.
+//
+// A quantized model cannot be trusted to transcribe bytes it was given —
+// measured live and deterministic: told to write exactly `BANNER = "ready"`,
+// it emits `BANNER = " ready"` under greedy AND default sampling, because the
+// space-prefixed BPE token for the word outranks the bare one after a quote
+// (the leading-whitespace artifact; arXiv:2502.14969). The literature's
+// remedy for the whole class is to treat the LLM as a planner and use a
+// deterministic channel for exact emission (arXiv:2601.03640, 2604.18170).
+//
+// Here that channel is the user's own message: when the request carries the
+// intended bytes explicitly, they are recorded as contracts, and a landed
+// write is verified against them. A near-miss whose only divergence is
+// whitespace is repaired mechanically — the user's bytes are definitionally
+// the correct rendering, so substituting them cannot be wrong. Anything
+// beyond whitespace is left alone: a bolder repair could mask a legitimate
+// transformation the model was asked to make.
+
+// literalMinBytes is the smallest contract worth tracking. Below this,
+// prose fragments ("x", "42") would false-positive all over the artifact.
+const literalMinBytes = 8
+
+// literalExactlyRe captures the single line following an "exactly ...:"
+// marker: `containing exactly one line:\nBANNER = "ready"`. Deliberately
+// only ONE line — multi-line literals in prose are what fenced blocks are
+// for, and guessing where a prose literal ends is how false positives start.
+var literalExactlyRe = regexp.MustCompile(`(?i)(?:exactly|verbatim|precisely)[^:\n]*:[ \t]*\n([^\n]+)`)
+
+// literalFenceRe captures every fenced block in the task text.
+var literalFenceRe = regexp.MustCompile("(?s)```(?:[a-zA-Z0-9+#._-]+)?[ \\t]*\\r?\\n(.*?)```")
+
+// extractLiteralBlocks pulls the byte-exact content contracts out of a human
+// request. Only explicit forms count: fenced blocks, and the single line
+// after an "exactly:"-style marker.
+func extractLiteralBlocks(task string) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(s string) {
+		s = strings.Trim(s, "\r\n")
+		if len(strings.TrimSpace(s)) < literalMinBytes || seen[s] {
+			return
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	for _, m := range literalFenceRe.FindAllStringSubmatch(task, -1) {
+		add(m[1])
+	}
+	for _, m := range literalExactlyRe.FindAllStringSubmatch(task, -1) {
+		add(m[1])
+	}
+	return out
+}
+
+// stripAllWhitespace is the near-miss equivalence: two renderings whose
+// non-whitespace bytes agree differ only in spacing, and the user's literal
+// is by definition the correct spacing.
+func stripAllWhitespace(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r != ' ' && r != '\t' && r != '\r' && r != '\n' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// repairLiteralDrift returns content with every absent literal whose
+// whitespace-insensitive rendering IS present replaced by the literal's
+// exact bytes. The bool reports whether anything changed.
+func repairLiteralDrift(content string, literals []string) (string, []string, bool) {
+	var repaired []string
+	for _, lit := range literals {
+		if strings.Contains(content, lit) {
+			continue // contract already satisfied byte-exact
+		}
+		litLines := strings.Split(lit, "\n")
+		litKey := stripAllWhitespace(lit)
+		lines := strings.Split(content, "\n")
+		for i := 0; i+len(litLines) <= len(lines); i++ {
+			window := strings.Join(lines[i:i+len(litLines)], "\n")
+			if stripAllWhitespace(window) == litKey {
+				lines = append(lines[:i], append(litLines, lines[i+len(litLines):]...)...)
+				content = strings.Join(lines, "\n")
+				repaired = append(repaired, lit)
+				break
+			}
+		}
+	}
+	return content, repaired, len(repaired) > 0
+}

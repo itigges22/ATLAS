@@ -1925,3 +1925,57 @@ func TestSanitizeIsIdempotent(t *testing.T) {
 		}
 	}
 }
+
+// The model plans, the harness copies: content the user spelled out must
+// land byte-exact regardless of what the sampler did. Measured live and
+// deterministically: `BANNER = "ready"` arrives as `BANNER = " ready"`
+// under greedy AND default sampling (space-prefixed BPE token wins after a
+// quote), so the write path repairs whitespace-only drift from a stated
+// literal mechanically.
+func TestExtractLiteralBlocks(t *testing.T) {
+	task := "Create banner.py containing exactly one line:\nBANNER = \"ready\"\nDo not modify any existing file."
+	lits := extractLiteralBlocks(task)
+	if len(lits) != 1 || lits[0] != `BANNER = "ready"` {
+		t.Fatalf("exactly-line extraction: %#v", lits)
+	}
+	task2 := "Make it print this:\n```\nhello world one\nhello world two\n```\nthanks"
+	lits2 := extractLiteralBlocks(task2)
+	if len(lits2) != 1 || lits2[0] != "hello world one\nhello world two" {
+		t.Fatalf("fence extraction: %#v", lits2)
+	}
+	// Too short to be a contract.
+	if got := extractLiteralBlocks("set it to exactly this value:\nx = 1\n"); len(got) != 0 {
+		t.Fatalf("short fragments must not become contracts: %#v", got)
+	}
+}
+
+func TestRepairLiteralDrift(t *testing.T) {
+	lit := []string{`BANNER = "ready"`}
+	// The live corruption: a space inserted inside the string.
+	fixed, rep, changed := repairLiteralDrift("BANNER = \" ready\"\n", lit)
+	if !changed || fixed != "BANNER = \"ready\"\n" || len(rep) != 1 {
+		t.Fatalf("space-in-string not repaired: %q changed=%v", fixed, changed)
+	}
+	// Already exact: untouched.
+	if _, _, changed := repairLiteralDrift("BANNER = \"ready\"\n", lit); changed {
+		t.Fatal("byte-exact content must not be rewritten")
+	}
+	// Literal present as a substring of a longer line: satisfied, untouched.
+	if _, _, changed := repairLiteralDrift("x = 1\nBANNER = \"ready\"  # note\n", lit); changed {
+		t.Fatal("substring-satisfied contract must not trigger repair")
+	}
+	// Non-whitespace corruption is NOT auto-repaired (too bold for v1).
+	if _, _, changed := repairLiteralDrift("BANNER = \"redy\"\n", lit); changed {
+		t.Fatal("non-whitespace divergence must be left alone")
+	}
+	// Multi-line window repair.
+	mlit := []string{"a = 1\nb = 2"}
+	fixed2, _, changed2 := repairLiteralDrift("pre\na  =  1\nb =\t2\npost\n", mlit)
+	if !changed2 || !strings.Contains(fixed2, "a = 1\nb = 2") {
+		t.Fatalf("multi-line window not repaired: %q", fixed2)
+	}
+	// Unrelated content: no change.
+	if _, _, changed := repairLiteralDrift("def f():\n    return 1\n", lit); changed {
+		t.Fatal("unrelated content must not change")
+	}
+}

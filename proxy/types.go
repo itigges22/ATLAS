@@ -523,6 +523,13 @@ type AgentContext struct {
 	// preserves the provenance the role field erases.
 	HumanTask string
 
+	// LiteralBlocks are the byte-exact content contracts extracted from
+	// HumanTask (fenced blocks, "exactly ...:" lines). Landed writes are
+	// verified against these and whitespace-only drift is repaired
+	// mechanically — the model plans, the harness copies. See
+	// extractLiteralBlocks / repairLiteralDrift in guardrails.go.
+	LiteralBlocks []string
+
 	// FencedCalls / FencedTokens account the @fenced sub-calls
 	// (fetchFencedContent): every attempt is a full model generation, and
 	// before these existed the run totals silently omitted that spend — a

@@ -542,6 +542,10 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	// user-role messages, and everything downstream that needs "what was
 	// I asked" (the V3 bridge above all) must not confuse those with this.
 	ctx.HumanTask = userMessage
+	ctx.LiteralBlocks = extractLiteralBlocks(userMessage)
+	if n := len(ctx.LiteralBlocks); n > 0 {
+		log.Printf("[agent] %d literal content contract(s) extracted from the request", n)
+	}
 	// Emit a stage_start envelope so the TUI's pipeline pane shows
 	// the agent is working. Mirrors the typed-event broker.
 	loopStart := time.Now()
@@ -1674,6 +1678,38 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					for p := range st.pendingWarnedRun {
 						if executionAttempt(rc.Command, p) {
 							delete(st.pendingWarnedRun, p)
+						}
+					}
+				}
+			}
+			if result.Success && len(ctx.LiteralBlocks) > 0 &&
+				(parsed.Name == "write_file" || parsed.Name == "edit_file" ||
+					parsed.Name == "structural_edit" ||
+					parsed.Name == "insert_after" || parsed.Name == "replace_lines") {
+				// Literal-contract enforcement: the user's own bytes are the
+				// authoritative rendering of any content they spelled out, and
+				// the model measurably cannot transcribe bytes (space-prefixed
+				// BPE tokens win after quotes — `BANNER = "ready"` arrives as
+				// `BANNER = " ready"` deterministically). Whitespace-only
+				// drift from a stated literal is repaired in place.
+				var wp struct {
+					Path string `json:"path"`
+				}
+				if json.Unmarshal(parsed.Args, &wp) == nil && wp.Path != "" {
+					lp := resolveAgentPath(ctx, wp.Path)
+					if body, rerr := os.ReadFile(lp); rerr == nil {
+						if fixed, repairedLits, changed := repairLiteralDrift(string(body), ctx.LiteralBlocks); changed {
+							if werr := os.WriteFile(lp, []byte(fixed), 0o644); werr == nil {
+								for _, l := range repairedLits {
+									log.Printf("[agent] literal contract repaired in %s: %q now byte-exact", wp.Path, truncateStr(l, 60))
+								}
+								Emit(NewEnvelope(EvtMetric, "tool", map[string]interface{}{
+									"name": "literal_repair", "value": wp.Path,
+								}))
+								st.queueCorrective(fmt.Sprintf(
+									"%s has been corrected to carry the exact content stated in the request (whitespace drift fixed mechanically). Do not rewrite it for spacing.",
+									wp.Path))
+							}
 						}
 					}
 				}
