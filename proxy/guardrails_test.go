@@ -1979,3 +1979,34 @@ func TestRepairLiteralDrift(t *testing.T) {
 		t.Fatal("unrelated content must not change")
 	}
 }
+
+// A probe that never fetches a body is not verification. Measured on a
+// "build me a snake game" session: `curl -I http://localhost:8000` was
+// recorded as the verification, which opened the done-gate and shipped an
+// index.html holding JavaScript and zero HTML. A static server answers 200
+// for a directory listing, so HEAD cannot tell a working page from a broken
+// one.
+func TestHeadOnlyProbeIsNotVerification(t *testing.T) {
+	notVerification := []string{
+		"curl -I http://localhost:8000",
+		"curl --head http://localhost:5000/",
+		"curl -sI http://localhost:8000",
+		"wget --spider http://localhost:8000",
+	}
+	for _, c := range notVerification {
+		if isVerificationCommand(c) {
+			t.Errorf("header-only probe counted as verification: %q", c)
+		}
+	}
+	realVerification := []string{
+		"curl http://localhost:8000",
+		"curl -s http://localhost:5000/api",
+		"python3 solve.py",
+		"pytest tests/",
+	}
+	for _, c := range realVerification {
+		if !isVerificationCommand(c) {
+			t.Errorf("real verification was rejected: %q", c)
+		}
+	}
+}

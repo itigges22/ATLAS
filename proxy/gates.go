@@ -2293,3 +2293,45 @@ func echoedWriteRejection(path string) string {
 			"not work: the response degenerates into repetition and gets cut off.",
 		path)
 }
+
+// v3SwappedTheLanguage refuses a V3 candidate whose content no longer looks
+// like the file it is replacing.
+//
+// The smoke check that was supposed to catch this asks the wrong question.
+// For .html it runs an HTML parser, and HTML parsers accept ANY text —
+// JavaScript is perfectly valid "HTML" to a lenient parser, so the check
+// passed. Measured on a "build me a snake game" session: the model wrote a
+// correct 18-line index.html (<!DOCTYPE html><html lang="en">...), V3
+// activated, generated candidates for the game, and replaced the file's
+// contents with 149 lines of JavaScript. Zero HTML tags survived, the page
+// could never render, and the session reported success.
+//
+// "Did the parser crash" is not the same question as "is this still the
+// language this file is written in", and only the second one protects the
+// user's file. Keyed off structural markers the language cannot do without,
+// and it only fires on a healthy->broken transition, so a file that never
+// had the markers is left alone.
+func v3SwappedTheLanguage(path, original, improved string) string {
+	if strings.TrimSpace(improved) == "" {
+		return ""
+	}
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".html", ".htm":
+		// A tag of any kind. An HTML document without one is not HTML,
+		// whatever a permissive parser says about it.
+		hadTags := htmlTagRe.MatchString(original)
+		hasTags := htmlTagRe.MatchString(improved)
+		if hadTags && !hasTags {
+			return "the candidate contains no HTML tags at all, so it is not an HTML document"
+		}
+	case ".css":
+		if strings.Contains(original, "{") && !strings.Contains(improved, "{") {
+			return "the candidate contains no CSS rule blocks"
+		}
+	}
+	return ""
+}
+
+// htmlTagRe matches any opening tag or doctype — the minimum structure an
+// HTML document cannot lack.
+var htmlTagRe = regexp.MustCompile(`(?i)<(?:!doctype|html|head|body|div|span|p|canvas|script|style|link|meta|h[1-6]|ul|table|form|button)\b`)

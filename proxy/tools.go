@@ -1514,6 +1514,18 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		code = baselineContent
 	}
 
+	// Language-swap gate. V3 generates candidates for the TASK, and on a
+	// multi-file job the task is not the file: "build me a snake game"
+	// produced JavaScript for index.html, replacing a correct 18-line
+	// document with 149 lines of JS and no tags. The in-pipeline smoke
+	// check could not see it because for .html it runs an HTML parser, and
+	// an HTML parser accepts any text at all.
+	if swapped := v3SwappedTheLanguage(path, baselineContent, code); swapped != "" {
+		log.Printf("[write_file] discarding V3 candidate for %s — %s; keeping the model's content",
+			logPath(path), swapped)
+		code = baselineContent
+	}
+
 	// Sanitise V3 output. The pipeline's underlying LLM response
 	// occasionally arrives with markdown fences and prose preamble
 	// intact; if we don't strip them, every V3-rewritten file ships
@@ -2320,6 +2332,8 @@ func structuralEditTool() *ToolDef {
 					log.Printf("[structural_edit] V3 failed: %v — falling back to structurally edited content", err)
 				} else if drift := v3RewroteBeyondTheEdit(source, finalContent, improved); drift != "" {
 					log.Printf("[structural_edit] discarding V3 candidate for %s — %s; keeping the caller's content", logPath(input.Path), drift)
+				} else if swapped := v3SwappedTheLanguage(input.Path, finalContent, improved); swapped != "" {
+					log.Printf("[structural_edit] discarding V3 candidate for %s — %s; keeping the caller's content", logPath(input.Path), swapped)
 				} else if improved != "" {
 					finalContent = improved
 					v3Out = meta
@@ -4653,6 +4667,10 @@ func runEditPipeline(ctx *AgentContext, tool, path, relPath, original, edited st
 	}
 	if drift := v3RewroteBeyondTheEdit(original, edited, improved); drift != "" {
 		log.Printf("[%s] discarding V3 candidate for %s — %s; keeping the caller's content", tool, logPath(relPath), drift)
+		return edited, meta, nil
+	}
+	if swapped := v3SwappedTheLanguage(relPath, edited, improved); swapped != "" {
+		log.Printf("[%s] discarding V3 candidate for %s — %s; keeping the caller's content", tool, logPath(relPath), swapped)
 		return edited, meta, nil
 	}
 	if improved == "" {

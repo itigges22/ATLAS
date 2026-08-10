@@ -1864,3 +1864,39 @@ func TestRejectionsBlameTheSubmissionNotTheFile(t *testing.T) {
 		}
 	}
 }
+
+// V3 generates candidates for the TASK, and on a multi-file job the task is
+// not the file. Measured on "build me a snake game": the model wrote a
+// correct 18-line index.html, V3 activated and replaced it with 149 lines of
+// JavaScript containing zero HTML tags, and the session reported success.
+// The in-pipeline smoke check could not see it — for .html it runs an HTML
+// parser, and an HTML parser accepts any text at all.
+func TestV3LanguageSwapIsRefused(t *testing.T) {
+	html := "<!DOCTYPE html>\n<html lang=\"en\">\n<body><canvas id=\"c\"></canvas></body>\n</html>\n"
+	js := "const canvas = document.getElementById(\"c\");\nconst ctx = canvas.getContext(\"2d\");\n"
+
+	if why := v3SwappedTheLanguage("index.html", html, js); why == "" {
+		t.Fatal("JavaScript replacing an HTML document must be refused")
+	}
+	// A legitimate HTML improvement passes.
+	better := html + "<script src=\"game.js\"></script>\n"
+	if why := v3SwappedTheLanguage("index.html", html, better); why != "" {
+		t.Fatalf("a real HTML improvement was refused: %s", why)
+	}
+	// CSS losing all its rule blocks.
+	if why := v3SwappedTheLanguage("style.css", "body { color: red; }", "not css at all"); why == "" {
+		t.Fatal("CSS replaced by non-CSS must be refused")
+	}
+	// A file that never had the markers is left alone (no healthy->broken).
+	if why := v3SwappedTheLanguage("index.html", "just text", js); why != "" {
+		t.Fatalf("must only fire on a healthy->broken transition: %s", why)
+	}
+	// Languages without a rule are untouched.
+	if why := v3SwappedTheLanguage("solve.py", "x = 1\n", "y = 2\n"); why != "" {
+		t.Fatalf("unrelated extensions must not be gated: %s", why)
+	}
+	// An empty candidate is someone else's problem.
+	if why := v3SwappedTheLanguage("index.html", html, ""); why != "" {
+		t.Fatalf("empty candidate must not trip this gate: %s", why)
+	}
+}

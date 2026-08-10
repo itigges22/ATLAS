@@ -1151,8 +1151,27 @@ var verificationCommandRe = regexp.MustCompile(
 // works. Build/test/run/curl returns true: those exercise the code
 // path and a clean exit means something.
 func isVerificationCommand(cmd string) bool {
-	return verificationCommandRe.MatchString(strings.TrimSpace(cmd))
+	c := strings.TrimSpace(cmd)
+	if !verificationCommandRe.MatchString(c) {
+		return false
+	}
+	// A probe that never retrieves a body proves the SERVER is up, not that
+	// the artifact works. Measured on a "build me a snake game" session:
+	// `curl -I http://localhost:8000` was recorded as the verification, the
+	// gate opened, and `done` shipped an index.html containing JavaScript
+	// and no HTML at all. A static file server answers 200 for a directory
+	// listing, so a HEAD request cannot distinguish a working page from a
+	// broken one.
+	if headOnlyProbeRe.MatchString(c) {
+		return false
+	}
+	return true
 }
+
+// headOnlyProbeRe matches curl/wget invocations that fetch headers only:
+// `curl -I`, `curl --head`, `wget --spider`. Long-form and clustered short
+// flags (-sI) both count.
+var headOnlyProbeRe = regexp.MustCompile(`(?i)\b(?:curl\b[^|;&]*?\s-{1,2}(?:I\b|head\b)|curl\b[^|;&]*?\s-[a-zA-Z]*I[a-zA-Z]*\b|wget\b[^|;&]*?--spider\b)`)
 
 // wantsStateChange reports whether `done` should be blocked when no write,
 // edit, or delete succeeded in this run.
