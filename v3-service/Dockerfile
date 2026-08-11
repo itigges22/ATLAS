@@ -20,6 +20,11 @@ COPY v3-service/scoring.py /app/scoring.py
 COPY v3-service/symbols.py /app/symbols.py
 COPY v3-service/planning.py /app/planning.py
 COPY v3-service/pipeline.py /app/pipeline.py
+# evidence.py and contract.py were added and the image kept building
+# without them: this COPY list enumerates modules, so a new one is
+# silently excluded and the service dies at import with 448 tests green.
+COPY v3-service/evidence.py /app/evidence.py
+COPY v3-service/contract.py /app/contract.py
 COPY v3-service/private_values.py /app/private_values.py
 COPY v3-service/structured_log.py /app/structured_log.py
 # Structural call-graph reasoning (issue #39): tree-sitter-backed call graph.
