@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -336,3 +337,121 @@ func TestNonCodeOverwriteNoV3(t *testing.T) {
 //
 // Verifying the documented broken-file repair policy therefore needs an
 // edit_file / structural_edit fixture, tracked separately from Stage A.
+
+// --- session-owned invalid-new -> repair workflow ----------------------------
+//
+// The invalid-new-file warning policy and the repair that follows it are ONE
+// workflow: a file lands invalid so the model can run it and read the real
+// traceback, then the same session rewrites it. Session ownership is what
+// makes the second write_file permitted at all -- an externally pre-created
+// file is refused outright.
+
+func sessionOwnedRepair(t *testing.T, replacement string, v3Mode string) (string, int, int) {
+	t.Helper()
+	dir := t.TempDir()
+	rel := "owned.py"
+	calls, v3Calls := 0, 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v3/generate") {
+			v3Calls++
+			if v3Mode == "working" {
+				resp, _ := json.Marshal(V3GenerateResponse{
+					Code: replacement, Passed: true, PhaseSolved: "direct",
+					CandidatesTested: 1, WinningScore: 1.0,
+				})
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprintf(w, "event: result\ndata: %s\n\ndata: [DONE]\n\n", resp)
+				return
+			}
+			http.Error(w, "v3 unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/internal/") {
+			http.Error(w, "not stubbed", http.StatusServiceUnavailable)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/syntax-check") {
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			valid := !strings.Contains(in.Code, "def alpha(n:") &&
+				!strings.Contains(in.Code, "def alpha(n,:")
+			out := map[string]interface{}{"valid": valid}
+			if !valid {
+				out["errors"] = []string{"SyntaxError: invalid syntax"}
+			}
+			json.NewEncoder(w).Encode(out)
+			return
+		}
+		if !strings.HasSuffix(r.URL.Path, "/v1/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		i := calls
+		calls++
+		content := replacement
+		if i == 0 {
+			content = banLoopInvalidBody // step 1: create it invalid
+		}
+		b, _ := json.Marshal(map[string]interface{}{
+			"type": "tool_call", "name": "write_file",
+			"args": map[string]string{"path": rel, "content": content}})
+		w.Header().Set("Content-Type", "text/event-stream")
+		delta, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{{"delta": map[string]string{"content": string(b)}}}})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", delta)
+	}))
+	defer srv.Close()
+
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.InferenceURL, ctx.SandboxURL = srv.URL, srv.URL
+	if v3Mode != "absent" {
+		ctx.V3URL = srv.URL
+	}
+	ctx.PermissionMode = PermissionYolo
+	ctx.MaxTurns = 6
+	ctx.StreamFn = func(string, interface{}) {}
+	if err := runAgentLoop(ctx, "Create owned.py then fix it"); err != nil {
+		t.Fatalf("agent loop error: %v", err)
+	}
+	if tier := classifyFileTier(rel, banLoopInvalidBody); tier < Tier2Medium {
+		t.Fatalf("fixture must be Tier2Medium on the first write, got %v", tier)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, rel))
+	if err != nil {
+		t.Fatalf("session-owned file vanished: %v", err)
+	}
+	return string(b), v3Calls, calls
+}
+
+func TestSessionOwnedRepairValidReplacement(t *testing.T) {
+	repaired := strings.Replace(banLoopInvalidBody, "def alpha(n:", "def alpha(n):", 1)
+	for _, mode := range []string{"working", "503", "absent"} {
+		t.Run(mode, func(t *testing.T) {
+			got, v3Calls, turns := sessionOwnedRepair(t, repaired, mode)
+			t.Logf("v3_mode=%s v3_calls=%d turns=%d final_sha=%x", mode, v3Calls, turns, sha256.Sum256([]byte(got)))
+			if got == banLoopInvalidBody {
+				t.Fatalf("valid repair of a session-owned invalid file was refused; "+
+					"the invalid bytes survived (v3_calls=%d)", v3Calls)
+			}
+			if got != repaired {
+				t.Fatalf("unexpected final bytes: %q", got)
+			}
+		})
+	}
+}
+
+// The documented policy also covers a replacement that is still invalid: not
+// refusing it is what stops the original broken version from being stranded.
+func TestSessionOwnedRepairStillInvalidReplacement(t *testing.T) {
+	other := strings.Replace(banLoopInvalidBody, "def alpha(n:", "def alpha(n,:", 1)
+	for _, mode := range []string{"working", "503", "absent"} {
+		t.Run(mode, func(t *testing.T) {
+			got, v3Calls, _ := sessionOwnedRepair(t, other, mode)
+			t.Logf("v3_mode=%s v3_calls=%d final_sha=%x", mode, v3Calls, sha256.Sum256([]byte(got)))
+			if got != other {
+				t.Fatalf("still-invalid repair attempt on a session-owned broken "+
+					"file was refused (v3_calls=%d); on disk: %q", v3Calls, got)
+			}
+		})
+	}
+}

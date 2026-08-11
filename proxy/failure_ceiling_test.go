@@ -71,8 +71,14 @@ func TestBanBounceCountsReachTheCeiling(t *testing.T) {
 // Tier1/2/3 run with MaxTurns == 0 (uncapped, types.go TierMaxTurns), so the
 // failure ceiling is the only bound that exists for them.
 func TestUncappedTurnsStillHitTheFailureCeiling(t *testing.T) {
-	if TierMaxTurns(Tier2Medium) != 0 {
-		t.Skip("tier is capped; the ceiling is not the only bound")
+	// Premise assertion, not a skip. If tier routing ever caps Tier2 this
+	// must fail visibly so the test is updated deliberately, rather than
+	// quietly removing the coverage that the failure ceiling is the ONLY
+	// bound these tiers have.
+	if got := TierMaxTurns(Tier2Medium); got != 0 {
+		t.Fatalf("premise changed: Tier2Medium is now capped at %d turns; this "+
+			"test exists because uncapped tiers rely solely on the failure "+
+			"ceiling -- update it intentionally", got)
 	}
 	total := 0
 	for turn := 0; turn < 200; turn++ {
