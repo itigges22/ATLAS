@@ -475,11 +475,23 @@ class SandboxAdapter:
     def __init__(self, project_files: Optional[Dict[str, str]] = None):
         self.project_files = project_files or {}
 
-    def __call__(self, code: str, test_input: str = "") -> Tuple[bool, str, str]:
+    def __call__(self, code: str, test_input: str = "",
+                 language: str = "python",
+                 timeout: int = 15) -> Tuple[bool, str, str]:
+        """Execute `code` in the sandbox.
+
+        `language` defaults to python so every existing call site is
+        unchanged. It exists because the behavioural probe must run
+        JavaScript inside the sandbox rather than as a subprocess of this
+        service, and a hardcoded "python" body meant the probe's request
+        could never be honoured -- it raised TypeError at the call and was
+        silently converted to "inconclusive", so no real browser probe ever
+        produced evidence.
+        """
         body = {
             "code": code,
-            "language": "python",
-            "timeout": 15,
+            "language": language,
+            "timeout": timeout,
         }
         if test_input:
             # Empty string keeps the executor default (inherit server

@@ -386,7 +386,7 @@ def _evaluate_candidate(file_path, code, smoke_passed, has_oracle, emit, sandbox
     # while only the DECISION was shadowed changed latency and could consume
     # enough budget to alter later pipeline behaviour -- that is
     # decision-shadowing, not passive shadowing.
-    if os.environ.get("ATLAS_EVIDENCE_SHADOW", "0") == "1" and \
+    if evidence.probing_enabled(evidence.selection_mode()) and \
             adapter in (evidence.BROWSER_CANVAS_JS, evidence.BROWSER_INLINE_SCRIPT):
         target = code
         if adapter == evidence.BROWSER_INLINE_SCRIPT:
@@ -426,12 +426,16 @@ def run_browser_probe(code: str, sandbox=None, timeout_s: int = 60):
             + evidence.js_probe_source_inline()
         )
         try:
-            ok, stdout, _stderr = sandbox(blob, language="javascript")
+            ok, stdout, _stderr = sandbox(blob, language="javascript",
+                                          timeout=timeout_s)
         except TypeError:
             return None          # adapter without language support
         except Exception:        # noqa: BLE001
             return None
-        if not ok and not stdout:
+        if not ok:
+            # A failed or timed-out execution can still have emitted
+            # parseable stdout; trusting it would let a crash produce
+            # behavioural evidence.
             return None
         runs[mode] = evidence.parse_probe_output(stdout)
     return evidence.combine_runs(runs.get("baseline"), runs.get("input"))
@@ -987,8 +991,9 @@ class V3PipelineService:
         # nothing more, and would have closed the pipeline claiming behaviour
         # nobody demonstrated.
         _has_oracle = bool(self_tests and getattr(self_tests, "test_cases", None))
-        probe_adapter = evidence.select_adapter(file_path, probe_code, _has_oracle)
-        probe_result = evidence.result_from_adapter(probe_adapter, probe_passed)
+        probe_result = _evaluate_candidate(
+            file_path, probe_code, probe_passed, _has_oracle, emit, sandbox)
+        probe_adapter = probe_result["adapter"]
         result["evidence"] = probe_result
         emit("probe_evidence",
              f"adapter={probe_adapter} strength={probe_result['strength']} "
@@ -1173,6 +1178,13 @@ class V3PipelineService:
             # Start with probe if it produced code
             if probe_code:
                 candidates.append({
+                    # Phase-zero evidence is cached here so candidate zero is
+                    # never re-probed, and never enters ranking with defaults.
+                    "evidence": probe_result,
+                    "evidence_strength": probe_result["strength"],
+                    "behavior": probe_result["behavior"],
+                    "behavior_score": probe_result["behavior_score"],
+                    "missing_required": probe_result["missing_required"],
                     "index": 0, "code": probe_code,
                     "energy": probe_energy_raw, "energy_norm": probe_energy_norm,
                     "energy_calibrated": probe_cx_calibrated,
@@ -1576,7 +1588,7 @@ class V3PipelineService:
                          f"evidence would pick {shadow_pick.get('index')} "
                          f"(behaviour {shadow_pick.get('behavior_score', 0.0):.2f})",
                          **result["evidence_selection"])
-                    if os.environ.get("ATLAS_EVIDENCE_SELECTION", "0") == "1":
+                    if evidence.selection_enabled(evidence.selection_mode()):
                         selected = CandidateInfo(shadow_pick["index"], shadow_pick["code"],
                                                  shadow_pick.get("energy", 0.0), True)
 

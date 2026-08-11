@@ -74,7 +74,7 @@ def test_probe_runs_both_arms_through_the_sandbox():
     payload = ('{"runtime_clean":true,"supported":true,"ended":false,'
                '"textSets":0,"early":"a","trace":"a|b"}')
 
-    def sb(code, language=None):
+    def sb(code, language=None, timeout=None):
         seen.append(language)
         return True, payload, ""
     P.run_browser_probe(CANVAS, sandbox=sb)

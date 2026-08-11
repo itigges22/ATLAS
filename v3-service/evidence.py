@@ -403,3 +403,26 @@ def js_probe_source_inline() -> str:
     src = src.replace("const __src = require('fs').readFileSync(process.argv[2], 'utf8');",
                       "const __src = __ARTIFACT__;")
     return src
+
+
+# ------------------------------------------------------------------ mode ---
+# One valid mode, because two independent flags allowed an invalid one:
+# selection enabled with probing disabled turned on the evidence ranker while
+# collecting no evidence for it to rank.
+OFF = "off"          # no probing, legacy selection
+SHADOW = "shadow"    # probing + telemetry, legacy selection
+ENFORCE = "enforce"  # probing + telemetry + evidence selection
+
+
+def selection_mode(env: Optional[Dict[str, str]] = None) -> str:
+    import os as _os
+    raw = (env or _os.environ).get("ATLAS_EVIDENCE_MODE", OFF).strip().lower()
+    return raw if raw in (OFF, SHADOW, ENFORCE) else OFF
+
+
+def probing_enabled(mode: str) -> bool:
+    return mode in (SHADOW, ENFORCE)
+
+
+def selection_enabled(mode: str) -> bool:
+    return mode == ENFORCE
