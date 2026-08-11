@@ -25,8 +25,58 @@ import (
 // nothing restates their conditions. The assertion is on what the loop
 // actually does: how many tool calls it streams before it terminates.
 
-const banLoopValidBody = "VALUE = 1\n"
-const banLoopInvalidBody = "def broken(:\n    return 1\n"
+// Tier2Medium requires a recognized code extension at >= 10 lines
+// (classifyFileTier, tools.go). Both bodies clear that so the write takes the
+// V3-gated branch at tools.go:855 rather than the ungated T0/T1 direct path.
+const banLoopValidBody = `import sys
+
+
+def alpha(n):
+    if n > 0:
+        return n * 2
+    return 0
+
+
+def beta(items):
+    total = 0
+    for item in items:
+        total += alpha(item)
+    return total
+
+
+def main():
+    print(beta([1, 2, 3]))
+
+
+if __name__ == "__main__":
+    main()
+`
+
+// Same shape, one deliberate syntax error, so the regression gate sees a
+// healthy file on disk being replaced by broken content.
+const banLoopInvalidBody = `import sys
+
+
+def alpha(n:
+    if n > 0:
+        return n * 2
+    return 0
+
+
+def beta(items):
+    total = 0
+    for item in items:
+        total += alpha(item)
+    return total
+
+
+def main():
+    print(beta([1, 2, 3]))
+
+
+if __name__ == "__main__":
+    main()
+`
 
 func banLoopStubs(t *testing.T, path string, calls *int) *httptest.Server {
 	t.Helper()
@@ -40,10 +90,18 @@ func banLoopStubs(t *testing.T, path string, calls *int) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Stand-in sandbox syntax checker: the gate that rejects the invalid
 		// rewrite. Python-only is enough for a .py fixture.
+		// V3 is required only so the write takes the gated branch; making
+		// generation unavailable sends writeFileWithV3 down its fallback,
+		// which still lands the baseline bytes. Invalid content never gets
+		// this far -- the syntax gate runs before V3.
+		if strings.HasPrefix(r.URL.Path, "/v3/") || strings.HasPrefix(r.URL.Path, "/internal/") {
+			http.Error(w, "v3 unavailable in this test", http.StatusServiceUnavailable)
+			return
+		}
 		if strings.HasSuffix(r.URL.Path, "/syntax-check") {
 			var in struct{ Code string }
 			json.NewDecoder(r.Body).Decode(&in)
-			valid := !strings.Contains(in.Code, "def broken(:")
+			valid := !strings.Contains(in.Code, "def alpha(n:")
 			out := map[string]interface{}{"valid": valid}
 			if !valid {
 				out["errors"] = []string{"SyntaxError: invalid syntax (line 1)"}
@@ -74,20 +132,6 @@ func banLoopStubs(t *testing.T, path string, calls *int) *httptest.Server {
 }
 
 func TestBannedWriteLoopTerminatesAtTheFailureCeiling(t *testing.T) {
-	// NOT YET A VALID REGRESSION. As written this fixture never reaches the
-	// ban branch: the syntax gate that produces the first rejection lives
-	// behind `fileTier >= Tier2Medium && ctx.V3URL != ""` (tools.go:855), and
-	// a small .py fixture with no V3 stub classifies T1, whose direct path
-	// carries no syntax gate. The loop therefore stops via the repetition
-	// detector at turn 6 instead, which is a different production branch, and
-	// the invalid rewrite LANDS — overwriting the accepted file.
-	//
-	// Skipped rather than deleted because the harness is most of the work and
-	// the missing piece is specific: a Tier2Medium fixture plus a V3 stub, or
-	// an isActiveDebugIteration setup that reaches the fast-path gate at
-	// tools.go:901. Until then Invariant 1 has helper-level proof only.
-	t.Skip("fixture does not reach the ban branch yet; see comment")
-
 	dir := t.TempDir()
 	rel := "mod.py"
 	inferenceCalls := 0
@@ -97,15 +141,27 @@ func TestBannedWriteLoopTerminatesAtTheFailureCeiling(t *testing.T) {
 	ctx := NewAgentContext(dir, Tier2Medium)
 	ctx.InferenceURL = srv.URL
 	ctx.SandboxURL = srv.URL
+	ctx.V3URL = srv.URL
 	ctx.PermissionMode = PermissionYolo
 
-	toolCalls, doneEvents := 0, 0
+	toolCalls, doneEvents, banEntries := 0, 0, 0
+	var doneSummary string
 	ctx.StreamFn = func(eventType string, data interface{}) {
 		switch eventType {
 		case "tool_call":
 			toolCalls++
+		case "gate":
+			// Proves the ban branch specifically, not merely that some
+			// breaker stopped the session.
+			if b, err := json.Marshal(data); err == nil &&
+				strings.Contains(string(b), "no longer available") {
+				banEntries++
+			}
 		case "done":
 			doneEvents++
+			if b, err := json.Marshal(data); err == nil {
+				doneSummary = string(b)
+			}
 		}
 	}
 
@@ -118,8 +174,21 @@ func TestBannedWriteLoopTerminatesAtTheFailureCeiling(t *testing.T) {
 		t.Fatalf("agent loop returned an error: %v", err)
 	}
 
-	t.Logf("tool_calls=%d done_events=%d inference_calls=%d ceiling=%d",
-		toolCalls, doneEvents, inferenceCalls, maxTotalFailures)
+	t.Logf("tool_calls=%d ban_entries=%d done_events=%d inference_calls=%d ceiling=%d summary=%s",
+		toolCalls, banEntries, doneEvents, inferenceCalls, maxTotalFailures, doneSummary)
+
+	// Routing precondition. If a future tier threshold or V3 setup routes
+	// around the intended branch this fails loudly instead of silently
+	// measuring a different breaker.
+	if tier := classifyFileTier(rel, banLoopValidBody); tier < Tier2Medium {
+		t.Fatalf("fixture no longer classifies Tier2Medium (got %v); the write "+
+			"would take the ungated direct path and this test would not "+
+			"exercise the ban branch", tier)
+	}
+	if banEntries == 0 {
+		t.Fatal("never entered the ban branch: no gate event said the tool was " +
+			"no longer available, so this run measured some other breaker")
+	}
 
 	if toolCalls >= hardStop {
 		t.Fatalf("loop never terminated on its own: %d tool calls (hard stop %d); "+
