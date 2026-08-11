@@ -185,6 +185,100 @@ def _existing_workspace_files(working_dir: str, project_context: Dict[str, str])
     return found
 
 
+
+# ---------------------------------------------------------------------------
+# Deterministic plan normalisation
+#
+# Audited on the literal prompt "Build me a snake game.", the planner produced:
+#   s1 write_file index.html | s2 write_file game.js | s3 write_file style.css
+#   s4 edit_file  index.html  "Link the CSS and JS files to the HTML document."
+#   s5 run_command "python3 -m http.server 8000"   <- verify_step
+#
+# Two defects, both deterministic and both fixable without a model call:
+#
+#   * s4 manufactures an edit. index.html is greenfield in this same plan, and
+#     the CSS/JS paths are known at planning time, so the links belong in s1's
+#     initial write. The split creates an exact-span edit for a quantized model
+#     that measurably cannot perform them -- one dogfood session died looping
+#     on precisely this edit_file/index.html pair.
+#   * s5 is setup, not verification. Starting a server proves the server
+#     starts; it cannot fail when the application is inert. The plan prompt
+#     invites this by listing `curl` as a valid verification command, and a
+#     session duly shipped a broken game as "verified" off `curl -I`.
+#
+# Normalisation runs before scoring so a plan cannot win on structure it only
+# has because it split a file write in two.
+
+_SERVER_START_RE = re.compile(
+    r"\b(http\.server|python\s+-m\s+http|flask\s+run|npm\s+(run\s+)?(start|dev)|"
+    r"serve\b|uvicorn|gunicorn|rails\s+server|php\s+-S)", re.I)
+
+
+def _is_server_start(step: dict) -> bool:
+    blob = f"{step.get('action','')} {step.get('target','')}"
+    return bool(_SERVER_START_RE.search(blob))
+
+
+def normalize_plan(plan: dict) -> Tuple[dict, List[str]]:
+    """Collapse manufactured edits and mark setup-only verification.
+
+    Returns (plan, notes). Pure and deterministic — no model call.
+    """
+    notes: List[str] = []
+    steps = plan.get("steps")
+    if not isinstance(steps, list) or not steps:
+        return plan, notes
+
+    # 1. write_file X ... edit_file X  ->  one write_file X.
+    #    Only when the write comes FIRST in this same plan (the artifact is
+    #    greenfield here), so an edit to a pre-existing file is untouched.
+    written: Dict[str, dict] = {}
+    keep: List[dict] = []
+    for s in steps:
+        if not isinstance(s, dict):
+            keep.append(s)
+            continue
+        action = (s.get("action") or "").strip().lower()
+        target = (s.get("target") or "").strip()
+        if action == "write_file" and target:
+            written[target] = s
+            keep.append(s)
+            continue
+        if action in ("edit_file", "structural_edit") and target in written:
+            base = written[target]
+            base["why"] = (base.get("why", "").rstrip(". ")
+                           + ". Also: " + (s.get("why") or "").strip())
+            notes.append(
+                f"collapsed {action} on {target} into its initial write "
+                f"(greenfield artifact — everything known at planning time "
+                f"belongs in the first write)")
+            continue
+        keep.append(s)
+
+    if len(keep) != len(steps):
+        plan = dict(plan)
+        plan["steps"] = keep
+        # The verify_step id may have pointed at a collapsed step.
+        ids = {s.get("id") for s in keep if isinstance(s, dict)}
+        if plan.get("verify_step") not in ids:
+            for s in reversed(keep):
+                if isinstance(s, dict) and (s.get("action") or "").lower() == "run_command":
+                    plan["verify_step"] = s.get("id")
+                    break
+
+    # 2. Flag a verify_step that only starts a server.
+    vid = plan.get("verify_step")
+    for s in plan.get("steps", []):
+        if isinstance(s, dict) and s.get("id") == vid and _is_server_start(s):
+            notes.append(
+                f"verify_step {vid} only starts a server, which is setup and "
+                f"cannot fail on an inert application")
+            plan = dict(plan)
+            plan["verify_is_setup_only"] = True
+            break
+    return plan, notes
+
+
 def _score_plan(plan: dict, user_message: str,
                 existing_files: set = frozenset()) -> Tuple[float, List[str]]:
     """Heuristic plan scorer. Returns (score in [0,1], reasons[]).
@@ -229,7 +323,10 @@ def _score_plan(plan: dict, user_message: str,
         score += 0.3
         reasons.append(f"verify_step={verify_step_id}")
         action = (verify_step.get("action") or "") + " " + (verify_step.get("target") or "")
-        if _VERIFY_CMD_RE.search(action.lower()):
+        if plan.get("verify_is_setup_only"):
+            score -= 0.3
+            reasons.append("verify_step only starts a server — setup, not verification")
+        elif _VERIFY_CMD_RE.search(action.lower()):
             score += 0.2
             reasons.append("verify_step references a real verification command")
         else:
@@ -376,7 +473,11 @@ def generate_plan(
                  index=i)
             candidates.append((None, 0.0, ["unparseable"]))
             continue
+        # Normalise BEFORE scoring, so a plan cannot win on structure it only
+        # has because it split one file write into a write plus an edit.
+        plan, norm_notes = normalize_plan(plan)
         score, reasons = _score_plan(plan, user_message, existing)
+        reasons.extend(norm_notes)
         emit("plan_candidate_scored", f"candidate {i+1} score={score:.2f}",
              index=i, score=score, reasons=reasons)
         candidates.append((plan, score, reasons))
