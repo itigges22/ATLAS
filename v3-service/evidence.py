@@ -389,3 +389,17 @@ def may_return_early_result(res: Dict) -> bool:
     return may_return_early(res.get("strength", NONE),
                             res.get("missing_required") or [],
                             float(res.get("behavior_score", 0.0)))
+
+
+def js_probe_source_inline() -> str:
+    """The harness, adapted to run as ONE blob inside the sandbox.
+
+    The sandbox executes a single code string with no argv and no artifact
+    file, so mode and artifact arrive as pre-declared constants instead.
+    """
+    src = _JS_HARNESS
+    src = src.replace("const MODE = process.argv[3] || 'baseline';",
+                      "const MODE = __MODE__;")
+    src = src.replace("const __src = require('fs').readFileSync(process.argv[2], 'utf8');",
+                      "const __src = __ARTIFACT__;")
+    return src

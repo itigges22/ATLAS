@@ -373,7 +373,7 @@ _CONSENSUS_MARK = "V3_OUT:"
 
 
 
-def _evaluate_candidate(file_path, code, smoke_passed, has_oracle, emit):
+def _evaluate_candidate(file_path, code, smoke_passed, has_oracle, emit, sandbox=None):
     """Structured evidence for ONE artifact, shared by every candidate.
 
     Behavioural adapters actually run here; an unsupported or inconclusive
@@ -382,38 +382,58 @@ def _evaluate_candidate(file_path, code, smoke_passed, has_oracle, emit):
     """
     adapter = evidence.select_adapter(file_path, code, has_oracle)
     probe_ev = None
-    if adapter in (evidence.BROWSER_CANVAS_JS, evidence.BROWSER_INLINE_SCRIPT):
+    # Behavioural probing costs real budget, so it is opt-in. Leaving it on
+    # while only the DECISION was shadowed changed latency and could consume
+    # enough budget to alter later pipeline behaviour -- that is
+    # decision-shadowing, not passive shadowing.
+    if os.environ.get("ATLAS_EVIDENCE_SHADOW", "0") == "1" and \
+            adapter in (evidence.BROWSER_CANVAS_JS, evidence.BROWSER_INLINE_SCRIPT):
         target = code
         if adapter == evidence.BROWSER_INLINE_SCRIPT:
             target = evidence.extract_inline_script(code)
         try:
-            probe_ev = run_browser_probe(target)
+            probe_ev = run_browser_probe(target, sandbox)
         except Exception as exc:                      # noqa: BLE001
             emit("behavior_probe_error", str(exc)[:120])
             probe_ev = None
     return evidence.result_from_adapter(adapter, smoke_passed, probe_ev)
 
 
-def run_browser_probe(code: str, timeout_s: int = 60):
-    """Run the deterministic two-run harness. None means inconclusive."""
-    import subprocess, tempfile
-    if not evidence.js_is_instrumentable(code):
+def run_browser_probe(code: str, sandbox=None, timeout_s: int = 60):
+    """Run the deterministic harness INSIDE THE ISOLATED SANDBOX.
+
+    This previously shelled out to `node` directly from the V3 service, which
+    executes model-generated JavaScript in the service's own environment --
+    its filesystem, env vars, network and process capabilities. The
+    instrumentability regex is a routing hint, not a containment boundary,
+    and treating it as one was a security defect. The sandbox already runs
+    untrusted candidate code under its own restrictions and supports
+    javascript, so the probe belongs there.
+
+    Returns None for "inconclusive" -- never a behavioural verdict -- when
+    the sandbox is unavailable, times out, or the artifact is not
+    instrumentable.
+    """
+    if sandbox is None or not evidence.js_is_instrumentable(code):
         return None
-    d = tempfile.mkdtemp(prefix="behprobe-")
-    hp = os.path.join(d, "harness.js")
-    ap = os.path.join(d, "artifact.js")
-    with open(hp, "w") as fh:
-        fh.write(evidence.js_probe_source())
-    with open(ap, "w") as fh:
-        fh.write(code)
     runs = {}
     for mode in ("baseline", "input"):
+        # The harness reads its artifact from a file and its mode from argv;
+        # inside the sandbox there is one code blob, so both are inlined.
+        blob = (
+            "const __MODE__ = " + json.dumps(mode) + ";\n"
+            "const __ARTIFACT__ = " + json.dumps(code) + ";\n"
+            + evidence.js_probe_source_inline()
+        )
         try:
-            proc = subprocess.run(["node", hp, ap, mode], capture_output=True,
-                                  text=True, timeout=timeout_s)
-        except Exception:                             # noqa: BLE001
+            ok, stdout, _stderr = sandbox(blob, language="javascript")
+        except TypeError:
+            return None          # adapter without language support
+        except Exception:        # noqa: BLE001
             return None
-        runs[mode] = evidence.parse_probe_output(proc.stdout)
+        if not ok and not stdout:
+            return None
+        runs[mode] = evidence.parse_probe_output(stdout)
     return evidence.combine_runs(runs.get("baseline"), runs.get("input"))
 
 
@@ -1264,6 +1284,19 @@ class V3PipelineService:
             for c in candidates:
                 check_client()
                 if c.get("passed"):
+                    # Cached execution result -- do NOT skip evidence. This
+                    # `continue` is exactly how candidate zero escaped the
+                    # "one evaluation path": compile smoke set passed=True for
+                    # an interactive artifact, so the real Snake candidate
+                    # entered the pool with no behavioural evidence at all and
+                    # rank_key saw defaults for it.
+                    if "evidence" not in c:
+                        c["evidence"] = _evaluate_candidate(
+                            file_path, c["code"], True, _has_oracle, emit, sandbox)
+                        c["evidence_strength"] = c["evidence"]["strength"]
+                        c["behavior"] = c["evidence"]["behavior"]
+                        c["behavior_score"] = c["evidence"]["behavior_score"]
+                        c["missing_required"] = c["evidence"]["missing_required"]
                     passing.append(c)
                     continue
                 sb_start = time.time()
@@ -1279,7 +1312,7 @@ class V3PipelineService:
                 # is how the boolean survived into the candidate path, letting
                 # ATLAS generate alternatives it could not rank.
                 c["evidence"] = _evaluate_candidate(
-                    file_path, c["code"], passed, _has_oracle, emit)
+                    file_path, c["code"], passed, _has_oracle, emit, sandbox)
                 c["evidence_strength"] = c["evidence"]["strength"]
                 c["behavior"] = c["evidence"]["behavior"]
                 c["behavior_score"] = c["evidence"]["behavior_score"]
