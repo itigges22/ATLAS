@@ -72,3 +72,33 @@ def test_a_real_verification_is_not_penalised():
     }
     out, _ = planning.normalize_plan(dict(plan))
     assert not out.get("verify_is_setup_only")
+
+
+def test_a_custom_server_script_is_still_setup():
+    """Observed live after the first fix: the planner routed around the
+    command patterns by writing its own server.py, and `python3 server.py`
+    reads as an ordinary script invocation. The intent is stated in `why`."""
+    plan = {
+        "steps": [
+            {"id": "s1", "action": "write_file", "target": "index.html", "why": "Page."},
+            {"id": "s2", "action": "write_file", "target": "server.py", "why": "A simple server."},
+            {"id": "s3", "action": "run_command", "target": "python3 server.py",
+             "why": "Start the server to verify the game loads in a browser."},
+        ],
+        "verify_step": "s3",
+    }
+    out, notes = planning.normalize_plan(dict(plan))
+    assert out.get("verify_is_setup_only") is True, notes
+
+
+def test_running_a_program_for_its_output_is_real_verification():
+    plan = {
+        "steps": [
+            {"id": "s1", "action": "write_file", "target": "solve.py", "why": "Write it."},
+            {"id": "s2", "action": "run_command", "target": "python3 solve.py",
+             "why": "Run it and confirm it prints the answer."},
+        ],
+        "verify_step": "s2",
+    }
+    out, _ = planning.normalize_plan(dict(plan))
+    assert not out.get("verify_is_setup_only")

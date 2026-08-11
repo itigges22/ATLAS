@@ -211,12 +211,25 @@ def _existing_workspace_files(working_dir: str, project_context: Dict[str, str])
 
 _SERVER_START_RE = re.compile(
     r"\b(http\.server|python\s+-m\s+http|flask\s+run|npm\s+(run\s+)?(start|dev)|"
-    r"serve\b|uvicorn|gunicorn|rails\s+server|php\s+-S)", re.I)
+    r"serve\b|uvicorn|gunicorn|rails\s+server|php\s+-S|server\.py|app\.py)", re.I)
+
+# The command form is not enough: a plan that runs its own `server.py` reads
+# as an ordinary script invocation. What gives it away is the INTENT, and the
+# planner states it plainly in `why` — "Start the server to verify the game
+# loads". Observed live after the first fix landed, which is why this reads
+# the rationale as well as the command.
+_START_INTENT_RE = re.compile(
+    r"\b(start|launch|host|spin\s*up|serve)\b[^.]{0,40}\b(server|app|site|page|game)\b", re.I)
 
 
 def _is_server_start(step: dict) -> bool:
-    blob = f"{step.get('action','')} {step.get('target','')}"
-    return bool(_SERVER_START_RE.search(blob))
+    cmd = f"{step.get('action','')} {step.get('target','')}"
+    if _SERVER_START_RE.search(cmd):
+        return True
+    # Intent phrasing only counts on a step that actually runs something.
+    if (step.get("action") or "").strip().lower() in ("run_command", "run_background"):
+        return bool(_START_INTENT_RE.search(step.get("why") or ""))
+    return False
 
 
 def normalize_plan(plan: dict) -> Tuple[dict, List[str]]:
