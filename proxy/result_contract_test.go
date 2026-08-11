@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
-	"os"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"strings"
 	"testing"
 )
@@ -252,50 +254,109 @@ func TestUnknownNoneAppliedUnobservedAreFourDistinctStates(t *testing.T) {
 // internal classification cannot reach the wire by accident. This pins the
 // legacy key sets: once producers start populating the new fields, a leak
 // would show up here rather than in a consumer.
-func TestSSEProjectionKeySetsUnchanged(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+// The wire boundary, checked structurally rather than by text matching.
+//
+// ToolResult is never serialized: every SSE emitter builds an explicit map
+// literal. So the internal classification states round-trip perfectly inside
+// the process, while production SSE deliberately does not expose them. This
+// test parses agent.go and inspects the executable map literals, so a key
+// added inside a comment or a string cannot fool it, and a key added in real
+// code cannot hide from it.
+func TestSSEProjectionsExposeOnlyLegacyKeys(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "agent.go", nil, 0)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("parse agent.go: %v", err)
 	}
-	body := string(src)
 
-	// There are SEVERAL tool_result projections, not one. Every site has to
-	// be checked, or classification could leak through whichever emitter the
-	// guard happened to miss.
-	const marker = `ctx.Stream("tool_result", map[string]interface{}{`
-	sites := 0
-	for off := 0; ; {
-		i := strings.Index(body[off:], marker)
-		if i < 0 {
-			break
+	classification := map[string]bool{
+		"mutation_status": true, "validation_kind": true,
+		"validation_status": true, "validation_detail": true,
+	}
+	wantLegacy := []string{"tool", "success", "data", "error", "elapsed"}
+
+	var sites int
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) != 2 {
+			return true
 		}
-		start := off + i
-		end := start + 600
-		if end > len(body) {
-			end = len(body)
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Stream" {
+			return true
 		}
-		block := body[start:end]
+		lit, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING || lit.Value != `"tool_result"` {
+			return true
+		}
+		composite, ok := call.Args[1].(*ast.CompositeLit)
+		if !ok {
+			t.Errorf("%s: tool_result payload is not a map literal; this guard "+
+				"can no longer prove what reaches the wire",
+				fset.Position(call.Pos()))
+			return true
+		}
 		sites++
-		for _, banned := range []string{"mutation_status", "validation_kind",
-			"validation_status", "validation_detail", "MutationStatus",
-			"ValidationStatus", "ValidationKind"} {
-			if strings.Contains(block, banned) {
-				t.Errorf("projection #%d leaks internal classification %q; "+
-					"Stage B must not expand the wire schema", sites, banned)
+
+		keys := map[string]bool{}
+		for _, elt := range composite.Elts {
+			kv, ok := elt.(*ast.KeyValueExpr)
+			if !ok {
+				t.Errorf("%s: non key-value element in the tool_result payload",
+					fset.Position(elt.Pos()))
+				continue
+			}
+			k, ok := kv.Key.(*ast.BasicLit)
+			if !ok || k.Kind != token.STRING {
+				t.Errorf("%s: computed key in the tool_result payload; the wire "+
+					"schema must stay statically inspectable",
+					fset.Position(kv.Pos()))
+				continue
+			}
+			name := strings.Trim(k.Value, `"`)
+			keys[name] = true
+			if classification[name] {
+				t.Errorf("%s: emitter exposes internal classification key %q; "+
+					"this phase must not expand the wire schema",
+					fset.Position(kv.Pos()), name)
 			}
 		}
-		off = start + len(marker)
-	}
+		// The canonical emitter carries the full legacy set. Others are
+		// narrower by design, so only check the superset case.
+		if keys["data"] || keys["elapsed"] {
+			for _, want := range wantLegacy {
+				if !keys[want] {
+					t.Errorf("%s: legacy key %q disappeared from the tool_result "+
+						"projection", fset.Position(call.Pos()), want)
+				}
+			}
+		}
+		return true
+	})
+
 	if sites < 3 {
-		t.Fatalf("found %d tool_result projections, expected at least 3; if an "+
-			"emitter was removed, update this guard deliberately", sites)
+		t.Fatalf("found %d tool_result emitters via AST, expected at least 3; "+
+			"if one was removed, update this guard deliberately", sites)
 	}
-	// The canonical emitter keeps its legacy key set.
-	i := strings.LastIndex(body, marker)
-	canonical := body[i : i+600]
-	for _, want := range []string{`"tool"`, `"success"`, `"data"`, `"error"`, `"elapsed"`} {
-		if !strings.Contains(canonical, want) {
-			t.Errorf("legacy tool_result key %s disappeared from the projection", want)
+	t.Logf("inspected %d tool_result emitters structurally", sites)
+}
+
+// The states themselves round-trip inside the process. Wire non-exposure is a
+// deliberate boundary, not a limitation of the contract.
+func TestClassificationRoundTripsInternallyEvenThoughSSEOmitsIt(t *testing.T) {
+	for _, m := range []MutationStatus{MutationNone, MutationApplied,
+		MutationRefused, MutationFailed, MutationUnobserved} {
+		b, err := json.Marshal(ToolResult{MutationStatus: m,
+			ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationFailed})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out ToolResult
+		if err := json.Unmarshal(b, &out); err != nil {
+			t.Fatal(err)
+		}
+		if out.MutationStatus != m || !out.Classified() {
+			t.Fatalf("internal round trip lost %q: %+v", m, out)
 		}
 	}
 }
