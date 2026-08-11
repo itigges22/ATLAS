@@ -933,3 +933,30 @@ func stuckOnOnePath(paths []string) bool {
 	return len(paths) == 3 && paths[0] != "" &&
 		paths[0] == paths[1] && paths[1] == paths[2]
 }
+
+// appendRecentFailurePath keeps the trailing window stuckOnOnePath reads.
+// Shared so every rejection branch feeds the same window; a branch that
+// skipped it left the path-aware breaker blind to its failures.
+func appendRecentFailurePath(paths []string, path string) []string {
+	paths = append(paths, path)
+	if len(paths) > 3 {
+		paths = paths[len(paths)-3:]
+	}
+	return paths
+}
+
+// shouldStopForFailures is the single stopping decision every rejection
+// branch shares. It exists because the branches disagreed: each one
+// incremented totalFailures and consecutiveErrors, but only some of them
+// read the result afterwards, so a rejection that took a counting-but-not-
+// reading branch was free. Measured on the locked benchmark at dev head
+// 78d345c: a session bounced 19 identical calls off a tool ban and reached 22
+// failures against a ceiling of 12, and another reached 96 failures across
+// 102 turns and two hours. Both had passed the ceiling many times over.
+//
+// Thresholds are unchanged from the branch that did read them; this only
+// gives every branch the same reader.
+func shouldStopForFailures(totalFailures, consecutiveErrors int, recentPaths []string) bool {
+	return totalFailures >= maxTotalFailures ||
+		(consecutiveErrors >= 3 && stuckOnOnePath(recentPaths))
+}

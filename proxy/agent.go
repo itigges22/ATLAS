@@ -1424,6 +1424,17 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				st.bounceToolCall(ctx, parsed.Name, toolBanNote(parsed.Name, p))
 				consecutiveErrors++
 				totalFailures++
+				// A bounce off the ban is a failure like any other. This
+				// branch incremented the counters and then continued without
+				// reading them, so the ceiling could not end a session that
+				// only ever bounced here — measured at 19 and 85 bounces.
+				ctx.RecentFailurePaths = appendRecentFailurePath(ctx.RecentFailurePaths, p)
+				if shouldStopForFailures(totalFailures, consecutiveErrors, ctx.RecentFailurePaths) {
+					log.Printf("[agent] breaking at turn %d: %d refused/failed calls, %d consecutive on %q",
+						turn, totalFailures, consecutiveErrors, p)
+					endStream(repeatedRefusalSummary(parsed.Name, p, st.madeProductiveChange) + liveBackgroundJobNote(ctx))
+					return nil
+				}
 				continue
 			}
 			// Refuse an exact re-send of an already-rejected call before it
@@ -1455,15 +1466,12 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				consecutiveErrors++
 				totalFailures++
 				failPath := extractFailurePath(parsed.Name, parsed.Args)
-				ctx.RecentFailurePaths = append(ctx.RecentFailurePaths, failPath)
-				if len(ctx.RecentFailurePaths) > 3 {
-					ctx.RecentFailurePaths = ctx.RecentFailurePaths[len(ctx.RecentFailurePaths)-3:]
-				}
+				ctx.RecentFailurePaths = appendRecentFailurePath(ctx.RecentFailurePaths, failPath)
 				// ...and the same stopping rules have to apply here. Both the
 				// ceiling and the path-aware breaker live inside the
 				// post-execution failure branch, which this path skips, so
 				// incrementing alone left the counters with no reader.
-				if totalFailures >= maxTotalFailures || (consecutiveErrors >= 3 && stuckOnOnePath(ctx.RecentFailurePaths)) {
+				if shouldStopForFailures(totalFailures, consecutiveErrors, ctx.RecentFailurePaths) {
 					log.Printf("[agent] breaking at turn %d: %d refused/failed calls, %d consecutive on %q",
 						turn, totalFailures, consecutiveErrors, ctx.RecentFailurePaths[len(ctx.RecentFailurePaths)-1])
 					endStream(repeatedRefusalSummary(parsed.Name, failPath, st.madeProductiveChange) + liveBackgroundJobNote(ctx))
