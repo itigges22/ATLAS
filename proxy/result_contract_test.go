@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -201,6 +202,100 @@ func TestMalformedValuesAreUnclassifiedAndNotSuccess(t *testing.T) {
 	for _, v := range []ValidationStatus{"", "PASSED", "Passed", " passed", "not-run"} {
 		if v.Passed() || v.Classified() {
 			t.Errorf("ValidationStatus(%q) leaked through", v)
+		}
+	}
+}
+
+// MutationUnobserved exists because command tools can change the workspace
+// without the harness ever looking. run_command performs no pre/post state
+// comparison, so `sed -i`, a build step, or `python fix.py` mutates the tree
+// invisibly. Reporting that as MutationNone would be a false claim -- "nothing
+// changed" is a fact this producer does not have. Unobserved says the true
+// thing: side effects were not measured.
+func TestUnobservedIsClassifiedButNotApplied(t *testing.T) {
+	if !MutationUnobserved.Classified() {
+		t.Error("Unobserved must be Classified: it is a current producer speaking")
+	}
+	if MutationUnobserved.Applied() {
+		t.Error("Unobserved must not satisfy Applied: nothing was measured")
+	}
+	if MutationUnobserved == MutationUnknown {
+		t.Error("Unobserved must be distinct from Unknown (unmigrated)")
+	}
+	if MutationUnobserved == MutationNone {
+		t.Error("Unobserved must be distinct from None (measured, nothing changed)")
+	}
+}
+
+// All four states stay mutually distinguishable across the wire.
+func TestUnknownNoneAppliedUnobservedAreFourDistinctStates(t *testing.T) {
+	seen := map[MutationStatus]bool{}
+	for _, m := range []MutationStatus{MutationUnknown, MutationNone, MutationApplied, MutationUnobserved} {
+		if seen[m] {
+			t.Fatalf("duplicate wire value for %q", m)
+		}
+		seen[m] = true
+	}
+	if MutationUnobserved != "unobserved" {
+		t.Fatalf("MutationUnobserved = %q, want \"unobserved\"", MutationUnobserved)
+	}
+	var out ToolResult
+	if err := json.Unmarshal([]byte(`{"success":true,"mutation_status":"unobserved"}`), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.MutationStatus != MutationUnobserved || out.MutationStatus.Applied() {
+		t.Fatalf("unobserved did not survive decode as a non-applied state: %+v", out)
+	}
+}
+
+// The SSE projections are explicit key maps, not ToolResult serialization, so
+// internal classification cannot reach the wire by accident. This pins the
+// legacy key sets: once producers start populating the new fields, a leak
+// would show up here rather than in a consumer.
+func TestSSEProjectionKeySetsUnchanged(t *testing.T) {
+	src, err := os.ReadFile("agent.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+
+	// There are SEVERAL tool_result projections, not one. Every site has to
+	// be checked, or classification could leak through whichever emitter the
+	// guard happened to miss.
+	const marker = `ctx.Stream("tool_result", map[string]interface{}{`
+	sites := 0
+	for off := 0; ; {
+		i := strings.Index(body[off:], marker)
+		if i < 0 {
+			break
+		}
+		start := off + i
+		end := start + 600
+		if end > len(body) {
+			end = len(body)
+		}
+		block := body[start:end]
+		sites++
+		for _, banned := range []string{"mutation_status", "validation_kind",
+			"validation_status", "validation_detail", "MutationStatus",
+			"ValidationStatus", "ValidationKind"} {
+			if strings.Contains(block, banned) {
+				t.Errorf("projection #%d leaks internal classification %q; "+
+					"Stage B must not expand the wire schema", sites, banned)
+			}
+		}
+		off = start + len(marker)
+	}
+	if sites < 3 {
+		t.Fatalf("found %d tool_result projections, expected at least 3; if an "+
+			"emitter was removed, update this guard deliberately", sites)
+	}
+	// The canonical emitter keeps its legacy key set.
+	i := strings.LastIndex(body, marker)
+	canonical := body[i : i+600]
+	for _, want := range []string{`"tool"`, `"success"`, `"data"`, `"error"`, `"elapsed"`} {
+		if !strings.Contains(canonical, want) {
+			t.Errorf("legacy tool_result key %s disappeared from the projection", want)
 		}
 	}
 }

@@ -119,6 +119,15 @@ const (
 	MutationApplied MutationStatus = "applied"
 	MutationRefused MutationStatus = "refused" // a gate declined it
 	MutationFailed  MutationStatus = "failed"  // attempted, errored
+
+	// MutationUnobserved: this tool can change the workspace and did not
+	// look. Command tools run arbitrary shell -- `sed -i`, a build step,
+	// `python fix.py` -- and perform no pre/post state comparison, so
+	// reporting MutationNone would assert a fact the producer does not have.
+	// Unobserved is a current producer explicitly saying side effects were
+	// not measured. It is Classified (the producer spoke) but never Applied
+	// (nothing was demonstrated).
+	MutationUnobserved MutationStatus = "unobserved"
 )
 
 // Applied is true for exactly MutationApplied. Comparing against a literal
@@ -129,7 +138,8 @@ func (m MutationStatus) Applied() bool { return m == MutationApplied }
 // Classified reports whether a producer actually set this field.
 func (m MutationStatus) Classified() bool {
 	switch m {
-	case MutationNone, MutationApplied, MutationRefused, MutationFailed:
+	case MutationNone, MutationApplied, MutationRefused, MutationFailed,
+		MutationUnobserved:
 		return true
 	}
 	return false
