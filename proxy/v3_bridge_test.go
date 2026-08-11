@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -458,34 +459,73 @@ func TestLatestUserMessageFallbackSkipsSyntheticNotes(t *testing.T) {
 
 // Authorization to replace the caller's content is `passed`, never the mere
 // presence of `code`. The evidence work introduces a "best_record" that is
-// the strongest available candidate while deliberately NOT closure-eligible;
-// returning its code for diagnostics must not make it the delivered
-// artifact. A partial or unverified alternative must never displace the
-// baseline.
-func TestUnverifiedV3CodeNeverReplacesTheBaseline(t *testing.T) {
+// the strongest available candidate while deliberately NOT closure-eligible.
+//
+// The previous version of this test reimplemented the condition inline, so
+// it tested the intended expression rather than production code — and stayed
+// green while improveContentWithV3 still took Code unconditionally. It now
+// calls the shared helper both paths use.
+func TestAuthorizedV3ReplacementIsTheOnlyGate(t *testing.T) {
 	baseline := "def solve():\n    return 41\n"
 	alternative := "def solve():\n    return 42  # best_record, not verified\n"
 
 	for _, tc := range []struct {
-		name   string
-		passed bool
-		code   string
-		want   string
+		name       string
+		result     *V3GenerateResponse
+		want       string
+		authorized bool
 	}{
-		{"verified candidate is delivered", true, alternative, alternative},
-		{"unverified candidate is refused", false, alternative, baseline},
-		{"verified but empty falls back", true, "", baseline},
-		{"unverified and empty falls back", false, "", baseline},
+		{"passing candidate is delivered",
+			&V3GenerateResponse{Passed: true, Code: alternative}, alternative, true},
+		{"unverified candidate is refused",
+			&V3GenerateResponse{Passed: false, Code: alternative}, baseline, false},
+		{"passing but empty falls back",
+			&V3GenerateResponse{Passed: true, Code: ""}, baseline, false},
+		{"unverified and empty falls back",
+			&V3GenerateResponse{Passed: false, Code: ""}, baseline, false},
+		{"nil result falls back", nil, baseline, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			res := &V3GenerateResponse{Passed: tc.passed, Code: tc.code}
-			got := baseline
-			if res.Passed && res.Code != "" {
-				got = res.Code
-			}
-			if got != tc.want {
-				t.Fatalf("delivered %q, want %q", got, tc.want)
+			got, ok := authorizedV3Replacement(tc.result, baseline)
+			if got != tc.want || ok != tc.authorized {
+				t.Fatalf("got (%q, %v), want (%q, %v)", got, ok, tc.want, tc.authorized)
 			}
 		})
+	}
+}
+
+// Metadata must not outlive the bytes it described: an unauthorized result
+// carries no V3 provenance, so the "V3 verified this edit" nudge cannot fire
+// over content V3 did not author.
+func TestUnauthorizedV3CarriesNoMetadata(t *testing.T) {
+	baseline := "x = 1\n"
+	_, ok := authorizedV3Replacement(&V3GenerateResponse{
+		Passed: false, Code: "x = 2\n", PhaseSolved: "phase1",
+		WinningScore: 0.98, CandidatesTested: 7}, baseline)
+	if ok {
+		t.Fatal("a non-passing result must never be authorized, however good its score looks")
+	}
+	meta := V3EditMetadata{}
+	if meta.Used {
+		t.Fatal("unauthorized delivery must leave V3EditMetadata.Used false")
+	}
+}
+
+// Both delivery paths must route through the one helper — a duplicated
+// safety condition is how half of it goes stale, which is exactly what
+// happened when write_file was fixed and improveContentWithV3 was not.
+func TestBothDeliveryPathsUseTheSharedAuthorization(t *testing.T) {
+	src, err := os.ReadFile("tools.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	if strings.Count(body, "authorizedV3Replacement(") < 3 {
+		t.Fatal("expected the helper definition plus both call sites")
+	}
+	for _, unsafe := range []string{"chosen := v3Result.Code", "code := v3Result.Code"} {
+		if strings.Contains(body, unsafe) {
+			t.Fatalf("delivery path still takes Code without authorization: %q", unsafe)
+		}
 	}
 }

@@ -1518,13 +1518,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// while NOT being closure-eligible. Returning its code for diagnostics
 	// would have silently made it the delivered artifact. An unverified
 	// alternative must never displace the baseline.
-	code := baselineContent
-	if v3Result.Passed && v3Result.Code != "" {
-		code = v3Result.Code
-	} else if v3Result.Code != "" {
-		log.Printf("[write_file] V3 returned %d bytes without passing — keeping the model's content for %s",
-			len(v3Result.Code), logPath(path))
-	}
+	code, authorizedV3 := authorizedV3Replacement(v3Result, baselineContent)
 
 	// Language-swap gate. V3 generates candidates for the TASK, and on a
 	// multi-file job the task is not the file: "build me a snake game"
@@ -1631,8 +1625,12 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// reporting as the V3-unavailable fallback — so the vetoed winner's
 	// score/phase/evidence don't attach to unverified content and the
 	// "V3 verified this edit" completion nudge (agent.go) doesn't fire.
-	if fellBack {
-		return writeFileRecorded(path, baselineContent, ctx)
+	if fellBack || !authorizedV3 {
+		// Authorization governs METADATA as well as bytes: reporting
+		// V3Used/score/phase/evidence over content V3 did not author is the
+		// same false claim in a different field, and it fires the agent's
+		// "V3 verified this edit" completion nudge.
+		return writeFileRecorded(path, code, ctx)
 	}
 
 	// Stream V3 completion summary — after the gate, so a rejected write
@@ -2446,6 +2444,31 @@ type V3EditMetadata struct {
 // V3's chosen code (baseline candidate or a better-scoring alternative).
 // On error, returns "" + zero metadata; the caller should fall back to
 // writing the original content.
+
+// authorizedV3Replacement is the SINGLE authorization point for letting a V3
+// candidate replace the caller's content.
+//
+// Both delivery paths previously made this decision independently, and only
+// one of them made it correctly: write_file was fixed to consult Passed
+// while improveContentWithV3 still took Code unconditionally, so an
+// unverified candidate could still land through an edit. Duplicating a
+// safety condition is how half of it goes stale.
+//
+// Authorization is Passed, never the mere presence of Code. The evidence
+// work introduces a "best_record" that is the strongest available candidate
+// while deliberately NOT closure-eligible; its code exists for diagnostics
+// and must never become the delivered artifact.
+func authorizedV3Replacement(result *V3GenerateResponse, baseline string) (string, bool) {
+	if result == nil || !result.Passed || result.Code == "" {
+		if result != nil && result.Code != "" {
+			log.Printf("[v3] returned %d bytes without passing — keeping the caller's content",
+				len(result.Code))
+		}
+		return baseline, false
+	}
+	return result.Code, true
+}
+
 func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3EditMetadata, error) {
 	req := V3GenerateRequest{
 		FilePath:     path,
@@ -2544,9 +2567,11 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 		})
 	}
 
-	chosen := v3Result.Code
-	if chosen == "" {
-		chosen = content
+	chosen, authorizedV3 := authorizedV3Replacement(v3Result, content)
+	if !authorizedV3 {
+		// Unverified: the caller's content stands, and no V3 metadata is
+		// attached to it.
+		return content, V3EditMetadata{}, nil
 	}
 	// V3 sometimes returns code wrapped in markdown fences (the underlying
 	// llama-server response had a preamble it didn't strip). Strip it here,
