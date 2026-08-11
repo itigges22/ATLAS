@@ -51,17 +51,17 @@ def test_wrong_contract_plurality_cannot_outvote_the_right_one():
     wrong = [C.build(other_task, "synth", "0.9.0", {"alpha": D}, CAPS, C.BEHAVIORAL,
                      artifact_scope=SCOPE, evaluation_context_hash=CTX,
                      candidate_content_hash=f"w{i}") for i in range(10)]
-    winner, incomparable, _ = C.select(wrong + [right], _expected())
-    assert winner is right, "ten misrouted candidates must not outvote one correct one"
-    assert len(incomparable) == 10
+    res = C.select(wrong + [right], _expected())
+    assert res["best_record"] is right, "ten misrouted candidates must not outvote one correct one"
+    assert len(res["incomparable"]) == 10
 
 
 def test_no_matching_record_yields_no_verified_winner():
     other_task = C.task_contract("other.v1", "1.0.0", [C.requirement("alpha")])
     foreign = C.build(other_task, "synth", "0.9.0", {"alpha": D}, CAPS, C.BEHAVIORAL,
                       artifact_scope=SCOPE, evaluation_context_hash=CTX)
-    winner, incomparable, _ = C.select([foreign], _expected())
-    assert winner is None and incomparable == [foreign]
+    res = C.select([foreign], _expected())
+    assert res["best_record"] is None and res["incomparable"] == [foreign]
 
 
 # ---- 2. comparison identity ----------------------------------------------
@@ -96,8 +96,9 @@ def test_a_timed_out_run_is_never_complete_or_a_winner():
     assert dead["requirements_complete"] is False
     assert dead["closure_eligible"] is False
     healthy = _rec({"alpha": D})
-    winner, _, _ = C.select([dead, healthy], _expected())
-    assert winner is healthy, "a dead run must not outrank a healthy one on completeness"
+    res = C.select([dead, healthy], _expected())
+    assert res["best_record"] is healthy, "a dead run must not outrank a healthy one"
+    assert dead in res["ineligible"]
     assert dead["observations"]["alpha"]["status"] == C.DEMONSTRATED, \
         "partial observations are preserved for diagnostics"
 
@@ -194,16 +195,16 @@ def test_unobserved_survives_serialization():
 def test_exact_evidence_ties_reach_the_supplied_tie_break():
     a = _rec({"alpha": D, "beta": D}, content="a")
     b = _rec({"alpha": D, "beta": D}, content="b")
-    winner, _, tied = C.select([a, b], _expected(),
-                               tie_break=lambda r: -{"a": 1, "b": 0}[r["candidate_content_hash"]])
-    assert len(tied) == 2, "the pipeline must see the tie"
-    assert winner is b, "the supplied lens tie-break decides, not list order"
+    res = C.select([a, b], _expected(),
+                   tie_break=lambda r: -{"a": 1, "b": 0}[r["candidate_content_hash"]])
+    assert len(res["tied"]) == 2, "the pipeline must see the tie"
+    assert res["best_record"] is b, "the supplied lens tie-break decides, not list order"
 
 
 def test_without_a_tie_break_selection_is_stable():
     a = _rec({"alpha": D, "beta": D}, content="a")
     b = _rec({"alpha": D, "beta": D}, content="b")
-    assert C.select([a, b], _expected())[0] is a
+    assert C.select([a, b], _expected())["best_record"] is a
 
 
 # ---- genericity -----------------------------------------------------------
@@ -219,3 +220,82 @@ def test_the_policy_functions_carry_no_domain_vocabulary():
             code = "\n".join(_ast.dump(n) for n in body).lower()
             for word in ("canvas", "snake", "collision", "food", "keydown", "browser"):
                 assert word not in code, f"'{word}' leaked into {node.name}()"
+
+
+# ---- all-failed pools -----------------------------------------------------
+
+def _dead(status, content="d"):
+    return _rec({"alpha": D, "beta": D, "gamma": D},
+                execution_status=status, content=content)
+
+
+@pytest.mark.parametrize("status", [C.EXEC_TIMEOUT, C.EXEC_CRASH, C.EXEC_ERROR])
+def test_an_all_failed_pool_has_no_winner(status):
+    """Ranking alone let the best corpse win when every record had died."""
+    res = C.select([_dead(status, "a"), _dead(status, "b")], _expected())
+    assert res["best_record"] is None
+    assert res["verified_winner"] is None
+    assert len(res["ineligible"]) == 2
+    assert "failed to execute" in res["selection_reason"]
+
+
+def test_unsupported_plus_timeout_yields_no_winner():
+    unsup = _rec({"alpha": D}, supported=False, content="u")
+    res = C.select([unsup, _dead(C.EXEC_TIMEOUT, "t")], _expected())
+    assert res["best_record"] is None and len(res["ineligible"]) == 2
+
+
+def test_a_healthy_partial_beats_a_failed_complete_looking_record():
+    partial = _rec({"alpha": D}, content="p")          # healthy, incomplete
+    dead = _dead(C.EXEC_TIMEOUT, "d")                  # "complete" but dead
+    res = C.select([dead, partial], _expected())
+    assert res["best_record"] is partial
+    assert res["closure_eligible"] is False, "best evidence is not the same as verified"
+    assert res["verified_winner"] is None
+
+
+def test_a_healthy_partial_is_never_called_a_verified_winner():
+    res = C.select([_rec({"alpha": D}, content="p")], _expected())
+    assert res["best_record"] is not None
+    assert res["verified_winner"] is None, \
+        "an incomplete record must not become a top-level verified pass"
+
+
+def test_a_complete_healthy_record_is_a_verified_winner():
+    res = C.select([_rec({"alpha": D, "beta": D, "gamma": D})], _expected())
+    assert res["verified_winner"] is res["best_record"]
+    assert res["closure_eligible"] is True
+
+
+def test_failed_records_keep_their_observations_for_diagnostics():
+    dead = _dead(C.EXEC_CRASH)
+    res = C.select([dead], _expected())
+    assert res["ineligible"][0]["observations"]["alpha"]["status"] == C.DEMONSTRATED
+
+
+# ---- complete identity validation -----------------------------------------
+
+@pytest.mark.parametrize("missing", ["contract_id", "contract_version",
+                                     "artifact_scope", "evaluation_context_hash"])
+def test_expected_identity_must_be_complete(missing):
+    with pytest.raises(C.ContractError):
+        C.select([], _expected(**{missing: ""}))
+
+
+def test_calibration_without_adapter_identity_is_still_valid():
+    exp = _expected(adapter_id="", adapter_version="", calibration_id="cal-9")
+    C.select([], exp)          # must not raise
+
+
+def test_no_adapter_identity_and_no_calibration_is_rejected():
+    with pytest.raises(C.ContractError):
+        C.select([], _expected(adapter_id="", adapter_version="", calibration_id=""))
+
+
+@pytest.mark.parametrize("field", ["contract_version", "adapter_id", "adapter_version"])
+def test_records_with_incomplete_identity_are_incomparable(field):
+    rec = _rec({"alpha": D, "beta": D})
+    rec[field] = ""
+    res = C.select([rec], _expected())
+    assert res["best_record"] is None
+    assert rec in res["incomparable"]

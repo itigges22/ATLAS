@@ -186,6 +186,28 @@ def _closure(task, strength, requirements_complete, quality, supported, executio
     return quality >= task.get("closure_quality_threshold", 1.0)
 
 
+def _identity_complete(rec: Dict) -> bool:
+    """Every identity component must be present, not just three of them.
+
+    Partial identity is how unrelated records compare through equal empty
+    values, and how a malformed record silently becomes incomparable
+    instead of raising.
+    """
+    if not (rec.get("contract_id") and rec.get("contract_version")
+            and rec.get("artifact_scope") and rec.get("evaluation_context_hash")):
+        return False
+    if rec.get("calibration_id"):
+        return True
+    return bool(rec.get("adapter_id") and rec.get("adapter_version"))
+
+
+def require_identity(rec: Dict, what: str = "record") -> None:
+    if not _identity_complete(rec):
+        raise ContractError(
+            f"{what} identity incomplete: needs contract id+version, artifact scope, "
+            f"evaluation context hash, and either a calibration id or adapter id+version")
+
+
 def comparison_identity(rec: Dict) -> Tuple:
     return (rec.get("contract_id"), rec.get("contract_version"),
             rec.get("artifact_scope"), rec.get("evaluation_context_hash"),
@@ -197,13 +219,10 @@ def comparable(a: Dict, b: Dict) -> bool:
 
     Two adapters implementing one contract do not automatically produce
     numerically comparable scores, so identity includes adapter/calibration.
-    Empty identity fields must never make unrelated records comparable.
     """
-    ida, idb = comparison_identity(a), comparison_identity(b)
-    if not all([a.get("contract_id"), a.get("artifact_scope"),
-                a.get("evaluation_context_hash")]):
+    if not (_identity_complete(a) and _identity_complete(b)):
         return False
-    return ida == idb
+    return comparison_identity(a) == comparison_identity(b)
 
 
 def rank_key(rec: Dict) -> Tuple:
@@ -225,32 +244,54 @@ def rank_key(rec: Dict) -> Tuple:
 
 
 def select(records: Sequence[Dict], expected: Dict,
-           tie_break: Optional[Callable[[Dict], Any]] = None
-           ) -> Tuple[Optional[Dict], List[Dict], List[Dict]]:
-    """(winner, incomparable, tied) under the TASK's expected identity.
+           tie_break: Optional[Callable[[Dict], Any]] = None) -> Dict:
+    """Structured selection under the TASK's expected identity.
 
-    The task supplies the governing rubric. Grouping records and taking the
-    largest group let candidate plurality decide it: two candidates
-    misrouted to another contract could outvote a correctly routed one.
+    Returns a record, not an overloaded tuple, because the distinctions
+    matter downstream: a healthy PARTIAL candidate can be the best
+    evidence-backed option without being closure-eligible, and calling it a
+    "verified winner" is how a fallback becomes a top-level passed=true.
 
-    Exact evidence ties are returned so the pipeline can apply its existing
-    lens tie-break rather than having it silently replaced by list order.
+    Failed executions never enter the selectable pool. Ranking alone was not
+    enough: a timeout lost to a healthy record, but when EVERY comparable
+    record had died, the best corpse still won.
     """
-    if not all([expected.get("contract_id"), expected.get("artifact_scope"),
-                expected.get("evaluation_context_hash")]):
-        raise ContractError("expected identity must name contract, scope and context")
+    require_identity(expected, "expected")
 
-    pool, incomparable = [], []
+    comparable_recs, incomparable, ineligible = [], [], []
     for r in records:
-        if r.get("supported") and comparable(r, expected):
-            pool.append(r)
-        else:
+        if not comparable(r, expected):
             incomparable.append(r)
-    if not pool:
-        return None, incomparable, []
+        elif not r.get("supported") or not r.get("execution_ok"):
+            # Kept with observations intact for diagnostics, never selectable.
+            ineligible.append(r)
+        else:
+            comparable_recs.append(r)
 
-    best = max(rank_key(r) for r in pool)
-    tied = [r for r in pool if rank_key(r) == best]
+    if not comparable_recs:
+        reason = ("no comparable record" if not ineligible
+                  else "every comparable record failed to execute or was unsupported")
+        return {"best_record": None, "closure_eligible": False, "verified_winner": None,
+                "incomparable": incomparable, "ineligible": ineligible,
+                "tied": [], "selection_reason": reason}
+
+    best = max(rank_key(r) for r in comparable_recs)
+    tied = [r for r in comparable_recs if rank_key(r) == best]
     if len(tied) > 1 and tie_break is not None:
-        return max(tied, key=tie_break), incomparable, tied
-    return tied[0], incomparable, tied
+        winner = max(tied, key=tie_break)
+        reason = "tie broken by the caller's key"
+    else:
+        winner = tied[0]
+        reason = "highest evidence rank" if len(tied) == 1 else "stable order among exact ties"
+
+    closure = bool(winner.get("closure_eligible"))
+    return {
+        "best_record": winner,
+        "closure_eligible": closure,
+        # Only a closure-eligible record may be called verified.
+        "verified_winner": winner if closure else None,
+        "incomparable": incomparable,
+        "ineligible": ineligible,
+        "tied": tied,
+        "selection_reason": reason,
+    }
