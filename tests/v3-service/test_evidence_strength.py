@@ -15,7 +15,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
 import evidence  # noqa: E402
-import pipeline  # noqa: E402
 
 WORKING = """
 const canvas = document.getElementById('gameCanvas');
@@ -128,12 +127,6 @@ def test_partial_behaviour_with_missing_required_does_not_return_early():
 
 def test_an_oracle_pass_still_earns_the_fast_path():
     assert evidence.may_return_early(evidence.BEHAVIORAL_COMPLETE, [], 1.0)
-
-
-def test_interactive_artifacts_are_detected_by_artifact_not_task_wording():
-    assert pipeline._is_interactive_artifact("game.js", WORKING)
-    assert pipeline._is_interactive_artifact("index.html", "<canvas>")
-    assert not pipeline._is_interactive_artifact("solve.py", "print(1)")
 
 
 # ---- the probe ------------------------------------------------------------

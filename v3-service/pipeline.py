@@ -372,21 +372,6 @@ _CONSENSUS_MARK = "V3_OUT:"
 
 
 
-def _is_interactive_artifact(file_path: str, code: str) -> bool:
-    """Browser/UI code, whose only phase-0 check is a compile smoke.
-
-    Keyed off the artifact, not the task wording: a .js/.html file that
-    touches a canvas, animation frames or key events cannot be verified by
-    "it parses", so its phase-0 pass must not close the pipeline.
-    """
-    ext = os.path.splitext(file_path or "")[1].lower()
-    if ext in (".html", ".htm", ".css"):
-        return True
-    if ext in (".js", ".jsx", ".ts", ".tsx"):
-        return True
-    return bool(code) and evidence.js_is_instrumentable(code)
-
-
 def _make_output_probe(code: str, tc, task_input_file: str = "") -> str:
     """Run a candidate on a case's INPUT and report what it printed.
 
@@ -931,24 +916,21 @@ class V3PipelineService:
         # parses, and returning on it made candidates_generated=1 with
         # PlanSearch, DivSampling, consensus and ranking never running — the
         # whole test-time-compute apparatus skipped for any browser artifact.
-        probe_strength = evidence.SYNTAX if probe_passed else evidence.NONE
-        probe_missing: List[str] = []
-        probe_behavior_score = 0.0
-        if probe_passed and _is_interactive_artifact(file_path, probe_code):
-            probe_strength = evidence.SYNTAX
-            probe_missing = list(evidence.INTERACTIVE_REQUIRED)
-            emit("probe_evidence_syntax_only",
-                 "compile smoke proves the file parses, not that it behaves — "
-                 "continuing to candidate generation")
-        elif probe_passed:
-            # Algorithmic path unchanged: generated I/O tests are a real
-            # oracle, so their pass is behavioural evidence and still earns
-            # the fast return that keeps this class fast.
-            probe_strength = evidence.BEHAVIORAL_COMPLETE
-            probe_behavior_score = 1.0
+        # Strength comes from the VERIFIER THAT RAN. Keying it off the file
+        # extension mapped every .py to behavioural completeness, which is
+        # wrong for Pygame/Tkinter/Flask — those get a compile smoke and
+        # nothing more, and would have closed the pipeline claiming behaviour
+        # nobody demonstrated.
+        _has_oracle = bool(self_tests and getattr(self_tests, "test_cases", None))
+        probe_adapter = evidence.select_adapter(file_path, probe_code, _has_oracle)
+        probe_result = evidence.result_from_adapter(probe_adapter, probe_passed)
+        result["evidence"] = probe_result
+        emit("probe_evidence",
+             f"adapter={probe_adapter} strength={probe_result['strength']} "
+             f"supported={probe_result['supported']}",
+             adapter=probe_adapter, strength=probe_result["strength"])
 
-        if probe_passed and evidence.may_return_early(
-                probe_strength, probe_missing, probe_behavior_score):
+        if probe_passed and evidence.may_return_early_result(probe_result):
             emit("probe_pass", "Probe passed — returning early")
             result["passed"] = True
             result["code"] = probe_code

@@ -271,3 +271,121 @@ def rank_key(cand: Dict):
         1 if ev.get("runtime_clean", False) else 0,
         -float(cand.get("energy", 999)),      # lens: tie-break only
     )
+
+
+# --------------------------------------------------------------- adapters ---
+#
+# Evidence strength must come from the VERIFIER THAT RAN, never from the file
+# extension. The first cut keyed off extension and mapped every .py to
+# behavioral_complete, which is wrong for Pygame, Tkinter, curses and Flask:
+# those receive a compile smoke and nothing more, and would have closed the
+# pipeline claiming behaviour nobody demonstrated. It also sent .css through a
+# JavaScript probe and treated every .js as a canvas game.
+#
+# Adapters carry the domain knowledge. Everything above them -- the strength
+# ordering, coverage, early-return policy, ranking, and the unsupported vs
+# failed distinction -- stays prompt-agnostic.
+
+BROWSER_CANVAS_JS = "browser_canvas_js"
+BROWSER_INLINE_SCRIPT = "browser_inline_script"
+JAVASCRIPT_COMPILE = "javascript_compile"
+CSS_SYNTAX = "css_syntax"
+ALGORITHMIC_IO = "algorithmic_io"
+PYTHON_COMPILE = "python_compile"
+INTERACTIVE_PYTHON_UNSUPPORTED = "interactive_python_unsupported"
+UNSUPPORTED = "unsupported"
+
+# Python UI/server frameworks a compile check cannot speak for.
+_INTERACTIVE_PY_RE = re.compile(
+    r"\b(import\s+pygame|from\s+pygame|import\s+tkinter|from\s+tkinter|"
+    r"import\s+curses|from\s+curses|Flask\s*\(|FastAPI\s*\(|"
+    r"QApplication|import\s+PySide|import\s+PyQt)", re.I)
+
+_INLINE_SCRIPT_RE = re.compile(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", re.S | re.I)
+
+
+def select_adapter(file_path: str, code: str, has_io_oracle: bool = False) -> str:
+    """Which verifier can speak for this artifact. Capability, not keywords."""
+    ext = (file_path or "").lower().rsplit(".", 1)
+    ext = ("." + ext[-1]) if len(ext) == 2 else ""
+    code = code or ""
+
+    if ext in (".py",):
+        if _INTERACTIVE_PY_RE.search(code):
+            return INTERACTIVE_PYTHON_UNSUPPORTED
+        return ALGORITHMIC_IO if has_io_oracle else PYTHON_COMPILE
+    if ext in (".js", ".mjs"):
+        # A plain Node script or a module of helpers is NOT a canvas game.
+        return BROWSER_CANVAS_JS if js_is_instrumentable(code) else JAVASCRIPT_COMPILE
+    if ext in (".jsx", ".tsx", ".ts"):
+        return UNSUPPORTED          # needs transpilation first
+    if ext in (".html", ".htm"):
+        for m in _INLINE_SCRIPT_RE.finditer(code):
+            if js_is_instrumentable(m.group(1)):
+                return BROWSER_INLINE_SCRIPT
+        return UNSUPPORTED
+    if ext == ".css":
+        return CSS_SYNTAX
+    return UNSUPPORTED
+
+
+def extract_inline_script(html: str) -> str:
+    return "\n".join(m.group(1) for m in _INLINE_SCRIPT_RE.finditer(html or ""))
+
+
+def result(accepted: bool, strength: str, adapter: str, supported: bool = True,
+           behavior: Optional[Dict] = None, behavior_score: float = 0.0,
+           missing_required: Optional[List[str]] = None) -> Dict:
+    """The structured verification record every verifier returns."""
+    return {
+        "accepted": bool(accepted),
+        "strength": strength,
+        "adapter": adapter,
+        "supported": bool(supported),
+        "behavior": behavior or {},
+        "behavior_score": float(behavior_score),
+        "missing_required": list(missing_required or []),
+    }
+
+
+def result_from_adapter(adapter: str, smoke_passed: bool,
+                        probe_evidence: Optional[Dict] = None) -> Dict:
+    """Map a verifier's actual outcome onto evidence strength.
+
+    Only two adapters can ever yield behavioural evidence: the generated I/O
+    oracle, and the browser behaviour probe. Everything else tops out at
+    syntax, no matter what the file is called.
+    """
+    if adapter == ALGORITHMIC_IO:
+        return result(smoke_passed,
+                      BEHAVIORAL_COMPLETE if smoke_passed else NONE,
+                      adapter, behavior_score=1.0 if smoke_passed else 0.0)
+
+    if adapter in (BROWSER_CANVAS_JS, BROWSER_INLINE_SCRIPT):
+        if probe_evidence is None:
+            # Probe could not run: unverified, never "failed".
+            return result(smoke_passed, SYNTAX if smoke_passed else NONE, adapter,
+                          supported=False, missing_required=list(INTERACTIVE_REQUIRED))
+        strength, missing, score = grade_interactive(probe_evidence)
+        return result(smoke_passed, strength, adapter,
+                      supported=bool(probe_evidence.get("supported", True)),
+                      behavior=probe_evidence, behavior_score=score,
+                      missing_required=missing)
+
+    if adapter in (JAVASCRIPT_COMPILE, PYTHON_COMPILE, CSS_SYNTAX):
+        return result(smoke_passed, SYNTAX if smoke_passed else NONE, adapter,
+                      missing_required=[] if adapter == CSS_SYNTAX
+                      else list(INTERACTIVE_REQUIRED))
+
+    # INTERACTIVE_PYTHON_UNSUPPORTED and UNSUPPORTED
+    return result(smoke_passed, SYNTAX if smoke_passed else NONE, adapter,
+                  supported=False, missing_required=list(INTERACTIVE_REQUIRED))
+
+
+def may_return_early_result(res: Dict) -> bool:
+    """Early return decided from the structured record, not a bare boolean."""
+    if not res.get("accepted"):
+        return False
+    return may_return_early(res.get("strength", NONE),
+                            res.get("missing_required") or [],
+                            float(res.get("behavior_score", 0.0)))
