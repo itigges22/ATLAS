@@ -372,6 +372,51 @@ _CONSENSUS_MARK = "V3_OUT:"
 
 
 
+
+def _evaluate_candidate(file_path, code, smoke_passed, has_oracle, emit):
+    """Structured evidence for ONE artifact, shared by every candidate.
+
+    Behavioural adapters actually run here; an unsupported or inconclusive
+    candidate stays available as a fallback but is never represented as
+    behaviourally verified.
+    """
+    adapter = evidence.select_adapter(file_path, code, has_oracle)
+    probe_ev = None
+    if adapter in (evidence.BROWSER_CANVAS_JS, evidence.BROWSER_INLINE_SCRIPT):
+        target = code
+        if adapter == evidence.BROWSER_INLINE_SCRIPT:
+            target = evidence.extract_inline_script(code)
+        try:
+            probe_ev = run_browser_probe(target)
+        except Exception as exc:                      # noqa: BLE001
+            emit("behavior_probe_error", str(exc)[:120])
+            probe_ev = None
+    return evidence.result_from_adapter(adapter, smoke_passed, probe_ev)
+
+
+def run_browser_probe(code: str, timeout_s: int = 60):
+    """Run the deterministic two-run harness. None means inconclusive."""
+    import subprocess, tempfile
+    if not evidence.js_is_instrumentable(code):
+        return None
+    d = tempfile.mkdtemp(prefix="behprobe-")
+    hp = os.path.join(d, "harness.js")
+    ap = os.path.join(d, "artifact.js")
+    with open(hp, "w") as fh:
+        fh.write(evidence.js_probe_source())
+    with open(ap, "w") as fh:
+        fh.write(code)
+    runs = {}
+    for mode in ("baseline", "input"):
+        try:
+            proc = subprocess.run(["node", hp, ap, mode], capture_output=True,
+                                  text=True, timeout=timeout_s)
+        except Exception:                             # noqa: BLE001
+            return None
+        runs[mode] = evidence.parse_probe_output(proc.stdout)
+    return evidence.combine_runs(runs.get("baseline"), runs.get("input"))
+
+
 def _make_output_probe(code: str, tc, task_input_file: str = "") -> str:
     """Run a candidate on a case's INPUT and report what it printed.
 
@@ -1228,6 +1273,17 @@ class V3PipelineService:
                 c["stdout"] = stdout
                 c["stderr"] = stderr
                 c["verification_evidence"] = verification_evidence
+                # ONE structured evaluation path: candidate zero and every
+                # generated candidate get the same adapter, the same probe and
+                # the same evidence record. Two sets of verification semantics
+                # is how the boolean survived into the candidate path, letting
+                # ATLAS generate alternatives it could not rank.
+                c["evidence"] = _evaluate_candidate(
+                    file_path, c["code"], passed, _has_oracle, emit)
+                c["evidence_strength"] = c["evidence"]["strength"]
+                c["behavior"] = c["evidence"]["behavior"]
+                c["behavior_score"] = c["evidence"]["behavior_score"]
+                c["missing_required"] = c["evidence"]["missing_required"]
                 if passed:
                     passing.append(c)
                     emit("sandbox_pass", f"Candidate {c['index']} passed",
@@ -1460,6 +1516,37 @@ class V3PipelineService:
                     for c in passing
                 ]
                 selected = select_candidate(ci_list, strategy="lens")
+
+                # Evidence-based ranking. SHADOW BY DEFAULT: it records what it
+                # would have chosen and changes nothing, so uplift can be shown
+                # across task families before it touches a live decision.
+                # ATLAS_EVIDENCE_SELECTION=1 promotes it to the real selector.
+                shadow_pick = None
+                if passing:
+                    shadow_pick = max(passing, key=evidence.rank_key)
+                    result["evidence_selection"] = {
+                        "lens_index": getattr(selected, "index", None),
+                        "evidence_index": shadow_pick.get("index"),
+                        "agree": getattr(selected, "index", None) == shadow_pick.get("index"),
+                        "candidates": [
+                            {"index": c.get("index"),
+                             "strength": c.get("evidence_strength"),
+                             "adapter": (c.get("evidence") or {}).get("adapter"),
+                             "supported": (c.get("evidence") or {}).get("supported"),
+                             "behavior_score": c.get("behavior_score", 0.0),
+                             "missing_required": c.get("missing_required") or [],
+                             "energy": c.get("energy")}
+                            for c in passing],
+                    }
+                    emit("evidence_shadow",
+                         f"lens picked {getattr(selected, 'index', None)}, "
+                         f"evidence would pick {shadow_pick.get('index')} "
+                         f"(behaviour {shadow_pick.get('behavior_score', 0.0):.2f})",
+                         **result["evidence_selection"])
+                    if os.environ.get("ATLAS_EVIDENCE_SELECTION", "0") == "1":
+                        selected = CandidateInfo(shadow_pick["index"], shadow_pick["code"],
+                                                 shadow_pick.get("energy", 0.0), True)
+
                 if selected:
                     emit("selected", f"Lens selected candidate {selected.index}",
                          index=selected.index, energy=getattr(selected, "energy", 0.0))
@@ -1470,6 +1557,7 @@ class V3PipelineService:
                     winner = _candidate_by_index(passing, selected.index)
                     result["verification_evidence"] = (winner or {}).get("verification_evidence", [])
                     result["winning_score"] = (winner or {}).get("energy_norm", 0.0)
+                    result["evidence"] = (winner or {}).get("evidence") or result.get("evidence")
                     result["events"] = events
                     return result
 
