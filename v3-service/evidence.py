@@ -415,8 +415,12 @@ ENFORCE = "enforce"  # probing + telemetry + evidence selection
 
 
 def selection_mode(env: Optional[Dict[str, str]] = None) -> str:
+    # `env is None` means "read the process environment"; an explicitly
+    # supplied empty dict means "this environment has nothing set", and the
+    # two must not collapse via truthiness.
     import os as _os
-    raw = (env or _os.environ).get("ATLAS_EVIDENCE_MODE", OFF).strip().lower()
+    source = _os.environ if env is None else env
+    raw = str(source.get("ATLAS_EVIDENCE_MODE", OFF)).strip().lower()
     return raw if raw in (OFF, SHADOW, ENFORCE) else OFF
 
 

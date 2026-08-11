@@ -54,6 +54,9 @@ def test_runtime_health_breaks_ties_before_the_lens():
     assert max([clean, dirty], key=E.rank_key) is clean
 
 
-def test_evidence_selection_is_off_by_default():
-    assert os.environ.get("ATLAS_EVIDENCE_SELECTION", "0") == "0", \
-        "evidence ranking must ship in shadow mode until uplift is shown"
+def test_the_mode_defaults_to_off():
+    """The old test asserted ATLAS_EVIDENCE_SELECTION, a flag the code no
+    longer reads — it could stay green while testing nothing."""
+    assert E.selection_mode({}) == E.OFF
+    assert not E.selection_enabled(E.selection_mode({}))
+    assert not E.probing_enabled(E.selection_mode({}))

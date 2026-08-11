@@ -509,7 +509,12 @@ class SandboxAdapter:
             # check + optional pip install + lint + the 15s run cap) can sum
             # past 30s, and the old 20s read timeout gave up on executions
             # the sandbox would still have completed.
-            with urllib.request.urlopen(req, timeout=45) as resp:
+            # Client read timeout is derived from the requested execution
+            # budget plus bounded overhead, never a fixed value below it: a
+            # probe asking for 60s against a hardcoded 45s client timeout
+            # would have been cut off by its own caller.
+            _client_timeout = max(45, int(timeout) + 30)
+            with urllib.request.urlopen(req, timeout=_client_timeout) as resp:
                 data = json.loads(resp.read())
                 return data.get("success", False), data.get("stdout", ""), data.get("stderr", "")
         except Exception as e:

@@ -399,7 +399,13 @@ def _evaluate_candidate(file_path, code, smoke_passed, has_oracle, emit, sandbox
     return evidence.result_from_adapter(adapter, smoke_passed, probe_ev)
 
 
-def run_browser_probe(code: str, sandbox=None, timeout_s: int = 60):
+# Execution budget for ONE probe arm. Kept modest: two arms run per
+# candidate, and the harness is a bounded virtual-clock drain, not a wall
+# clock wait.
+BROWSER_PROBE_TIMEOUT_S = 20
+
+
+def run_browser_probe(code: str, sandbox=None, timeout_s: int = BROWSER_PROBE_TIMEOUT_S):
     """Run the deterministic harness INSIDE THE ISOLATED SANDBOX.
 
     This previously shelled out to `node` directly from the V3 service, which
@@ -1000,7 +1006,38 @@ class V3PipelineService:
              f"supported={probe_result['supported']}",
              adapter=probe_adapter, strength=probe_result["strength"])
 
-        if probe_passed and evidence.may_return_early_result(probe_result):
+        # Early return is a LIVE decision, so it is mode-aware. In shadow the
+        # probe runs and its verdict is recorded, but only the probe-free
+        # judgement may act -- otherwise a behaviourally complete browser
+        # candidate would return early and skip candidate generation, which
+        # is a control-flow change, not observation.
+        #
+        # The probe-free judgement still suppresses syntax-only early return:
+        # that determination comes from the adapter, needs no probe, and is
+        # the defect this whole line of work exists to fix, so it must hold
+        # in every mode including off.
+        _mode = evidence.selection_mode()
+        _probe_free = evidence.result_from_adapter(
+            probe_result["adapter"], probe_passed, probe_evidence=None)
+        legacy_early = probe_passed and evidence.may_return_early_result(_probe_free)
+        evidence_early = probe_passed and evidence.may_return_early_result(probe_result)
+        result["evidence_early_return"] = {
+            "mode": _mode,
+            "legacy_would_return_early": legacy_early,
+            "evidence_would_return_early": evidence_early,
+            "agreement": legacy_early == evidence_early,
+            "adapter": probe_result["adapter"],
+            "strength": probe_result["strength"],
+        }
+        emit("evidence_early_return", f"mode={_mode} legacy={legacy_early} "
+             f"evidence={evidence_early}", **result["evidence_early_return"])
+
+        if evidence.selection_enabled(_mode):
+            _take_early = evidence_early
+        else:
+            _take_early = legacy_early
+
+        if _take_early:
             emit("probe_pass", "Probe passed — returning early")
             result["passed"] = True
             result["code"] = probe_code
