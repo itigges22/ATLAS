@@ -65,65 +65,102 @@ def may_return_early(strength: str, missing_required: List[str],
 # Instrumentation only. It never inspects the artifact's identifiers, so it
 # does not care what the author named the snake, the loop, or the score.
 _JS_HARNESS = r"""
-// Deterministic instrumentation. Runs the artifact once in a given MODE and
-// prints a render trace plus flags. Causality is decided by the CALLER, by
-// diffing a keyed run against an unkeyed one from an identical start — a
-// single run cannot distinguish "input changed the world" from "a timer
-// moved some pixels", which is how an animation that ignores input passed
-// an earlier version of this probe.
-const MODE = process.argv[3] || 'baseline';   // baseline | input
+// Fully deterministic instrumentation: a VIRTUAL clock, no wall time.
+//
+// The previous version used real setTimeout across two separate processes,
+// so OS scheduling jitter could give the baseline and keyed runs different
+// frame counts -- and a raw trace diff then read that as "input caused a
+// change". An animation whose key handler does nothing could be scored
+// input-causal. Correctness must not depend on machine load, so nothing here
+// touches real time: callbacks go in a priority queue keyed by (due time,
+// insertion order), both runs advance through identical virtual timestamps,
+// input is injected at an exact virtual instant, and both runs execute the
+// same bounded number of callbacks.
+const MODE = process.argv[3] || 'baseline';
+const INPUT_AT = 300;          // virtual ms
+const MAX_VT   = 6000;         // virtual ms ceiling
+const MAX_CB   = 4000;         // callback ceiling (runaway scheduling)
+
+let __vt = 0, __seq = 0, __cbs = 0;
+const __q = [];
+const __push = (fn, delay) => {
+  const d = Math.max(0, Number(delay) || 0);
+  const id = ++__seq;
+  __q.push({ due: __vt + d, seq: id, fn });
+  return id;
+};
+const __cancel = (id) => { const i = __q.findIndex(t => t.seq === id); if (i >= 0) __q.splice(i, 1); };
+global.setTimeout = (fn, d) => __push(fn, d);
+global.setInterval = (fn, d) => { const self = { id: 0 };
+  const tick = () => { try { fn(); } catch (e) { __err(e); } self.id = __push(tick, d); };
+  self.id = __push(tick, d); return self.id; };
+global.clearTimeout = __cancel; global.clearInterval = __cancel;
+global.requestAnimationFrame = (fn) => __push(() => fn(__vt), 16);
+global.cancelAnimationFrame = __cancel;
+global.Date = class extends Date { constructor(...a){ super(...(a.length?a:[0])); }
+  static now(){ return __vt; } };
+global.performance = { now: () => __vt };
+
 const __ev = { runtime_clean:true, supported:true, error:null, ended:false, textSets:0 };
+const __err = (e) => { __ev.runtime_clean = false; __ev.error = String(e && e.message || e).slice(0,200); };
 const __rects = [];
 let __seed = 12345;
 Math.random = () => { __seed = (__seed * 1103515245 + 12345) & 0x7fffffff; return __seed / 0x7fffffff; };
+
 function __ctx() {
   return new Proxy({}, { get: (_, p) => {
     if (typeof p === 'symbol') return undefined;
     if (['fillStyle','strokeStyle','font','lineWidth','textAlign','textBaseline','globalAlpha'].includes(p)) return '';
-    return (...a) => { if (p === 'fillRect' || p === 'strokeRect' || p === 'rect')
-                         __rects.push(a.slice(0,2).join(',')); };
+    return (...a) => {
+      // Record any positioned draw, not just rects: path and image games
+      // must not read as inert.
+      if (p === 'fillRect' || p === 'strokeRect' || p === 'rect' || p === 'arc' ||
+          p === 'moveTo' || p === 'lineTo' || p === 'drawImage' || p === 'fillText')
+        __rects.push(p + ':' + a.slice(0,2).map(v => Math.round(Number(v)||0)).join(','));
+    };
   }, set: () => true });
 }
-const __canvas = { width:400, height:400, getContext:__ctx, addEventListener:()=>{},
+const __canvas = { width:400, height:400, getContext:__ctx, addEventListener:(e,f)=>{(__L[e] ||= []).push(f);},
                    getBoundingClientRect:()=>({left:0,top:0,width:400,height:400}), style:{} };
 const __L = {};
 function __el(id){
   if (String(id).toLowerCase().includes('canvas')) return __canvas;
   return new Proxy({ style:{}, classList:{add(){},remove(){},toggle(){}},
                      addEventListener:(e,f)=>{(__L[e] ||= []).push(f);}, appendChild(){}, focus(){} },
-    { get:(t,p)=> p in t ? t[p] : '', set:(t,p,v)=>{ if(p==='textContent'||p==='innerHTML'||p==='innerText') __ev.textSets++; t[p]=v; return true; } });
+    { get:(t,p)=> p in t ? t[p] : '',
+      set:(t,p,v)=>{ if((p==='textContent'||p==='innerHTML'||p==='innerText') && t[p] !== undefined && String(t[p]) !== String(v)) __ev.textSets++; t[p]=v; return true; } });
 }
-global.document = { getElementById:__el, querySelector:()=>__el('x'), querySelectorAll:()=>[],
+global.document = { getElementById:__el, querySelector:(s)=>__el(String(s)), querySelectorAll:()=>[],
                     createElement:()=>__el('x'), body:{appendChild(){},style:{}},
                     addEventListener:(e,f)=>{(__L[e] ||= []).push(f);} };
 global.window = { addEventListener:(e,f)=>{(__L[e] ||= []).push(f);}, innerWidth:800, innerHeight:600,
-                  location:{ reload:()=>{ __ev.ended = true; }, href:'' } };
+                  document: global.document, location:{ reload:()=>{ __ev.ended = true; }, href:'' } };
 global.location = global.window.location;
 global.alert = () => { __ev.ended = true; };
-global.requestAnimationFrame = (fn) => setTimeout(fn, 16);
-global.cancelAnimationFrame = (id) => clearTimeout(id);
-process.on('uncaughtException', e => { __ev.runtime_clean = false; __ev.error = String(e.message).slice(0,200); });
+process.on('uncaughtException', __err);
 
 const __src = require('fs').readFileSync(process.argv[2], 'utf8');
-try { (0, eval)(__src); }
-catch (e) { __ev.runtime_clean = false; __ev.error = String(e.message).slice(0,200);
-            console.log(JSON.stringify({...__ev, trace:'', early:''})); process.exit(0); }
+try { (0, eval)(__src); } catch (e) { __err(e);
+  console.log(JSON.stringify({ ...__ev, trace:'', early:'' })); process.exit(0); }
 
 const __fire = (k, code) => (__L['keydown']||[]).forEach(f => {
-  try { f({ key:k, code:k, keyCode:code, which:code, preventDefault(){}, stopPropagation(){} }); } catch(e){}
+  try { f({ key:k, code:k, keyCode:code, which:code, preventDefault(){}, stopPropagation(){} }); } catch(e){ __err(e); }
 });
 
-// Input goes in EARLY, before a game can reach a wall on its own.
-setTimeout(() => { if (MODE === 'input') { __fire('ArrowUp', 38); } }, 120);
-// Snapshot the first stretch for temporal progress.
-setTimeout(() => { __ev.early = __rects.slice(0, 40).join('|'); }, 260);
-// Then drive one direction hard to reach a terminal state.
-setTimeout(() => { for (let i = 0; i < 6; i++) __fire('ArrowRight', 39); }, 900);
-setTimeout(() => {
-  __ev.trace = __rects.slice(0, 400).join('|');
-  console.log(JSON.stringify(__ev));
-  process.exit(0);
-}, 2200);
+// Deterministic drain: always the same virtual instants, same budget.
+let __early = '';
+let __injected = false, __drove = false;
+while (__q.length && __vt <= MAX_VT && __cbs < MAX_CB) {
+  __q.sort((a,b) => a.due - b.due || a.seq - b.seq);
+  const t = __q.shift();
+  __vt = Math.max(__vt, t.due);
+  if (!__injected && __vt >= INPUT_AT) { __injected = true; if (MODE === 'input') __fire('ArrowUp', 38); }
+  if (__early === '' && __vt >= 900) __early = __rects.slice(0, 60).join('|');
+  if (!__drove && __vt >= 2500) { __drove = true; for (let i=0;i<6;i++) __fire('ArrowRight', 39); }
+  try { t.fn(); } catch (e) { __err(e); }
+  __cbs++;
+}
+console.log(JSON.stringify({ ...__ev, early: __early, trace: __rects.slice(0, 600).join('|'), cbs: __cbs }));
 """
 
 
@@ -160,12 +197,19 @@ def combine_runs(baseline: Optional[Dict], keyed: Optional[Dict]) -> Optional[Di
                 "error": baseline.get("error") or keyed.get("error"),
                 "temporal_progress": False, "input_causality": False,
                 "collision_transition": False, "food_or_score_transition": False}
-    early, late = baseline.get("early", ""), baseline.get("trace", "")
+    # Temporal progress is derived from the trace itself, not from a fixed
+    # virtual timestamp: a game that dies in nine callbacks (a snake starting
+    # next to a wall) never reaches a timestamp snapshot, and read as inert.
+    # Splitting the recorded draws in half and comparing is timing-free.
+    trace = baseline.get("trace", "")
+    parts = [x for x in trace.split("|") if x]
+    half = len(parts) // 2
+    first, second = parts[:half], parts[half:2 * half]
     return {
         "supported": True,
         "runtime_clean": True,
         # Rendering kept changing on its own.
-        "temporal_progress": bool(early) and bool(late) and not late.startswith(early * 2) and early != late,
+        "temporal_progress": half > 0 and first != second,
         # The keyed run diverged from the unkeyed one.
         "input_causality": bool(baseline.get("trace")) and baseline.get("trace") != keyed.get("trace"),
         "collision_transition": bool(baseline.get("ended") or keyed.get("ended")),
