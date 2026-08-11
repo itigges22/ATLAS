@@ -103,58 +103,92 @@ type ToolDef struct {
 	Destructive bool // true = requires permission confirmation
 }
 
-// ToolResult is the structured output returned to the model after tool execution.
 // MutationStatus reports what happened to the filesystem, separately from
 // whether the tool ran. `Success` alone could not express the difference
-// between a write that landed and one that was refused by a gate, which is
-// how a refused write and an applied one looked alike to callers.
+// between a write that landed and one a gate refused.
 //
-// The zero value is MutationNone: a result nobody populated has not mutated
-// anything, and an unrecognised value is not an application either.
+// The zero value is MutationUnknown, NOT MutationNone. An unmigrated
+// producer and one that intentionally mutated nothing must stay
+// distinguishable, or the producer audit cannot prove its own completeness:
+// a missed call site would look exactly like a deliberate no-op.
 type MutationStatus string
 
 const (
-	MutationNone    MutationStatus = "" // nothing was mutated (also the zero value)
+	MutationUnknown MutationStatus = ""     // unclassified: nobody set it (zero value)
+	MutationNone    MutationStatus = "none" // deliberately mutated nothing
 	MutationApplied MutationStatus = "applied"
 	MutationRefused MutationStatus = "refused" // a gate declined it
-	MutationFailed  MutationStatus = "failed"  // it was attempted and errored
+	MutationFailed  MutationStatus = "failed"  // attempted, errored
 )
 
-// Applied is the only way to ask this question. Comparing against a string
-// literal at a call site is what lets an unknown value leak through as
-// success.
+// Applied is true for exactly MutationApplied. Comparing against a literal
+// at a call site is what lets an unknown, case-shifted or future value leak
+// through as success.
 func (m MutationStatus) Applied() bool { return m == MutationApplied }
 
+// Classified reports whether a producer actually set this field.
+func (m MutationStatus) Classified() bool {
+	switch m {
+	case MutationNone, MutationApplied, MutationRefused, MutationFailed:
+		return true
+	}
+	return false
+}
+
 // ValidationKind names WHAT was checked. A syntax pass is not evidence the
-// task was verified, and keeping the kind explicit is what stops a cheap
-// check from being read as an expensive one later.
+// task was verified; keeping the kind explicit stops a cheap check from
+// being read later as an expensive one.
 type ValidationKind string
 
 const (
-	ValidationKindNone   ValidationKind = "" // nothing was checked (zero value)
-	ValidationKindSyntax ValidationKind = "syntax"
+	ValidationKindUnknown ValidationKind = ""     // unclassified (zero value)
+	ValidationKindNone    ValidationKind = "none" // deliberately checked nothing
+	ValidationKindSyntax  ValidationKind = "syntax"
 )
 
+func (k ValidationKind) Classified() bool {
+	return k == ValidationKindNone || k == ValidationKindSyntax
+}
+
 // ValidationStatus reports the OUTCOME of that check. `not_run` and
-// `not_applicable` are deliberately distinct: "we could not check" and "there
-// is nothing to check here" are different facts, and collapsing them is how
-// an unchecked file quietly reads as a checked one.
-//
-// The zero value is ValidationNotRun, so a result nobody populated is never
-// mistaken for one that passed.
+// `not_applicable` are distinct facts -- "could not check" versus "nothing
+// here to check" -- and both are distinct from Unknown, which means no
+// producer spoke at all.
 type ValidationStatus string
 
 const (
-	ValidationNotRun        ValidationStatus = "" // not checked (also the zero value)
+	ValidationUnknown       ValidationStatus = ""        // unclassified (zero value)
+	ValidationNotRun        ValidationStatus = "not_run" // deliberately not checked
 	ValidationNotApplicable ValidationStatus = "not_applicable"
 	ValidationPassed        ValidationStatus = "passed"
 	ValidationFailed        ValidationStatus = "failed"
 )
 
-// Passed is the only way to ask this question, for the same reason as
-// MutationStatus.Applied.
+// Passed is true for exactly ValidationPassed, for the same reason as Applied.
 func (v ValidationStatus) Passed() bool { return v == ValidationPassed }
 
+func (v ValidationStatus) Classified() bool {
+	switch v {
+	case ValidationNotRun, ValidationNotApplicable, ValidationPassed, ValidationFailed:
+		return true
+	}
+	return false
+}
+
+// Classified reports whether every fact on this result was set by a
+// producer. The producer audit asserts this over each mutation-producing
+// path; until it holds everywhere, no consumer may read the new fields.
+//
+// A syntax kind paired with an unknown status is NOT classified: claiming a
+// check happened without saying how it came out is exactly the ambiguity
+// these fields exist to remove.
+func (r *ToolResult) Classified() bool {
+	return r.MutationStatus.Classified() &&
+		r.ValidationKind.Classified() &&
+		r.ValidationStatus.Classified()
+}
+
+// ToolResult is the structured output returned to the model after tool execution.
 type ToolResult struct {
 	Success bool            `json:"success"`
 	Data    json.RawMessage `json:"data,omitempty"`
@@ -260,7 +294,7 @@ type WriteFileInput struct {
 }
 
 type WriteFileOutput struct {
-	BytesWritten         int                      `json:"bytes_written"`
+	BytesWritten int `json:"bytes_written"`
 	// Warning carries a non-blocking defect notice: the write LANDED, and
 	// the model should act on this next (e.g. "does not parse — run it and
 	// read the traceback"). See writeNewFileWithWarning.
@@ -989,9 +1023,9 @@ type V3GenerateRequest struct {
 	// functionality" — so it can only mimic a draft whose requirement it has
 	// never seen, and cannot correct one that is subtly wrong. V3PlanRequest
 	// has carried this since plan mode shipped; generation never did.
-	UserMessage    string            `json:"user_message,omitempty"`
-	Tier           int               `json:"tier"`
-	WorkingDir     string            `json:"working_dir,omitempty"`
+	UserMessage string `json:"user_message,omitempty"`
+	Tier        int    `json:"tier"`
+	WorkingDir  string `json:"working_dir,omitempty"`
 }
 
 // V3GenerateResponse is the response from the V3 service.

@@ -26,14 +26,17 @@ func TestZeroValueResultIsNeitherAppliedNorValidated(t *testing.T) {
 	if r.ValidationStatus.Passed() {
 		t.Error("zero-value ValidationStatus reads as passed")
 	}
-	if r.ValidationKind != ValidationKindNone {
-		t.Errorf("zero-value ValidationKind = %q, want none", r.ValidationKind)
+	if r.ValidationKind != ValidationKindUnknown {
+		t.Errorf("zero-value ValidationKind = %q, want unknown", r.ValidationKind)
 	}
-	if r.MutationStatus != MutationNone {
-		t.Errorf("zero-value MutationStatus = %q, want none", r.MutationStatus)
+	if r.MutationStatus != MutationUnknown {
+		t.Errorf("zero-value MutationStatus = %q, want unknown", r.MutationStatus)
 	}
-	if r.ValidationStatus != ValidationNotRun {
-		t.Errorf("zero-value ValidationStatus = %q, want not_run", r.ValidationStatus)
+	if r.ValidationStatus != ValidationUnknown {
+		t.Errorf("zero-value ValidationStatus = %q, want unknown", r.ValidationStatus)
+	}
+	if r.Classified() {
+		t.Error("a zero-value result reports itself as fully classified")
 	}
 }
 
@@ -124,6 +127,17 @@ func TestLegacyPayloadDecodesFailClosed(t *testing.T) {
 	if out.MutationStatus.Applied() || out.ValidationStatus.Passed() {
 		t.Fatalf("a legacy payload decoded as applied/validated: %+v", out)
 	}
+	// The distinction the producer audit depends on: an unmigrated producer
+	// must NOT look like one that intentionally did nothing.
+	if out.MutationStatus != MutationUnknown {
+		t.Errorf("legacy payload MutationStatus = %q, want unknown", out.MutationStatus)
+	}
+	if out.ValidationStatus != ValidationUnknown {
+		t.Errorf("legacy payload ValidationStatus = %q, want unknown", out.ValidationStatus)
+	}
+	if out.Classified() {
+		t.Error("a legacy payload reports itself as fully classified")
+	}
 }
 
 // Syntax validation is labelled as such. It is not evidence that the task
@@ -138,5 +152,55 @@ func TestSyntaxPassIsLabelledSyntaxNotTaskVerification(t *testing.T) {
 	}
 	if !r.ValidationStatus.Passed() {
 		t.Fatal("an explicit syntax pass must read as passed")
+	}
+}
+
+// Explicit none/not_run are intentional states and must survive the wire as
+// their named strings, distinguishable from Unknown in both directions.
+func TestExplicitNoneIsDistinctFromUnknown(t *testing.T) {
+	in := ToolResult{
+		Success: true, MutationStatus: MutationNone,
+		ValidationKind: ValidationKindNone, ValidationStatus: ValidationNotRun,
+	}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"mutation_status":"none"`, `"validation_kind":"none"`,
+		`"validation_status":"not_run"`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("missing %s in %s", want, b)
+		}
+	}
+	var out ToolResult
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.MutationStatus == MutationUnknown || out.ValidationStatus == ValidationUnknown {
+		t.Fatal("explicit none/not_run collapsed to unknown on the round trip")
+	}
+	if !out.Classified() {
+		t.Fatal("an explicitly-none result must count as classified")
+	}
+}
+
+// A claimed check with no outcome is not a classified result.
+func TestSyntaxKindWithUnknownStatusIsUnclassified(t *testing.T) {
+	r := ToolResult{MutationStatus: MutationApplied, ValidationKind: ValidationKindSyntax}
+	if r.Classified() {
+		t.Fatal("syntax kind with an unknown status must not count as classified")
+	}
+}
+
+func TestMalformedValuesAreUnclassifiedAndNotSuccess(t *testing.T) {
+	for _, m := range []MutationStatus{"", "APPLIED", "Applied", " applied", "applied "} {
+		if m.Applied() || m.Classified() {
+			t.Errorf("MutationStatus(%q) leaked through", m)
+		}
+	}
+	for _, v := range []ValidationStatus{"", "PASSED", "Passed", " passed", "not-run"} {
+		if v.Passed() || v.Classified() {
+			t.Errorf("ValidationStatus(%q) leaked through", v)
+		}
 	}
 }
