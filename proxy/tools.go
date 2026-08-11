@@ -1508,10 +1508,22 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		return writeFileRecorded(path, baselineContent, ctx)
 	}
 
-	// Write the winning candidate (or baseline if V3 didn't improve)
-	code := v3Result.Code
-	if code == "" {
-		code = baselineContent
+	// Write the winning candidate (or baseline if V3 didn't improve).
+	//
+	// The authorization to replace the caller's content is `Passed`, not the
+	// presence of `Code`. Today Python only fills Code when a candidate
+	// passed, so this held by construction — but that is an invariant on the
+	// far side of a JSON boundary, and the evidence work deliberately
+	// introduces a "best_record" that is the strongest available candidate
+	// while NOT being closure-eligible. Returning its code for diagnostics
+	// would have silently made it the delivered artifact. An unverified
+	// alternative must never displace the baseline.
+	code := baselineContent
+	if v3Result.Passed && v3Result.Code != "" {
+		code = v3Result.Code
+	} else if v3Result.Code != "" {
+		log.Printf("[write_file] V3 returned %d bytes without passing — keeping the model's content for %s",
+			len(v3Result.Code), logPath(path))
 	}
 
 	// Language-swap gate. V3 generates candidates for the TASK, and on a

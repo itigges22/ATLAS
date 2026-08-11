@@ -455,3 +455,37 @@ func TestLatestUserMessageFallbackSkipsSyntheticNotes(t *testing.T) {
 		t.Fatalf("fallback resolved to %q, want the real task", got)
 	}
 }
+
+// Authorization to replace the caller's content is `passed`, never the mere
+// presence of `code`. The evidence work introduces a "best_record" that is
+// the strongest available candidate while deliberately NOT closure-eligible;
+// returning its code for diagnostics must not make it the delivered
+// artifact. A partial or unverified alternative must never displace the
+// baseline.
+func TestUnverifiedV3CodeNeverReplacesTheBaseline(t *testing.T) {
+	baseline := "def solve():\n    return 41\n"
+	alternative := "def solve():\n    return 42  # best_record, not verified\n"
+
+	for _, tc := range []struct {
+		name   string
+		passed bool
+		code   string
+		want   string
+	}{
+		{"verified candidate is delivered", true, alternative, alternative},
+		{"unverified candidate is refused", false, alternative, baseline},
+		{"verified but empty falls back", true, "", baseline},
+		{"unverified and empty falls back", false, "", baseline},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := &V3GenerateResponse{Passed: tc.passed, Code: tc.code}
+			got := baseline
+			if res.Passed && res.Code != "" {
+				got = res.Code
+			}
+			if got != tc.want {
+				t.Fatalf("delivered %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
