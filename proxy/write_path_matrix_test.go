@@ -140,6 +140,115 @@ func TestOverwriteT2WithV3PreservesValidBytes(t *testing.T) {
 	}
 }
 
+// readThenWriteStub emits the real sequence a model must use against an
+// existing file: read_file first, then write_file. ATLAS refuses a write over
+// an unread existing file, so a fixture that pre-creates the target on disk
+// never reaches the write path without this.
+func readThenWriteStub(t *testing.T, path, replacement string, calls *int) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v3/") || strings.HasPrefix(r.URL.Path, "/internal/") {
+			http.Error(w, "v3 unavailable in this test", http.StatusServiceUnavailable)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/syntax-check") {
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			valid := !strings.Contains(in.Code, "def broken(:") &&
+				!strings.Contains(in.Code, "def alpha(n:") &&
+				!strings.Contains(in.Code, "def alpha(n,:")
+			out := map[string]interface{}{"valid": valid}
+			if !valid {
+				out["errors"] = []string{"SyntaxError: invalid syntax"}
+			}
+			json.NewEncoder(w).Encode(out)
+			return
+		}
+		if !strings.HasSuffix(r.URL.Path, "/v1/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		i := *calls
+		*calls++
+		var call map[string]interface{}
+		if i == 0 {
+			call = map[string]interface{}{"type": "tool_call", "name": "read_file",
+				"args": map[string]string{"path": path}}
+		} else {
+			call = map[string]interface{}{"type": "tool_call", "name": "write_file",
+				"args": map[string]string{"path": path, "content": replacement}}
+		}
+		b, _ := json.Marshal(call)
+		w.Header().Set("Content-Type", "text/event-stream")
+		delta, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"delta": map[string]string{"content": string(b)}}},
+		})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", delta)
+	}))
+}
+
+// readThenWriteCase runs the read->write sequence and reports what survived,
+// failing loudly if the run never reached the write path.
+func readThenWriteCase(t *testing.T, rel, baseline, replacement string, withV3 bool) string {
+	t.Helper()
+	dir := t.TempDir()
+	target := filepath.Join(dir, rel)
+	if err := os.WriteFile(target, []byte(baseline), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	srv := readThenWriteStub(t, rel, replacement, &calls)
+	defer srv.Close()
+
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.InferenceURL, ctx.SandboxURL = srv.URL, srv.URL
+	if withV3 {
+		ctx.V3URL = srv.URL
+	}
+	ctx.PermissionMode = PermissionYolo
+	ctx.MaxTurns = 8
+
+	var sawRead, sawWriteAttempt, unreadGuard bool
+	ctx.StreamFn = func(eventType string, data interface{}) {
+		b, err := json.Marshal(data)
+		if err != nil {
+			return
+		}
+		blob := string(b)
+		switch eventType {
+		case "tool_call":
+			if strings.Contains(blob, `"read_file"`) {
+				sawRead = true
+			}
+			if strings.Contains(blob, `"write_file"`) {
+				sawWriteAttempt = true
+			}
+		}
+		if strings.Contains(blob, "unread existing") {
+			unreadGuard = true
+		}
+	}
+	if err := runAgentLoop(ctx, "Read then rewrite "+rel); err != nil {
+		t.Fatalf("agent loop error: %v", err)
+	}
+	if !sawRead {
+		t.Fatal("fixture never issued read_file; the baseline was never read")
+	}
+	if !sawWriteAttempt {
+		t.Fatal("fixture never issued write_file; it did not reach the write path")
+	}
+	if unreadGuard {
+		t.Fatal("run stopped at the unread-existing-file guard instead of " +
+			"reaching the write path under test")
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("target vanished: %v", err)
+	}
+	return string(got)
+}
+
 // --- intentional policies the Stage A gate must NOT break --------------------
 
 // A NEW file that does not parse still lands, with a warning, so the model can
@@ -169,74 +278,14 @@ func TestInvalidNewCodeFileStillLands(t *testing.T) {
 	}
 }
 
-// An already-invalid file may receive another invalid attempt: refusing the
-// repair would guarantee the broken version survives (tools.go comment).
-func TestRepairAttemptOnAlreadyInvalidFileStillLands(t *testing.T) {
-	// HARNESS GAP, not a production finding: ATLAS refuses write_file over an
-	// unread existing file ("rejecting write_file over unread existing"), and
-	// this fixture pre-creates the file on disk without the model ever
-	// reading it, so the write never reaches the path under test. Needs the
-	// stub to emit a read_file turn first. Skipped rather than asserted
-	// wrongly; the policy it covers is unverified, not broken.
-	t.Skip("fixture must read the file before overwriting it")
-
-	dir := t.TempDir()
-	rel := "broken.py"
-	if err := os.WriteFile(filepath.Join(dir, rel), []byte(banLoopInvalidBody), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	other := strings.Replace(banLoopInvalidBody, "def alpha(n:", "def alpha(n,:", 1)
-	calls := 0
-	srv := matrixStub(t, rel, other, other, true, &calls)
-	defer srv.Close()
-
-	ctx := NewAgentContext(dir, Tier2Medium)
-	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
-	ctx.PermissionMode = PermissionYolo
-	ctx.MaxTurns = 6
-	ctx.StreamFn = func(string, interface{}) {}
-	if err := runAgentLoop(ctx, "Fix "+rel); err != nil {
-		t.Fatalf("agent loop error: %v", err)
-	}
-	b, _ := os.ReadFile(filepath.Join(dir, rel))
-	if string(b) == banLoopInvalidBody {
-		t.Fatal("repair attempt on an already-broken file was refused; the " +
-			"original broken version survived, which the gate must not cause")
-	}
-}
-
-// A non-code file is outside syntaxGateLanguages, so no code-validation claim
-// is made either way and the write is unaffected by the Stage A gate.
 func TestNonCodeOverwriteUnaffected(t *testing.T) {
-	// HARNESS GAP, not a production finding: ATLAS refuses write_file over an
-	// unread existing file ("rejecting write_file over unread existing"), and
-	// this fixture pre-creates the file on disk without the model ever
-	// reading it, so the write never reaches the path under test. Needs the
-	// stub to emit a read_file turn first. Skipped rather than asserted
-	// wrongly; the policy it covers is unverified, not broken.
-	t.Skip("fixture must read the file before overwriting it")
-
-	dir := t.TempDir()
-	rel := "notes.txt"
-	if err := os.WriteFile(filepath.Join(dir, rel), []byte("first\n"), 0o644); err != nil {
-		t.Fatal(err)
+	if _, gated := syntaxGateLanguages[".txt"]; gated {
+		t.Fatal(".txt is now syntax-gated; this test's premise changed")
 	}
-	calls := 0
-	srv := matrixStub(t, rel, "def broken(:\n", "def broken(:\n", true, &calls)
-	defer srv.Close()
-
-	ctx := NewAgentContext(dir, Tier2Medium)
-	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
-	ctx.PermissionMode = PermissionYolo
-	ctx.MaxTurns = 6
-	ctx.StreamFn = func(string, interface{}) {}
-	if err := runAgentLoop(ctx, "Rewrite "+rel); err != nil {
-		t.Fatalf("agent loop error: %v", err)
-	}
-	b, _ := os.ReadFile(filepath.Join(dir, rel))
-	if string(b) == "first\n" {
-		t.Fatal("non-code overwrite was blocked; the gate must not apply to " +
-			"languages outside syntaxGateLanguages")
+	got := readThenWriteCase(t, "notes.txt", "first\n", "def broken(:\n", true)
+	if got != "def broken(:\n" {
+		t.Fatalf("non-code overwrite was blocked; the gate must not apply "+
+			"outside syntaxGateLanguages. on disk: %q", got)
 	}
 }
 
@@ -268,3 +317,22 @@ func TestValidationUnavailableDoesNotBlockOrClaimPassed(t *testing.T) {
 		t.Fatalf("artifact vanished when validation was unavailable: %v", err)
 	}
 }
+func TestNonCodeOverwriteNoV3(t *testing.T) {
+	got := readThenWriteCase(t, "notes.txt", "first\n", "def broken(:\n", false)
+	if got != "def broken(:\n" {
+		t.Fatalf("no-V3: non-code overwrite was blocked: %q", got)
+	}
+}
+
+// NOT part of Stage A. Repairing a PRE-EXISTING file through write_file is
+// not a capability this harness offers: the tool refuses an existing file
+// outright ("write_file is for creating new files, not modifying existing
+// ones. Use edit_file with old_str/new_str"), so the V3-gated repair policy
+// is never reached that way -- measured v3_calls=0 in every repair cell, on
+// both revisions, with and without V3.
+//
+// The T1 overwrite tests above still land bytes because the model CREATES
+// the file in-session, which is what makes the later write_file permitted.
+//
+// Verifying the documented broken-file repair policy therefore needs an
+// edit_file / structural_edit fixture, tracked separately from Stage A.
