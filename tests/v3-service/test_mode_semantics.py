@@ -22,7 +22,7 @@ COMPLETE = {"supported": True, "runtime_clean": True, "temporal_progress": True,
 
 
 def _decisions(mode, probe_ev):
-    """Mirror of the pipeline's decision, without a live pipeline run."""
+    """NOTE: mirrors the pipeline decision; a real run() test still owes."""
     probe_free = E.result_from_adapter(E.BROWSER_CANVAS_JS, True, None)
     with_probe = E.result_from_adapter(E.BROWSER_CANVAS_JS, True, probe_ev)
     legacy = E.may_return_early_result(probe_free)

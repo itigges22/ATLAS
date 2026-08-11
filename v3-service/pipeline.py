@@ -1019,23 +1019,23 @@ class V3PipelineService:
         _mode = evidence.selection_mode()
         _probe_free = evidence.result_from_adapter(
             probe_result["adapter"], probe_passed, probe_evidence=None)
-        legacy_early = probe_passed and evidence.may_return_early_result(_probe_free)
+        probe_free_early = probe_passed and evidence.may_return_early_result(_probe_free)
         evidence_early = probe_passed and evidence.may_return_early_result(probe_result)
         result["evidence_early_return"] = {
             "mode": _mode,
-            "legacy_would_return_early": legacy_early,
+            "probe_free_would_return_early": probe_free_early,
             "evidence_would_return_early": evidence_early,
-            "agreement": legacy_early == evidence_early,
+            "agreement": probe_free_early == evidence_early,
             "adapter": probe_result["adapter"],
             "strength": probe_result["strength"],
         }
-        emit("evidence_early_return", f"mode={_mode} legacy={legacy_early} "
+        emit("evidence_early_return", f"mode={_mode} probe_free={probe_free_early} "
              f"evidence={evidence_early}", **result["evidence_early_return"])
 
         if evidence.selection_enabled(_mode):
             _take_early = evidence_early
         else:
-            _take_early = legacy_early
+            _take_early = probe_free_early
 
         if _take_early:
             emit("probe_pass", "Probe passed — returning early")
