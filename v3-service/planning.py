@@ -211,7 +211,11 @@ def _existing_workspace_files(working_dir: str, project_context: Dict[str, str])
 
 _SERVER_START_RE = re.compile(
     r"\b(http\.server|python\s+-m\s+http|flask\s+run|npm\s+(run\s+)?(start|dev)|"
-    r"serve\b|uvicorn|gunicorn|rails\s+server|php\s+-S|server\.py|app\.py)", re.I)
+    r"serve\b|uvicorn|gunicorn|rails\s+server|php\s+-S)", re.I)
+# NOTE: filenames are deliberately NOT matched here. `app.py` and `server.py`
+# say nothing on their own — a CLI application named app.py is verified by
+# running it, and penalising `python app.py` would punish the correct plan.
+# Only unambiguous server COMMANDS above, plus stated intent below.
 
 # The command form is not enough: a plan that runs its own `server.py` reads
 # as an ordinary script invocation. What gives it away is the INTENT, and the
@@ -507,6 +511,20 @@ def generate_plan(
             best_score = score
             best_steps = n_steps
             best_idx = i
+
+    # A penalty is not a floor. If the winner still only starts a server, the
+    # plan is asserting that setup is verification, and the agent will follow
+    # it -- which is exactly how a broken game shipped as "complete and
+    # verified". Strip the claim rather than pass it on: the loop's own
+    # verification gate then governs, and it demands a real green run.
+    if best_idx >= 0:
+        winner = candidates[best_idx][0]
+        if winner and winner.get("verify_is_setup_only"):
+            winner.pop("verify_step", None)
+            winner["verify_step_removed"] = "setup-only verification is not verification"
+            emit("plan_verify_stripped",
+                 "winning plan's verify_step only started a server — removed, "
+                 "the agent's verification gate governs instead")
 
     if best_idx < 0:
         # All candidates failed. Return a minimal fallback so the agent

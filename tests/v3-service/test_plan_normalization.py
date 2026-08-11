@@ -102,3 +102,20 @@ def test_running_a_program_for_its_output_is_real_verification():
     }
     out, _ = planning.normalize_plan(dict(plan))
     assert not out.get("verify_is_setup_only")
+
+
+def test_a_cli_app_named_app_py_is_not_mistaken_for_a_server():
+    """Filenames say nothing. A CLI application named app.py is verified by
+    running it, and matching the name alone would penalise the correct plan."""
+    plan = {
+        "steps": [
+            {"id": "s1", "action": "write_file", "target": "app.py", "why": "The CLI tool."},
+            {"id": "s2", "action": "run_command", "target": "python app.py",
+             "why": "Run it and confirm it prints the report."},
+        ],
+        "verify_step": "s2",
+    }
+    out, notes = planning.normalize_plan(dict(plan))
+    assert not out.get("verify_is_setup_only"), notes
+    score, reasons = planning._score_plan(out, "build me a report tool")
+    assert not any("setup, not verification" in r for r in reasons), reasons
