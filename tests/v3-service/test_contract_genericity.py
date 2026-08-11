@@ -1,142 +1,221 @@
-"""Executable proof of genericity, replacing the source-code vocabulary grep.
+"""Executable genericity + policy proofs for the evidence contract.
 
-A synthetic adapter with arbitrary criteria (alpha/beta/gamma) is driven
-through the REAL policy. If any browser or game assumption were baked in,
-these would fail — which a grep over identifiers could never establish.
+A synthetic adapter with arbitrary criteria (alpha/beta/gamma) drives the
+REAL policy. If a browser or game assumption were baked in, these fail —
+which a grep over identifiers could never establish.
 """
 
 import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
 import contract as C  # noqa: E402
 
-SYNTH_CAPS = ["alpha", "beta", "gamma"]
+CAPS = ["alpha", "beta", "gamma"]
+CTX = "ctx-abc123"
+SCOPE = "synthetic.txt"
+
+TASK = C.task_contract("synthetic.v1", "1.2.3",
+                       [C.requirement("alpha"), C.requirement("beta"),
+                        C.requirement("gamma", required=False, weight=0.5)])
 
 
-def _synth(observations, requirements=None, strength=C.BEHAVIORAL, **kw):
-    return C.build(
-        contract_id="synthetic.v1", contract_version="1.2.3",
-        adapter_id="synthetic_adapter", adapter_version="0.9.0",
-        requirements=requirements or [C.requirement("alpha"), C.requirement("beta"),
-                                      C.requirement("gamma", required=False, weight=0.5)],
-        observations=observations, capabilities=SYNTH_CAPS,
-        evidence_strength=strength, artifact_scope="synthetic.txt",
-        project_snapshot_hash="deadbeef", **kw)
+def _rec(obs, task=TASK, strength=C.BEHAVIORAL, adapter="synth", ver="0.9.0",
+         ctx=CTX, scope=SCOPE, content="c1", **kw):
+    return C.build(task, adapter, ver, obs, CAPS, strength,
+                   artifact_scope=scope, evaluation_context_hash=ctx,
+                   candidate_content_hash=content, **kw)
 
 
-def test_coverage_and_quality_work_with_arbitrary_criteria():
-    rec = _synth({"alpha": C.observation(C.DEMONSTRATED),
-                  "beta": C.observation(C.DEMONSTRATED),
-                  "gamma": C.observation(C.DEMONSTRATED)})
+D = C.observation(C.DEMONSTRATED)
+R = C.observation(C.REFUTED)
+
+
+def _expected(**kw):
+    base = {"contract_id": "synthetic.v1", "contract_version": "1.2.3",
+            "artifact_scope": SCOPE, "evaluation_context_hash": CTX,
+            "calibration_id": "", "adapter_id": "synth", "adapter_version": "0.9.0"}
+    base.update(kw)
+    return base
+
+
+# ---- 1. plurality must not choose the rubric ------------------------------
+
+def test_wrong_contract_plurality_cannot_outvote_the_right_one():
+    right = _rec({"alpha": D, "beta": D})
+    other_task = C.task_contract("other.v1", "9.9.9", [C.requirement("alpha")])
+    wrong = [C.build(other_task, "synth", "0.9.0", {"alpha": D}, CAPS, C.BEHAVIORAL,
+                     artifact_scope=SCOPE, evaluation_context_hash=CTX,
+                     candidate_content_hash=f"w{i}") for i in range(10)]
+    winner, incomparable, _ = C.select(wrong + [right], _expected())
+    assert winner is right, "ten misrouted candidates must not outvote one correct one"
+    assert len(incomparable) == 10
+
+
+def test_no_matching_record_yields_no_verified_winner():
+    other_task = C.task_contract("other.v1", "1.0.0", [C.requirement("alpha")])
+    foreign = C.build(other_task, "synth", "0.9.0", {"alpha": D}, CAPS, C.BEHAVIORAL,
+                      artifact_scope=SCOPE, evaluation_context_hash=CTX)
+    winner, incomparable, _ = C.select([foreign], _expected())
+    assert winner is None and incomparable == [foreign]
+
+
+# ---- 2. comparison identity ----------------------------------------------
+
+def test_empty_identity_fields_never_make_records_comparable():
+    a = _rec({"alpha": D}, ctx="", scope="")
+    assert not C.comparable(a, a), "empty identity must not compare, even to itself"
+    with pytest.raises(C.ContractError):
+        C.select([a], _expected(evaluation_context_hash=""))
+
+
+def test_candidate_hashes_differ_while_context_matches():
+    a = _rec({"alpha": D, "beta": D}, content="cand-a")
+    b = _rec({"alpha": D}, content="cand-b")
+    assert a["candidate_content_hash"] != b["candidate_content_hash"]
+    assert C.comparable(a, b), "candidates must stay comparable within one context"
+
+
+def test_different_adapter_versions_are_incomparable_without_calibration():
+    a = _rec({"alpha": D, "beta": D}, ver="0.9.0")
+    b = _rec({"alpha": D, "beta": D}, ver="1.0.0")
+    assert not C.comparable(a, b)
+    ca = _rec({"alpha": D, "beta": D}, ver="0.9.0", calibration_id="cal-1")
+    cb = _rec({"alpha": D, "beta": D}, ver="1.0.0", calibration_id="cal-1")
+    assert C.comparable(ca, cb), "an explicit shared calibration permits comparison"
+
+
+# ---- 3. failed executions -------------------------------------------------
+
+def test_a_timed_out_run_is_never_complete_or_a_winner():
+    dead = _rec({"alpha": D, "beta": D, "gamma": D}, execution_status=C.EXEC_TIMEOUT)
+    assert dead["requirements_complete"] is False
+    assert dead["closure_eligible"] is False
+    healthy = _rec({"alpha": D})
+    winner, _, _ = C.select([dead, healthy], _expected())
+    assert winner is healthy, "a dead run must not outrank a healthy one on completeness"
+    assert dead["observations"]["alpha"]["status"] == C.DEMONSTRATED, \
+        "partial observations are preserved for diagnostics"
+
+
+# ---- 4. required coverage vs optional quality -----------------------------
+
+def test_required_coverage_outranks_heavily_weighted_optional_quality():
+    task = C.task_contract("synthetic.v1", "1.2.3",
+                           [C.requirement("alpha"), C.requirement("beta"),
+                            C.requirement("gamma", required=False, weight=9.0)])
+    mostly_required = _rec({"alpha": D, "beta": D, "gamma": R}, task=task)
+    all_optional = _rec({"alpha": R, "beta": R, "gamma": D}, task=task)
+    assert all_optional["overall_quality_score"] > mostly_required["overall_quality_score"]
+    assert C.rank_key(mostly_required) > C.rank_key(all_optional)
+
+
+# ---- 5. closure floor belongs to the contract -----------------------------
+
+def test_syntax_cannot_close_a_behavioural_contract():
+    rec = _rec({"alpha": D, "beta": D, "gamma": D}, strength=C.SYNTAX)
     assert rec["requirements_complete"] is True
-    assert rec["quality_score"] == 1.0
-    assert rec["closure_eligible"] is True
-    assert not rec["missing_required"]
-
-
-def test_a_missing_required_criterion_blocks_completeness():
-    rec = _synth({"alpha": C.observation(C.DEMONSTRATED),
-                  "beta": C.observation(C.REFUTED)})
-    assert rec["requirements_complete"] is False
-    assert rec["missing_required"] == ["beta"]
     assert rec["closure_eligible"] is False
 
 
-def test_optional_criteria_move_quality_without_being_required():
-    without = _synth({"alpha": C.observation(C.DEMONSTRATED),
-                      "beta": C.observation(C.DEMONSTRATED)})
-    with_opt = _synth({"alpha": C.observation(C.DEMONSTRATED),
-                       "beta": C.observation(C.DEMONSTRATED),
-                       "gamma": C.observation(C.DEMONSTRATED)})
-    assert without["requirements_complete"] is True
-    assert with_opt["quality_score"] > without["quality_score"]
-    assert C.rank_key(with_opt) > C.rank_key(without)
-    # Required complete but quality below threshold: closure is a POLICY call.
-    assert without["closure_eligible"] is False
+def test_syntax_closes_a_syntax_scoped_contract():
+    schema_task = C.task_contract("json_schema.v1", "1.0.0",
+                                  [C.requirement("alpha")],
+                                  minimum_closure_strength=C.SYNTAX)
+    rec = _rec({"alpha": D}, task=schema_task, strength=C.SYNTAX)
+    assert rec["closure_eligible"] is True, \
+        "a universal behavioural floor is not prompt-agnostic"
 
 
-def test_an_unmeasurable_required_criterion_can_never_complete():
-    """Inability to observe is not evidence of absence."""
-    rec = C.build("synthetic.v1", "1.2.3", "synthetic_adapter", "0.9.0",
-                  requirements=[C.requirement("alpha"), C.requirement("delta")],
-                  observations={"alpha": C.observation(C.DEMONSTRATED)},
-                  capabilities=SYNTH_CAPS,          # delta not measurable
-                  evidence_strength=C.BEHAVIORAL)
-    assert "delta" in rec["missing_required"]
-    assert rec["requirements_complete"] is False
+def test_an_oracle_floor_rejects_merely_behavioural_evidence():
+    algo = C.task_contract("algorithmic.v1", "1.0.0", [C.requirement("alpha")],
+                           minimum_closure_strength=C.ORACLE)
+    assert _rec({"alpha": D}, task=algo, strength=C.BEHAVIORAL)["closure_eligible"] is False
+    assert _rec({"alpha": D}, task=algo, strength=C.ORACLE)["closure_eligible"] is True
 
 
-def test_an_adapter_cannot_claim_a_criterion_it_cannot_measure():
-    rec = C.build("synthetic.v1", "1.2.3", "synthetic_adapter", "0.9.0",
-                  requirements=[C.requirement("alpha")],
-                  observations={"alpha": C.observation(C.DEMONSTRATED),
-                                "omega": C.observation(C.DEMONSTRATED)},
-                  capabilities=SYNTH_CAPS,
-                  evidence_strength=C.BEHAVIORAL)
-    assert rec["overclaimed"] == ["omega"]
-    assert rec["requirements_complete"] is False
+# ---- 6. validation + materialisation --------------------------------------
+
+@pytest.mark.parametrize("bad", [
+    {"reqs": [C.requirement("a"), C.requirement("a")]},
+    {"reqs": [C.requirement("")]},
+    {"reqs": [C.requirement("a", weight=float("inf"))]},
+    {"reqs": [C.requirement("a", weight=-1)]},
+])
+def test_malformed_requirements_are_rejected(bad):
+    task = C.task_contract("x.v1", "1", bad["reqs"])
+    with pytest.raises(C.ContractError):
+        C.build(task, "synth", "0.9", {}, CAPS, C.BEHAVIORAL,
+                artifact_scope=SCOPE, evaluation_context_hash=CTX)
 
 
-def test_strength_and_completeness_are_independent_dimensions():
-    weak_but_complete = _synth({"alpha": C.observation(C.DEMONSTRATED),
-                                "beta": C.observation(C.DEMONSTRATED),
-                                "gamma": C.observation(C.DEMONSTRATED)},
-                               strength=C.SYNTAX)
-    assert weak_but_complete["requirements_complete"] is True
-    assert weak_but_complete["quality_score"] == 1.0
-    assert weak_but_complete["closure_eligible"] is False, \
-        "syntax-strength verification must never close, however complete it claims to be"
+@pytest.mark.parametrize("obs", [
+    {"alpha": {"status": "made_up", "confidence": 1.0}},
+    {"alpha": C.observation(C.DEMONSTRATED, confidence=1.5)},
+    {"omega": C.observation(C.DEMONSTRATED)},
+    {"omega": C.observation(C.REFUTED)},
+])
+def test_malformed_or_overreaching_observations_are_rejected(obs):
+    with pytest.raises(C.ContractError):
+        _rec(obs)
 
 
-def test_two_different_contracts_are_not_score_compared():
-    canvas = _synth({"alpha": C.observation(C.DEMONSTRATED)})
-    api = C.build("http_api.v1", "1.0.0", "api_adapter", "0.1.0",
-                  requirements=[C.requirement("route_reachable")],
-                  observations={"route_reachable": C.observation(C.DEMONSTRATED)},
-                  capabilities=["route_reachable", "status_code", "schema_match"],
-                  evidence_strength=C.BEHAVIORAL, artifact_scope="api.py",
-                  project_snapshot_hash="deadbeef")
-    assert not C.comparable(canvas, api)
-    winner, incomparable = C.select([canvas, api])
-    assert winner in (canvas, api)
-    assert incomparable, "the other rubric must be reported, not silently ranked"
+def test_unknown_statuses_are_rejected():
+    with pytest.raises(C.ContractError):
+        _rec({"alpha": D}, execution_status="exploded")
+    with pytest.raises(C.ContractError):
+        _rec({"alpha": D}, strength="vibes")
 
 
-def test_unsupported_records_never_win():
-    good = _synth({"alpha": C.observation(C.DEMONSTRATED),
-                   "beta": C.observation(C.DEMONSTRATED)})
-    unsup = _synth({}, supported=False)
-    winner, _ = C.select([unsup, good])
-    assert winner is good
-    assert C.select([unsup])[0] is None, "an all-unsupported pool has no verified winner"
-
-
-def test_contract_and_adapter_versions_survive_serialization():
-    rec = _synth({"alpha": C.observation(C.DEMONSTRATED)})
+def test_derived_observations_are_materialised_for_telemetry():
+    task = C.task_contract("synthetic.v1", "1.2.3",
+                           [C.requirement("alpha"), C.requirement("delta")])
+    rec = _rec({"alpha": D}, task=task)
     back = json.loads(json.dumps(rec))
-    for field in ("schema_version", "contract_id", "contract_version",
-                  "adapter_id", "adapter_version", "artifact_scope",
-                  "project_snapshot_hash", "quality_score",
-                  "requirements_complete", "closure_eligible"):
-        assert field in back, field
-    assert back["schema_version"] == C.SCHEMA_VERSION
+    assert back["observations"]["delta"]["status"] == C.NOT_APPLICABLE, \
+        "telemetry must be able to explain why completion failed"
+    assert "delta" in back["missing_required"]
 
 
-def test_the_policy_module_imports_nothing_domain_specific():
+def test_unobserved_survives_serialization():
+    task = C.task_contract("synthetic.v1", "1.2.3",
+                           [C.requirement("alpha"), C.requirement("beta")])
+    rec = json.loads(json.dumps(_rec({"alpha": D}, task=task)))
+    assert rec["observations"]["beta"]["status"] == C.UNOBSERVED
+    assert rec["schema_version"] == C.SCHEMA_VERSION
+
+
+# ---- 7. tie-break ---------------------------------------------------------
+
+def test_exact_evidence_ties_reach_the_supplied_tie_break():
+    a = _rec({"alpha": D, "beta": D}, content="a")
+    b = _rec({"alpha": D, "beta": D}, content="b")
+    winner, _, tied = C.select([a, b], _expected(),
+                               tie_break=lambda r: -{"a": 1, "b": 0}[r["candidate_content_hash"]])
+    assert len(tied) == 2, "the pipeline must see the tie"
+    assert winner is b, "the supplied lens tie-break decides, not list order"
+
+
+def test_without_a_tie_break_selection_is_stable():
+    a = _rec({"alpha": D, "beta": D}, content="a")
+    b = _rec({"alpha": D, "beta": D}, content="b")
+    assert C.select([a, b], _expected())[0] is a
+
+
+# ---- genericity -----------------------------------------------------------
+
+def test_the_policy_functions_carry_no_domain_vocabulary():
     import ast as _ast
     tree = _ast.parse(Path(C.__file__).read_text())
-    # Compare CODE, not commentary: the docstrings deliberately name the
-    # domains whose coupling was removed, and a check that cannot tell prose
-    # from logic is not a check — a lesson this repo has learned twice.
     for node in _ast.walk(tree):
         if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
-            stripped = [n for n in node.body
-                        if not (isinstance(n, _ast.Expr)
-                                and isinstance(n.value, _ast.Constant)
-                                and isinstance(n.value.value, str))]
-            code = "\n".join(_ast.dump(n) for n in stripped).lower()
+            body = [n for n in node.body
+                    if not (isinstance(n, _ast.Expr) and isinstance(n.value, _ast.Constant)
+                            and isinstance(n.value.value, str))]
+            code = "\n".join(_ast.dump(n) for n in body).lower()
             for word in ("canvas", "snake", "collision", "food", "keydown", "browser"):
                 assert word not in code, f"'{word}' leaked into {node.name}()"
