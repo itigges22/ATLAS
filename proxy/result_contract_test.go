@@ -334,11 +334,86 @@ func TestSSEProjectionsExposeOnlyLegacyKeys(t *testing.T) {
 		return true
 	})
 
+	// Emit(Envelope{Type: EvtToolResult, Payload: ...}) is a SEPARATE emitter
+	// on a different SSE stream (Emit -> defaultBroker.emit -> handleEvents),
+	// not a delegate of the ctx.Stream calls above. EvtToolResult is the
+	// literal "tool_result" (events.go), so this path publishes the same event
+	// type and needs the same protection.
+	var envelopes int
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) != 1 {
+			return true
+		}
+		ident, ok := call.Fun.(*ast.Ident)
+		if !ok || ident.Name != "Emit" {
+			return true
+		}
+		env, ok := call.Args[0].(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		var isToolResult bool
+		var payload *ast.CompositeLit
+		for _, elt := range env.Elts {
+			kv, ok := elt.(*ast.KeyValueExpr)
+			if !ok {
+				continue
+			}
+			field, ok := kv.Key.(*ast.Ident)
+			if !ok {
+				continue
+			}
+			switch field.Name {
+			case "Type":
+				if id, ok := kv.Value.(*ast.Ident); ok && id.Name == "EvtToolResult" {
+					isToolResult = true
+				}
+			case "Payload":
+				if cl, ok := kv.Value.(*ast.CompositeLit); ok {
+					payload = cl
+				}
+			}
+		}
+		if !isToolResult {
+			return true
+		}
+		envelopes++
+		if payload == nil {
+			t.Errorf("%s: tool_result Envelope payload is not an inspectable "+
+				"literal; this guard cannot prove what it publishes",
+				fset.Position(call.Pos()))
+			return true
+		}
+		for _, elt := range payload.Elts {
+			kv, ok := elt.(*ast.KeyValueExpr)
+			if !ok {
+				continue
+			}
+			k, ok := kv.Key.(*ast.BasicLit)
+			if !ok || k.Kind != token.STRING {
+				t.Errorf("%s: computed key in a tool_result Envelope payload",
+					fset.Position(kv.Pos()))
+				continue
+			}
+			if name := strings.Trim(k.Value, `"`); classification[name] {
+				t.Errorf("%s: Envelope emitter exposes internal classification "+
+					"key %q", fset.Position(kv.Pos()), name)
+			}
+		}
+		return true
+	})
+
 	if sites < 3 {
-		t.Fatalf("found %d tool_result emitters via AST, expected at least 3; "+
-			"if one was removed, update this guard deliberately", sites)
+		t.Fatalf("found %d ctx.Stream tool_result emitters via AST, expected at "+
+			"least 3; if one was removed, update this guard deliberately", sites)
 	}
-	t.Logf("inspected %d tool_result emitters structurally", sites)
+	if envelopes < 1 {
+		t.Fatalf("found %d Envelope tool_result emitters, expected at least 1; "+
+			"if the path was removed, update this guard deliberately", envelopes)
+	}
+	t.Logf("structurally inspected %d ctx.Stream and %d Envelope tool_result emitters (%d total)",
+		sites, envelopes, sites+envelopes)
 }
 
 // The states themselves round-trip inside the process. Wire non-exposure is a
