@@ -104,10 +104,74 @@ type ToolDef struct {
 }
 
 // ToolResult is the structured output returned to the model after tool execution.
+// MutationStatus reports what happened to the filesystem, separately from
+// whether the tool ran. `Success` alone could not express the difference
+// between a write that landed and one that was refused by a gate, which is
+// how a refused write and an applied one looked alike to callers.
+//
+// The zero value is MutationNone: a result nobody populated has not mutated
+// anything, and an unrecognised value is not an application either.
+type MutationStatus string
+
+const (
+	MutationNone    MutationStatus = "" // nothing was mutated (also the zero value)
+	MutationApplied MutationStatus = "applied"
+	MutationRefused MutationStatus = "refused" // a gate declined it
+	MutationFailed  MutationStatus = "failed"  // it was attempted and errored
+)
+
+// Applied is the only way to ask this question. Comparing against a string
+// literal at a call site is what lets an unknown value leak through as
+// success.
+func (m MutationStatus) Applied() bool { return m == MutationApplied }
+
+// ValidationKind names WHAT was checked. A syntax pass is not evidence the
+// task was verified, and keeping the kind explicit is what stops a cheap
+// check from being read as an expensive one later.
+type ValidationKind string
+
+const (
+	ValidationKindNone   ValidationKind = "" // nothing was checked (zero value)
+	ValidationKindSyntax ValidationKind = "syntax"
+)
+
+// ValidationStatus reports the OUTCOME of that check. `not_run` and
+// `not_applicable` are deliberately distinct: "we could not check" and "there
+// is nothing to check here" are different facts, and collapsing them is how
+// an unchecked file quietly reads as a checked one.
+//
+// The zero value is ValidationNotRun, so a result nobody populated is never
+// mistaken for one that passed.
+type ValidationStatus string
+
+const (
+	ValidationNotRun        ValidationStatus = "" // not checked (also the zero value)
+	ValidationNotApplicable ValidationStatus = "not_applicable"
+	ValidationPassed        ValidationStatus = "passed"
+	ValidationFailed        ValidationStatus = "failed"
+)
+
+// Passed is the only way to ask this question, for the same reason as
+// MutationStatus.Applied.
+func (v ValidationStatus) Passed() bool { return v == ValidationPassed }
+
 type ToolResult struct {
 	Success bool            `json:"success"`
 	Data    json.RawMessage `json:"data,omitempty"`
 	Error   string          `json:"error,omitempty"`
+
+	// Facts about the mutation and the check, reported independently of
+	// `Success` (which keeps its existing tool-operation meaning on the
+	// wire). All three are omitempty, so an older consumer sees the payload
+	// it always saw, and a payload from an older producer decodes to the
+	// fail-closed zero values above.
+	//
+	// Nothing here says whether the work counts as progress or authorises
+	// completion. That is task-contextual and is derived in the agent layer.
+	MutationStatus   MutationStatus   `json:"mutation_status,omitempty"`
+	ValidationKind   ValidationKind   `json:"validation_kind,omitempty"`
+	ValidationStatus ValidationStatus `json:"validation_status,omitempty"`
+	ValidationDetail string           `json:"validation_detail,omitempty"`
 
 	// V3 metadata (populated when V3 pipeline was used)
 	V3Used               bool                     `json:"v3_used,omitempty"`
