@@ -26,6 +26,7 @@ from stages.self_test_gen import SelfTestGen, SelfTestGenConfig
 from stages.candidate_selection import CandidateInfo, select_candidate
 
 import adapters
+import evidence
 import scoring
 import symbols
 
@@ -368,6 +369,22 @@ def _make_self_test(code: str, tc, task_input_file: str = "") -> str:
 
 
 _CONSENSUS_MARK = "V3_OUT:"
+
+
+
+def _is_interactive_artifact(file_path: str, code: str) -> bool:
+    """Browser/UI code, whose only phase-0 check is a compile smoke.
+
+    Keyed off the artifact, not the task wording: a .js/.html file that
+    touches a canvas, animation frames or key events cannot be verified by
+    "it parses", so its phase-0 pass must not close the pipeline.
+    """
+    ext = os.path.splitext(file_path or "")[1].lower()
+    if ext in (".html", ".htm", ".css"):
+        return True
+    if ext in (".js", ".jsx", ".ts", ".tsx"):
+        return True
+    return bool(code) and evidence.js_is_instrumentable(code)
 
 
 def _make_output_probe(code: str, tc, task_input_file: str = "") -> str:
@@ -909,7 +926,26 @@ class V3PipelineService:
             emit("probe_sandbox", f"passed={probe_passed} stderr={probe_stderr[:80] if probe_stderr else ''}")
             result["total_tokens"] += tokens
 
-        if probe_passed:
+        # Evidence strength decides whether phase 0 may close the pipeline.
+        # A compile smoke on interactive code demonstrates only that the file
+        # parses, and returning on it made candidates_generated=1 with
+        # PlanSearch, DivSampling, consensus and ranking never running — the
+        # whole test-time-compute apparatus skipped for any browser artifact.
+        probe_strength = evidence.SYNTAX if probe_passed else evidence.NONE
+        probe_missing: List[str] = []
+        if probe_passed and _is_interactive_artifact(file_path, probe_code):
+            probe_strength = evidence.SYNTAX
+            probe_missing = list(evidence.INTERACTIVE_REQUIRED)
+            emit("probe_evidence_syntax_only",
+                 "compile smoke proves the file parses, not that it behaves — "
+                 "continuing to candidate generation")
+        elif probe_passed:
+            # Algorithmic path unchanged: generated I/O tests are a real
+            # oracle, so their pass is behavioural evidence and still earns
+            # the fast return that keeps this class fast.
+            probe_strength = evidence.BEHAVIORAL_COMPLETE
+
+        if probe_passed and evidence.may_return_early(probe_strength, probe_missing):
             emit("probe_pass", "Probe passed — returning early")
             result["passed"] = True
             result["code"] = probe_code
