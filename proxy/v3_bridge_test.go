@@ -494,20 +494,51 @@ func TestAuthorizedV3ReplacementIsTheOnlyGate(t *testing.T) {
 	}
 }
 
-// Metadata must not outlive the bytes it described: an unauthorized result
-// carries no V3 provenance, so the "V3 verified this edit" nudge cannot fire
-// over content V3 did not author.
-func TestUnauthorizedV3CarriesNoMetadata(t *testing.T) {
-	baseline := "x = 1\n"
-	_, ok := authorizedV3Replacement(&V3GenerateResponse{
-		Passed: false, Code: "x = 2\n", PhaseSolved: "phase1",
-		WinningScore: 0.98, CandidatesTested: 7}, baseline)
-	if ok {
-		t.Fatal("a non-passing result must never be authorized, however good its score looks")
+// Provenance must describe the FINAL bytes, not the initial response.
+//
+// The previous test here asserted `V3EditMetadata{}.Used == false`, which
+// only proves Go's zero value is false — it never called either delivery
+// function. That is the fourth mirror-test in this workstream, so this one
+// drives the real gates.
+func TestBaselineRestoringGatesWithdrawV3Provenance(t *testing.T) {
+	// A candidate that PASSED but is refused downstream: HTML replaced by
+	// JavaScript, which the language-swap gate rejects.
+	htmlBaseline := "<!DOCTYPE html>\n<html><body><canvas id=\"c\"></canvas></body></html>\n"
+	jsCandidate := "const c = document.getElementById('c');\nc.getContext('2d');\n"
+
+	if why := v3SwappedTheLanguage("index.html", htmlBaseline, jsCandidate); why == "" {
+		t.Fatal("fixture invalid: the gate must reject JS replacing HTML")
 	}
-	meta := V3EditMetadata{}
-	if meta.Used {
-		t.Fatal("unauthorized delivery must leave V3EditMetadata.Used false")
+
+	// The transition the production path now uses.
+	code, authorized, fellBack := revokeV3(htmlBaseline, "language swap", "index.html")
+	if code != htmlBaseline {
+		t.Fatalf("baseline not restored: %q", code)
+	}
+	if authorized {
+		t.Fatal("a gate that restores the baseline must withdraw authorization")
+	}
+	if !fellBack {
+		t.Fatal("fallback must be recorded so no V3 metadata attaches")
+	}
+}
+
+// Bytes and provenance must not be assignable independently: every branch
+// that restores the caller's content has to go through the transition.
+func TestNoGateRestoresBaselineWithoutRevoking(t *testing.T) {
+	src, err := os.ReadFile("tools.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	writeFn := body[strings.Index(body, "func writeFileWithV3("):]
+	writeFn = writeFn[:strings.Index(writeFn, "\nfunc ")]
+	if strings.Contains(writeFn, "code = baselineContent") {
+		t.Fatal("a gate assigns baseline bytes directly; use revokeV3 so provenance follows")
+	}
+	if strings.Count(writeFn, "revokeV3(") < 3 {
+		t.Fatalf("expected every baseline-restoring gate to revoke, found %d",
+			strings.Count(writeFn, "revokeV3("))
 	}
 }
 

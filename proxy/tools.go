@@ -1519,6 +1519,10 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// would have silently made it the delivered artifact. An unverified
 	// alternative must never displace the baseline.
 	code, authorizedV3 := authorizedV3Replacement(v3Result, baselineContent)
+	// Declared here, with the bytes it describes. It used to be declared
+	// below the language-swap gate, which is precisely why that gate could
+	// restore the baseline without withdrawing provenance.
+	fellBack := !authorizedV3
 
 	// Language-swap gate. V3 generates candidates for the TASK, and on a
 	// multi-file job the task is not the file: "build me a snake game"
@@ -1527,9 +1531,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// check could not see it because for .html it runs an HTML parser, and
 	// an HTML parser accepts any text at all.
 	if swapped := v3SwappedTheLanguage(path, baselineContent, code); swapped != "" {
-		log.Printf("[write_file] discarding V3 candidate for %s — %s; keeping the model's content",
-			logPath(path), swapped)
-		code = baselineContent
+		code, authorizedV3, fellBack = revokeV3(baselineContent, swapped, path)
 	}
 
 	// Sanitise V3 output. The pipeline's underlying LLM response
@@ -1552,7 +1554,6 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// the baseline instead of rejecting: the offending call is V3-
 	// authored, and a rejection would blame the model for content it
 	// never wrote and cost a full pipeline retry per resend.
-	fellBack := false
 	if original, origOK := readOriginalForGate(path); origOK {
 		if introduced := editIntroducesUnresolved(ctx, path, original, code); len(introduced) > 0 {
 			if code != baselineContent {
@@ -1567,8 +1568,8 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 							"message": "  └─ V3 winner failed the structural gate — writing your version",
 						})
 					}
-					code = baselineContent
-					fellBack = true
+					code, authorizedV3, fellBack = revokeV3(
+						baselineContent, "winner failed the structural gate", path)
 				} else {
 					introduced = intrBase // name what the MODEL can act on
 				}
@@ -1590,8 +1591,8 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		if msg := embeddedScriptGate(ctx, path, original, code); msg != "" {
 			if code != baselineContent && embeddedScriptGate(ctx, path, original, baselineContent) == "" {
 				log.Printf("[write_file] V3 winner breaks an embedded script in %s — writing gate-passing baseline instead", logPath(path))
-				code = baselineContent
-				fellBack = true
+				code, authorizedV3, fellBack = revokeV3(
+					baselineContent, "winner breaks an embedded script", path)
 			} else {
 				log.Printf("[write_file] embedded-script gate rejected content for %s", logPath(path))
 				return &ToolResult{Success: false, Error: msg}, nil
@@ -2458,6 +2459,23 @@ type V3EditMetadata struct {
 // work introduces a "best_record" that is the strongest available candidate
 // while deliberately NOT closure-eligible; its code exists for diagnostics
 // and must never become the delivered artifact.
+
+// revokeV3 restores the caller's baseline AND withdraws V3 provenance in one
+// step.
+//
+// These moved independently before: the language-swap gate reset the bytes
+// to baseline but left authorizedV3 true and fellBack false, so the final
+// check attached V3Used, phase, score and verification evidence to content
+// V3 had not authored — and fired the "V3 verified this edit" nudge over it.
+// Authorization describes the FINAL bytes, not the initial response, so it
+// is revocable and every restoring gate must revoke it. Returning all three
+// values together makes it impossible for a future gate to update one
+// without the others.
+func revokeV3(baseline, reason, path string) (string, bool, bool) {
+	log.Printf("[write_file] V3 provenance withdrawn for %s — %s", logPath(path), reason)
+	return baseline, false, true // content, authorizedV3, fellBack
+}
+
 func authorizedV3Replacement(result *V3GenerateResponse, baseline string) (string, bool) {
 	if result == nil || !result.Passed || result.Code == "" {
 		if result != nil && result.Code != "" {
