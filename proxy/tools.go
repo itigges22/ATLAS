@@ -841,6 +841,38 @@ func writeFileTool() *ToolDef {
 			// iterate at run speed. V3 still owns the FIRST write of each
 			// file (the baseline generation where it adds value).
 			iterating := isActiveDebugIteration(ctx, input.Path)
+
+			// Regression protection for existing code, independent of tier
+			// and of whether V3 is configured. The healthy->broken rule
+			// exists to protect WORKING code, but it used to live only
+			// inside branches gated on `fileTier >= Tier2Medium &&
+			// ctx.V3URL != ""` or on an active debug iteration. A small
+			// file, or any file in a session without V3, reached neither and
+			// had valid bytes replaced by invalid ones with no check at all.
+			// Measured black-box through the agent loop: a T1 overwrite
+			// destroyed good bytes whether or not V3 was configured, while
+			// the T2+V3 cell refused the same rewrite.
+			//
+			// Scope is deliberately narrow, so the three intended policies
+			// survive: a NEW file still lands with a warning (nothing on
+			// disk to protect), an already-broken file still accepts a
+			// repair attempt (wasHealthy is false), and a non-gated language
+			// is unaffected (checkFallbackSyntax no-ops off
+			// syntaxGateLanguages).
+			if _, statErr := os.Stat(path); statErr == nil {
+				if synErr, ok := checkFallbackSyntax(ctx, input.Path, input.Content); !ok {
+					if prior, priorOK := readOriginalForGate(path); priorOK {
+						if _, wasHealthy := checkFallbackSyntax(ctx, input.Path, prior); wasHealthy {
+							log.Printf("[write_file] %s: refusing to regress valid content to invalid (%s)",
+								logPath(input.Path), truncateStr(synErr, 80))
+							return &ToolResult{
+								Success: false,
+								Error:   fallbackSyntaxRejection(input.Path, input.Content, synErr),
+							}, nil
+						}
+					}
+				}
+			}
 			// Content that does not parse gets the error now, not after the
 			// V3 timeout. V3 improves a working candidate; it does not exist
 			// to guess what a malformed one meant, and the post-V3 fallback
