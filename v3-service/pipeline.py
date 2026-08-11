@@ -933,6 +933,7 @@ class V3PipelineService:
         # whole test-time-compute apparatus skipped for any browser artifact.
         probe_strength = evidence.SYNTAX if probe_passed else evidence.NONE
         probe_missing: List[str] = []
+        probe_behavior_score = 0.0
         if probe_passed and _is_interactive_artifact(file_path, probe_code):
             probe_strength = evidence.SYNTAX
             probe_missing = list(evidence.INTERACTIVE_REQUIRED)
@@ -944,8 +945,10 @@ class V3PipelineService:
             # oracle, so their pass is behavioural evidence and still earns
             # the fast return that keeps this class fast.
             probe_strength = evidence.BEHAVIORAL_COMPLETE
+            probe_behavior_score = 1.0
 
-        if probe_passed and evidence.may_return_early(probe_strength, probe_missing):
+        if probe_passed and evidence.may_return_early(
+                probe_strength, probe_missing, probe_behavior_score):
             emit("probe_pass", "Probe passed — returning early")
             result["passed"] = True
             result["code"] = probe_code

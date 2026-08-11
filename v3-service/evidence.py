@@ -39,16 +39,25 @@ def at_least(strength: str, floor: str) -> bool:
         return False
 
 
-def may_return_early(strength: str, missing_required: List[str]) -> bool:
-    """Early return needs strong evidence AND complete required coverage.
+def may_return_early(strength: str, missing_required: List[str],
+                     behavior_score: float = 0.0) -> bool:
+    """Early return needs COMPLETE behavioural evidence, not merely strong.
 
-    Replacing `compile_passed` with `dom_probe_passed` and keeping an
-    unconditional return would reproduce the original defect one level up:
-    a probe showing time advances has not shown collision ends the game.
+    Accepting BEHAVIORAL_PARTIAL was a contradiction: the real ATLAS artifact
+    grades temporal_progress + input_causality + collision but no score
+    transition -- 0.75, no *required* criterion missing, so it returned early.
+    The pipeline would have measured itself inferior to the bare model's 1.00
+    and then declined to generate a single alternative. Detecting a weakness
+    and acting on it are different things, and only the second one amplifies.
+
+    A partial candidate is still perfectly usable as candidate #0; it just
+    does not get to close the pipeline.
     """
     if missing_required:
         return False
-    return at_least(strength, BEHAVIORAL_PARTIAL)
+    if strength != BEHAVIORAL_COMPLETE:
+        return False
+    return behavior_score >= 1.0
 
 
 # --------------------------------------------------------------- JS probe ---

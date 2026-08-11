@@ -70,20 +70,64 @@ def _probe(code):
 # ---- evidence model -------------------------------------------------------
 
 def test_syntax_evidence_never_permits_early_return():
-    assert not evidence.may_return_early(evidence.SYNTAX, [])
-    assert not evidence.may_return_early(evidence.RUNTIME, [])
+    assert not evidence.may_return_early(evidence.SYNTAX, [], 0.0)
+    assert not evidence.may_return_early(evidence.RUNTIME, [], 0.5)
+
+
+LOOP_AND_INPUT_ONLY = """
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+let x = 5, dx = 1, dy = 0;
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowUp') { dx = 0; dy = -1; }
+  if (e.key === 'ArrowRight') { dx = 1; dy = 0; }
+});
+function loop(){
+  x += dx;                       // moves, responds to input
+  ctx.fillRect(0, 0, 400, 400);  // ...but never collides, never scores
+  ctx.fillRect((x % 20) * 20, (dy ? 40 : 20), 18, 18);
+  setTimeout(loop, 60);
+}
+loop();
+"""
+
+
+def test_loop_and_input_without_collision_or_score_must_not_return_early():
+    """The exact defect: no REQUIRED criterion is missing, so an earlier rule
+    let this close the pipeline at 0.75 — measuring itself inferior to the
+    bare model's 1.00 and then generating no alternatives."""
+    ev = _probe(LOOP_AND_INPUT_ONLY)
+    st, missing, score = evidence.grade_interactive(ev)
+    assert st == evidence.BEHAVIORAL_PARTIAL, (st, ev)
+    assert not missing, "both required criteria ARE satisfied — that is the trap"
+    assert score < 1.0
+    assert not evidence.may_return_early(st, missing, score), \
+        "partial behaviour must proceed to candidate generation"
+
+
+def test_pins_the_observed_production_comparison():
+    """Bare 1.00 vs ATLAS 0.75, measured on the real artifacts."""
+    bare = {"supported": True, "runtime_clean": True, "temporal_progress": True,
+            "input_causality": True, "collision_transition": True,
+            "food_or_score_transition": True}
+    atlas = {**bare, "food_or_score_transition": False}
+    bst, bmiss, bscore = evidence.grade_interactive(bare)
+    ast_, amiss, ascore = evidence.grade_interactive(atlas)
+    assert bscore == 1.0 and ascore == 0.75
+    assert evidence.may_return_early(bst, bmiss, bscore)
+    assert not evidence.may_return_early(ast_, amiss, ascore)
 
 
 def test_partial_behaviour_with_missing_required_does_not_return_early():
     """Replacing compile_passed with dom_probe_passed and keeping an
     unconditional return would reproduce the defect one level up."""
     assert not evidence.may_return_early(
-        evidence.BEHAVIORAL_PARTIAL, ["input_causality"])
-    assert evidence.may_return_early(evidence.BEHAVIORAL_PARTIAL, [])
+        evidence.BEHAVIORAL_PARTIAL, ["input_causality"], 0.5)
+    assert not evidence.may_return_early(evidence.BEHAVIORAL_PARTIAL, [], 0.75)
 
 
 def test_an_oracle_pass_still_earns_the_fast_path():
-    assert evidence.may_return_early(evidence.BEHAVIORAL_COMPLETE, [])
+    assert evidence.may_return_early(evidence.BEHAVIORAL_COMPLETE, [], 1.0)
 
 
 def test_interactive_artifacts_are_detected_by_artifact_not_task_wording():
@@ -104,7 +148,7 @@ def test_working_game_demonstrates_required_behaviours():
 def test_inert_javascript_does_not_pass():
     st, missing, score = evidence.grade_interactive(_probe(INERT))
     assert missing
-    assert not evidence.may_return_early(st, missing)
+    assert not evidence.may_return_early(st, missing, score)
     assert score == 0.0
 
 
