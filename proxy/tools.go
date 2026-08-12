@@ -193,10 +193,21 @@ func executeToolCallInner(name string, args json.RawMessage, ctx *AgentContext) 
 		if len(args) > 200 && strings.Contains(errMsg, "unexpected end of JSON") {
 			errMsg = "Tool call was truncated (output too long for context window). Use smaller, targeted edit_file calls instead of full write_file rewrites."
 		}
-		return &ToolResult{
+		failed := &ToolResult{
 			Success: false,
 			Error:   errMsg,
 		}
+		// A producer that returned a classified error owns those facts, so
+		// copy them onto the synthesised result. Untyped errors stay Unknown:
+		// nothing is inferred from Success or from parsing error text, and a
+		// read-only tool's generic failure must never become MutationFailed.
+		var ce *classifiedError
+		if errors.As(err, &ce) {
+			failed.MutationStatus = ce.mutationStatus
+			failed.ValidationKind = ce.validationKind
+			failed.ValidationStatus = ce.validationStatus
+		}
+		return failed
 	}
 	return result
 }
@@ -1338,17 +1349,45 @@ func writeFileRecorded(path, content string, ctx *AgentContext) (*ToolResult, er
 // write_file tool call ultimately lands. Without this the file would
 // vanish into the void ("agent says it wrote the file but it isn't
 // there" bug).
+// classifiedError carries mutation/validation facts alongside a real error,
+// so the site that OWNS the evidence can state them without changing the
+// (nil, err) contract callers branch on. The V3 route and every other caller
+// still receive a non-nil error and take their existing error paths; only the
+// outward ToolResult synthesised at the boundary is enriched.
+type classifiedError struct {
+	err              error
+	mutationStatus   MutationStatus
+	validationKind   ValidationKind
+	validationStatus ValidationStatus
+}
+
+func (c *classifiedError) Error() string { return c.err.Error() }
+func (c *classifiedError) Unwrap() error { return c.err }
+
+// failedMutation tags a filesystem failure: a mutation was attempted and did
+// not establish the intended state. Validation reports honestly that no check
+// passed -- not_run for recognised code, not_applicable otherwise -- because
+// writeFileDirect runs no check of its own.
+func failedMutation(path string, err error) error {
+	kind, status := ValidationKindNone, ValidationNotApplicable
+	if _, gated := syntaxGateLanguages[strings.ToLower(filepath.Ext(path))]; gated {
+		kind, status = ValidationKindSyntax, ValidationNotRun
+	}
+	return &classifiedError{err: err, mutationStatus: MutationFailed,
+		validationKind: kind, validationStatus: status}
+}
+
 func writeFileDirect(path, content string) (*ToolResult, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return nil, fmt.Errorf("cannot create parent dir for %s: %w", path, err)
+		return nil, failedMutation(path, fmt.Errorf("cannot create parent dir for %s: %w", path, err))
 	}
 	tmpPath := path + ".atlas.tmp"
 	if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
-		return nil, fmt.Errorf("cannot write %s: %w", path, err)
+		return nil, failedMutation(path, fmt.Errorf("cannot write %s: %w", path, err))
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		os.Remove(tmpPath)
-		return nil, fmt.Errorf("cannot rename temp file: %w", err)
+		return nil, failedMutation(path, fmt.Errorf("cannot rename temp file: %w", err))
 	}
 	out := WriteFileOutput{BytesWritten: len(content)}
 	outBytes, _ := json.Marshal(out)
