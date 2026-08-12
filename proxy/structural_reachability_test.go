@@ -72,9 +72,12 @@ func newStructuralStub(t *testing.T, introduced string) (*httptest.Server, *stru
 		}
 		st.record(body)
 		src, _ := body["source"].(string)
-		out := map[string][]string{"unresolved": {}}
+		// The response schema is {"ok": bool, "unresolved": []string}. The
+		// client fails open on !ok, so omitting it silently disables the gate
+		// -- diagnosed by calling checkStructuralUnresolved directly and
+		// seeing ok=false against a correct-looking unresolved list.
+		out := map[string]interface{}{"ok": true, "unresolved": []string{}}
 		if strings.Contains(src, introduced+"(") {
-			// Proposed content: names the introduced call.
 			out["unresolved"] = []string{introduced}
 		}
 		json.NewEncoder(w).Encode(out)
@@ -83,23 +86,6 @@ func newStructuralStub(t *testing.T, introduced string) (*httptest.Server, *stru
 }
 
 func TestT0T1StructuralBranchIsReachable(t *testing.T) {
-	// REACHABILITY NOT YET PROVEN. Current state, recorded so the next
-	// attempt starts from evidence rather than a new guess:
-	//
-	//   * the contract is pinned and correct: POST /internal/structural_check
-	//     with {"path","source","project_context"} -> {"unresolved":[]string}
-	//   * the strict stub caught a real additional call on this path,
-	//     /internal/cyclomatic_complexity, now answered benignly
-	//   * exactly ONE structural_check request is observed, not two
-	//
-	// editIntroducesUnresolved calls the edited side first and returns early
-	// when that call is !ok or yields no unresolved names, so the missing
-	// second request means the edited-side result was empty or failed. The
-	// next step is to log the observed request body and the stub's response
-	// for that single call and find which of those two it is -- do NOT change
-	// the fixture speculatively.
-	t.Skip("one structural_check observed, expected two; see comment")
-
 	dir := t.TempDir()
 	rel := "small.py"
 	original := "def alpha():\n    return 1\n"
