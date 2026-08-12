@@ -1377,6 +1377,54 @@ func failedMutation(path string, err error) error {
 		validationKind: kind, validationStatus: status}
 }
 
+// overlayValidation replaces ONLY the validation fields of a result with an
+// observation the caller obtained upstream. writeFileDirect's conservative
+// default (syntax/not_run for recognised code) is right when nobody checked;
+// a route that DID check owns the stronger answer and overlays it here.
+//
+// Mutation facts and Success are never touched, and nothing is inferred from
+// Success, from the extension, or from a wrapper's ok boolean. Unknown is
+// preserved rather than normalised, so the result stays visibly unclassified
+// and a sentinel can catch the producer defect.
+func overlayValidation(res *ToolResult, o checkOutcome) {
+	if res == nil {
+		return
+	}
+	res.ValidationStatus = o.Status
+	res.ValidationDetail = o.Detail
+	switch o.Status {
+	case ValidationNotApplicable:
+		res.ValidationKind = ValidationKindNone
+	case ValidationUnknown:
+		res.ValidationKind = ValidationKindUnknown
+	default:
+		res.ValidationKind = ValidationKindSyntax
+	}
+}
+
+// overlayValidationOnError does the same for a classified filesystem error:
+// the mutation still failed and the error is still returned non-nil, but the
+// validation observation made on those exact proposed bytes is preserved.
+// Mutation failure and validation success are orthogonal -- checked bytes can
+// still fail to land. An untyped error is returned unchanged, so the overlay
+// never manufactures a classification no producer made.
+func overlayValidationOnError(err error, o checkOutcome) error {
+	var ce *classifiedError
+	if !errors.As(err, &ce) {
+		return err
+	}
+	ce.validationStatus = o.Status
+	switch o.Status {
+	case ValidationNotApplicable:
+		ce.validationKind = ValidationKindNone
+	case ValidationUnknown:
+		ce.validationKind = ValidationKindUnknown
+	default:
+		ce.validationKind = ValidationKindSyntax
+	}
+	return err
+}
+
 func writeFileDirect(path, content string) (*ToolResult, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return nil, failedMutation(path, fmt.Errorf("cannot create parent dir for %s: %w", path, err))
