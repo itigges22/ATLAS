@@ -134,8 +134,9 @@ func TestNewFileRouteClassification(t *testing.T) {
 		if !strings.Contains(string(res.Data), "does not parse") {
 			t.Errorf("warning lost from the result payload: %s", res.Data)
 		}
-		if calls == 0 {
-			t.Error("the checker never ran")
+		if calls != 1 {
+			t.Errorf("syntax-check calls = %d, want exactly 1 -- the failure "+
+				"path must not re-evaluate the structured checker", calls)
 		}
 		ents, _ := os.ReadDir(dir)
 		for _, e := range ents {
