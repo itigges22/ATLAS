@@ -203,8 +203,16 @@ Commit `baca54a`'s message and its original source comment both named
 and the message cannot be amended, so the correction is recorded here.
 
 The real path is `editIntroducesUnresolved` -> `checkStructuralUnresolved` ->
-`POST {V3URL}/internal/structural_check`, returning `{"unresolved":
-[]string}`. `/internal/symbol_index` is a different call in `context.go`
+`POST {V3URL}/internal/structural_check`, returning
+`{"ok": bool, "unresolved": []string}`.
+
+SECOND CORRECTION: the schema recorded around `e415dbc` omitted the required
+`ok` field. The client fails open on `!ok`, so a stub returning only
+`{"unresolved": [...]}` silently disables the gate -- diagnosed by calling
+`checkStructuralUnresolved` directly and seeing `ok=false` against a
+correct-looking unresolved list. This gate's failure mode is SILENT
+PERMISSIVENESS: observing an HTTP request does not prove it ran, so a test
+must assert the refusal itself. `/internal/symbol_index` is a different call in `context.go`
 serving project-context assembly, not the structural gate.
 
 The revert in `baca54a` remains correct on its own terms -- the T0/T1

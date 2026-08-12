@@ -158,9 +158,26 @@ func TestT0T1StructuralBranchIsReachable(t *testing.T) {
 		}
 	}
 
-	// --- classification is deliberately NOT restored yet ------------------
-	if res.MutationStatus != MutationUnknown {
-		t.Errorf("this task proves reachability only; classification should "+
-			"still be Unknown here, got %q", res.MutationStatus)
+	// --- classification ---------------------------------------------------
+	// Structural validation failed before any mutation. Syntax does NOT run
+	// on this route, so no syntax verdict is implied in either direction.
+	if res.MutationStatus != MutationRefused {
+		t.Errorf("MutationStatus = %q, want refused", res.MutationStatus)
+	}
+	if res.MutationStatus.Applied() {
+		t.Error("a structural refusal must never read as applied")
+	}
+	if res.ValidationKind != ValidationKindStructural {
+		t.Errorf("ValidationKind = %q, want structural", res.ValidationKind)
+	}
+	if res.ValidationStatus != ValidationFailed {
+		t.Errorf("ValidationStatus = %q, want failed", res.ValidationStatus)
+	}
+	if !strings.Contains(res.ValidationDetail, "missing_helper") {
+		t.Errorf("ValidationDetail must name the unresolved symbol, got %q",
+			res.ValidationDetail)
+	}
+	if !res.Classified() {
+		t.Errorf("result not fully classified: %+v", res)
 	}
 }
