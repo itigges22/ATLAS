@@ -1049,12 +1049,19 @@ func writeFileTool() *ToolDef {
 						log.Printf("[write_file] direct write introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
 						// NOT CLASSIFIED. The classification added in abda6d4
 						// was reverted: no test ever reached this branch, so
-						// the claim was unproven. Reaching it needs V3URL set
-						// (editIntroducesUnresolved posts to
-						// /internal/symbol_index and FAILS OPEN when that is
-						// unreachable) plus a sub-10-line file so the Tier2+V3
-						// branch stays unentered. Classify only once a
-						// production test demonstrates the branch is reached.
+						// the claim was unproven.
+						//
+						// Reaching it needs V3URL set plus a sub-10-line file
+						// so the Tier2+V3 branch stays unentered.
+						// editIntroducesUnresolved -> checkStructuralUnresolved
+						// posts to /internal/structural_check (NOT
+						// /internal/symbol_index, which is a different path in
+						// context.go) and returns {"unresolved": []string}. It
+						// FAILS OPEN on transport error, non-200, parse error
+						// or missing tree-sitter, and needs BOTH the edited-
+						// and original-side calls to succeed before it can
+						// refuse. Classify only once a production test
+						// demonstrates the branch is reached.
 						return &ToolResult{Success: false, Error: structuralWriteRejection(input.Path, introduced)}, nil
 					}
 				}
