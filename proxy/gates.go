@@ -494,13 +494,8 @@ func (f fallbackSyntaxOutcome) aggregate() checkOutcome {
 }
 
 func checkFallbackSyntax(ctx *AgentContext, path, content string) (string, bool) {
-	if ctx == nil {
-		return "", true
-	}
-	if msg, ok := checkSandboxSyntax(ctx, path, content); !ok {
-		return msg, false
-	}
-	return checkEmbeddedScript(ctx, path, content, "")
+	agg := fallbackSyntaxOutcomeFor(ctx, path, content).aggregate()
+	return agg.Detail, agg.Status != ValidationFailed
 }
 
 // checkSandboxSyntax is the whole-file half of checkFallbackSyntax: the
@@ -627,22 +622,34 @@ type embeddedScriptFinding struct {
 // comparison is why it lives on the far side rather than here: the service
 // already has the JavaScript parsed.
 func checkEmbeddedScript(ctx *AgentContext, path, content, previous string) (string, bool) {
-	if ctx == nil || ctx.V3URL == "" {
-		return "", true
-	}
+	o := embeddedScriptOutcome(ctx, path, content, previous)
+	return o.Detail, o.Status != ValidationFailed
+}
+
+// embeddedScriptOutcome is the structured core. APPLICABILITY FIRST: the
+// extension and a cheap local scan decide whether this check applies at all,
+// before any service question, so an absent V3 cannot mask content that never
+// needed checking.
+func embeddedScriptOutcome(ctx *AgentContext, path, content, previous string) checkOutcome {
 	if !embeddedScriptExts[strings.ToLower(filepath.Ext(path))] {
-		return "", true
+		return checkOutcome{Status: ValidationNotApplicable}
 	}
-	// Cheap local pre-filter: no <script/<style anywhere means no network
-	// call. Most gated writes never touch the service because of this.
+	// Cheap local pre-filter: no <script/<style anywhere means nothing to
+	// check and no network call. Most gated writes stop here.
 	low := strings.ToLower(content)
 	if !strings.Contains(low, "<script") && !strings.Contains(low, "<style") {
-		return "", true
+		return checkOutcome{Status: ValidationNotApplicable}
+	}
+	if ctx == nil {
+		return checkOutcome{Status: ValidationNotRun, Detail: "no agent context"}
+	}
+	if ctx.V3URL == "" {
+		return checkOutcome{Status: ValidationNotRun, Detail: "no embedded-script service configured"}
 	}
 	body, err := json.Marshal(map[string]string{
 		"path": path, "source": content, "previous": previous})
 	if err != nil {
-		return "", true
+		return checkOutcome{Status: ValidationNotRun, Detail: "request could not be built"}
 	}
 	base := ctx.Ctx
 	if base == nil {
@@ -653,7 +660,7 @@ func checkEmbeddedScript(ctx *AgentContext, path, content, previous string) (str
 	req, err := http.NewRequestWithContext(reqCtx, "POST",
 		ctx.V3URL+"/internal/embedded_script_check", bytes.NewReader(body))
 	if err != nil {
-		return "", true
+		return checkOutcome{Status: ValidationNotRun, Detail: "request could not be built"}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if serviceToken != "" {
@@ -661,23 +668,54 @@ func checkEmbeddedScript(ctx *AgentContext, path, content, previous string) (str
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", true // fail-soft: unreachable service never blocks a write
+		return checkOutcome{Status: ValidationNotRun, Detail: "service unreachable"}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", true
+		return checkOutcome{Status: ValidationNotRun, Detail: "service returned a non-200"}
 	}
 	var out struct {
 		OK       bool                    `json:"ok"`
 		Findings []embeddedScriptFinding `json:"findings"`
 	}
-	if json.NewDecoder(resp.Body).Decode(&out) != nil || !out.OK {
-		return "", true // grammar missing / non-UTF-8 -> fail-soft
+	if json.NewDecoder(resp.Body).Decode(&out) != nil {
+		return checkOutcome{Status: ValidationNotRun, Detail: "response was undecodable"}
+	}
+	if !out.OK {
+		return checkOutcome{Status: ValidationNotRun, Detail: "grammar missing or content not analysable"}
 	}
 	if len(out.Findings) == 0 {
-		return "", true
+		return checkOutcome{Status: ValidationPassed}
 	}
-	return embeddedScriptErrPrefix + formatEmbeddedScriptRejection(path, out.Findings[0]), false
+	return checkOutcome{
+		Status: ValidationFailed,
+		Detail: embeddedScriptErrPrefix + formatEmbeddedScriptRejection(path, out.Findings[0]),
+	}
+}
+
+// fallbackSyntaxOutcomeFor is the production producer of both observations.
+// Whole-file syntax runs first and its failure is decisive: the existing short
+// circuit is preserved, so no embedded request is made. The skipped embedded
+// observation is then recorded from LOCAL applicability only.
+func fallbackSyntaxOutcomeFor(ctx *AgentContext, path, content string) fallbackSyntaxOutcome {
+	whole := sandboxSyntaxOutcome(ctx, path, content)
+	if whole.Status == ValidationFailed {
+		return fallbackSyntaxOutcome{WholeFile: whole, Embedded: embeddedLocalApplicability(path, content)}
+	}
+	return fallbackSyntaxOutcome{WholeFile: whole, Embedded: embeddedScriptOutcome(ctx, path, content, "")}
+}
+
+// embeddedLocalApplicability answers "would this check have applied?" without
+// touching the service, for the skipped-after-failure case.
+func embeddedLocalApplicability(path, content string) checkOutcome {
+	if !embeddedScriptExts[strings.ToLower(filepath.Ext(path))] {
+		return checkOutcome{Status: ValidationNotApplicable}
+	}
+	low := strings.ToLower(content)
+	if !strings.Contains(low, "<script") && !strings.Contains(low, "<style") {
+		return checkOutcome{Status: ValidationNotApplicable}
+	}
+	return checkOutcome{Status: ValidationNotRun, Detail: "skipped after decisive whole-file failure"}
 }
 
 // embeddedScriptGate applies the healthy->broken rule the other write gates
