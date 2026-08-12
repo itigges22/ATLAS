@@ -918,9 +918,16 @@ func writeFileTool() *ToolDef {
 						if _, wasHealthy := checkFallbackSyntax(ctx, input.Path, prior); wasHealthy {
 							log.Printf("[write_file] %s: refusing to regress valid content to invalid (%s)",
 								logPath(input.Path), truncateStr(synErr, 80))
+							// The check examined input.Content, which is exactly
+							// the content that would have been written, and the
+							// refusal happens before any byte reaches disk.
 							return &ToolResult{
-								Success: false,
-								Error:   fallbackSyntaxRejection(input.Path, input.Content, synErr),
+								Success:          false,
+								Error:            fallbackSyntaxRejection(input.Path, input.Content, synErr),
+								MutationStatus:   MutationRefused,
+								ValidationKind:   ValidationKindSyntax,
+								ValidationStatus: ValidationFailed,
+								ValidationDetail: synErr,
 							}, nil
 						}
 					}
@@ -1263,6 +1270,14 @@ func writeNewFileWithWarning(path, inputPath, content, synErr string, ctx *Agent
 	}
 	outBytes, _ := json.Marshal(out)
 	res.Data = outBytes
+	// The syntax check ran on exactly `content`, and writeFileDirect wrote
+	// exactly `content`, so the failure describes the bytes on disk. Applied
+	// and failed are orthogonal here on purpose: the file landed AND it does
+	// not parse, which is the documented debugging policy.
+	res.MutationStatus = MutationApplied
+	res.ValidationKind = ValidationKindSyntax
+	res.ValidationStatus = ValidationFailed
+	res.ValidationDetail = synErr
 	return res, nil
 }
 

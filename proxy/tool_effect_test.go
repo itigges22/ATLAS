@@ -2,8 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -310,4 +313,95 @@ func TestWriteFileRefusalBeforeMutationLeavesBytes(t *testing.T) {
 	if !res.Classified() {
 		t.Errorf("pre-dispatch refusal not classified: %+v", res)
 	}
+}
+
+// --- write_file Slice 2: local syntax outcomes ------------------------------
+//
+// A caller upgrades not_run only when it knows the check examined the exact
+// bytes the write path used. Both routes below satisfy that: the gate checks
+// input.Content and refuses before any byte lands, and the warned write checks
+// `content` and hands that same value to writeFileDirect.
+
+// Invalid NEW code lands with a warning. Applied and failed are orthogonal:
+// the file is on disk AND it does not parse.
+func TestInvalidNewFileIsAppliedAndSyntaxFailed(t *testing.T) {
+	dir := t.TempDir()
+	got, res := writeThroughLoop(t, dir, "fresh.py", banLoopInvalidBody, true)
+
+	if !res.Success {
+		t.Fatalf("legacy Success regressed for a warned write: %+v", res)
+	}
+	if res.MutationStatus != MutationApplied {
+		t.Errorf("MutationStatus = %q, want applied", res.MutationStatus)
+	}
+	if res.ValidationKind != ValidationKindSyntax || res.ValidationStatus != ValidationFailed {
+		t.Errorf("validation = %q/%q, want syntax/failed",
+			res.ValidationKind, res.ValidationStatus)
+	}
+	if res.ValidationDetail == "" {
+		t.Error("ValidationDetail must carry the real diagnostic")
+	}
+	if got != banLoopInvalidBody {
+		t.Errorf("bytes on disk are not the checked bytes")
+	}
+}
+
+// Healthy existing code protected from an invalid overwrite.
+func TestInvalidOverwriteIsRefusedAndSyntaxFailed(t *testing.T) {
+	dir := t.TempDir()
+	// Session-owned: create it valid first, then push invalid bytes.
+	_, _ = writeThroughLoop(t, dir, "mod.py", banLoopValidBody, true)
+	got, res := writeThroughLoop(t, dir, "mod.py", banLoopInvalidBody, true)
+
+	if res.Success {
+		t.Fatalf("an invalid overwrite of healthy code must not succeed: %+v", res)
+	}
+	if res.MutationStatus != MutationRefused {
+		t.Errorf("MutationStatus = %q, want refused", res.MutationStatus)
+	}
+	if res.MutationStatus.Applied() {
+		t.Error("a refusal must never read as applied")
+	}
+	if res.ValidationKind != ValidationKindSyntax || res.ValidationStatus != ValidationFailed {
+		t.Errorf("validation = %q/%q, want syntax/failed",
+			res.ValidationKind, res.ValidationStatus)
+	}
+	if res.ValidationDetail == "" {
+		t.Error("ValidationDetail must carry the real diagnostic")
+	}
+	if got != banLoopValidBody {
+		t.Errorf("prior valid bytes were not preserved: %q", got)
+	}
+}
+
+// writeThroughLoop drives one write_file call through executeToolCall with a
+// working syntax checker, returning the final on-disk bytes and the result.
+func writeThroughLoop(t *testing.T, dir, rel, content string, withSandbox bool) (string, *ToolResult) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/syntax-check") {
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			valid := !strings.Contains(in.Code, "def alpha(n:")
+			out := map[string]interface{}{"valid": valid}
+			if !valid {
+				out["errors"] = []string{"SyntaxError: invalid syntax (line 4)"}
+			}
+			json.NewEncoder(w).Encode(out)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.PermissionMode = PermissionYolo
+	ctx.StreamFn = func(string, interface{}) {}
+	if withSandbox {
+		ctx.SandboxURL = srv.URL
+	}
+	args, _ := json.Marshal(map[string]string{"path": rel, "content": content})
+	res := executeToolCall("write_file", args, ctx)
+	b, _ := os.ReadFile(filepath.Join(dir, rel))
+	return string(b), res
 }
