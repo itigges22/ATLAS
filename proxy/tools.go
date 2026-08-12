@@ -1047,20 +1047,15 @@ func writeFileTool() *ToolDef {
 				if original, ok := readOriginalForGate(path); ok {
 					if introduced := editIntroducesUnresolved(ctx, path, original, input.Content); len(introduced) > 0 {
 						log.Printf("[write_file] direct write introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
-						// Structural is decisive here for a DIFFERENT reason
-						// than at the fast-path site: this branch runs the
-						// structural gate ONLY (see the comment above), so
-						// syntax never ran rather than having passed. Either
-						// way the structural failure is what refused the
-						// write, and the refusal precedes any filesystem
-						// operation -- no temp file is created on this path.
-						return &ToolResult{Success: false,
-							Error:            structuralWriteRejection(input.Path, introduced),
-							MutationStatus:   MutationRefused,
-							ValidationKind:   ValidationKindStructural,
-							ValidationStatus: ValidationFailed,
-							ValidationDetail: structuralWriteRejection(input.Path, introduced),
-						}, nil
+						// NOT CLASSIFIED. The classification added in abda6d4
+						// was reverted: no test ever reached this branch, so
+						// the claim was unproven. Reaching it needs V3URL set
+						// (editIntroducesUnresolved posts to
+						// /internal/symbol_index and FAILS OPEN when that is
+						// unreachable) plus a sub-10-line file so the Tier2+V3
+						// branch stays unentered. Classify only once a
+						// production test demonstrates the branch is reached.
+						return &ToolResult{Success: false, Error: structuralWriteRejection(input.Path, introduced)}, nil
 					}
 				}
 			}
