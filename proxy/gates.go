@@ -424,6 +424,64 @@ var syntaxGateLanguages = map[string]string{
 // INSIDE it (a <script> block in an .html file, or in a Python string handed
 // to render_template_string). The sandbox's checker sees the Python or the
 // markup only, so a stray `)` in embedded JavaScript passes it.
+
+// checkOutcome is the structured result of ONE validation check. Status is the
+// single source of truth: applicability and whether execution was attempted
+// are derived from it, never stored separately, so the two cannot contradict.
+//
+//	not_applicable  the check did not apply to this content
+//	not_run         it applied, but evidence was unavailable
+//	passed/failed   it applied and was attempted
+//
+// ValidationUnknown is an invalid internal state here and is never emitted
+// intentionally.
+type checkOutcome struct {
+	Status ValidationStatus
+	Detail string
+}
+
+func (o checkOutcome) applicable() bool { return o.Status != ValidationNotApplicable }
+func (o checkOutcome) attempted() bool {
+	return o.Status == ValidationPassed || o.Status == ValidationFailed
+}
+
+// fallbackSyntaxOutcome keeps the two checks as named observations rather than
+// flattening them early: a caller may need to know that whole-file syntax
+// passed while an applicable embedded check could not run.
+type fallbackSyntaxOutcome struct {
+	WholeFile checkOutcome
+	Embedded  checkOutcome
+}
+
+// aggregate collapses the observations for callers that need one verdict.
+//
+//	any demonstrated failure            -> failed (decisive)
+//	else any applicable-but-unavailable -> not_run
+//	else >=1 pass, rest not_applicable  -> passed
+//	else all not_applicable             -> not_applicable
+//
+// Unknown never becomes passed: an unrecognised status is treated as
+// unavailable, which is the fail-closed direction for evidence.
+func (f fallbackSyntaxOutcome) aggregate() checkOutcome {
+	checks := []checkOutcome{f.WholeFile, f.Embedded}
+	for _, c := range checks {
+		if c.Status == ValidationFailed {
+			return c
+		}
+	}
+	for _, c := range checks {
+		if c.Status == ValidationNotRun || c.Status == ValidationUnknown {
+			return checkOutcome{Status: ValidationNotRun, Detail: c.Detail}
+		}
+	}
+	for _, c := range checks {
+		if c.Status == ValidationPassed {
+			return checkOutcome{Status: ValidationPassed}
+		}
+	}
+	return checkOutcome{Status: ValidationNotApplicable}
+}
+
 func checkFallbackSyntax(ctx *AgentContext, path, content string) (string, bool) {
 	if ctx == nil {
 		return "", true
@@ -437,24 +495,31 @@ func checkFallbackSyntax(ctx *AgentContext, path, content string) (string, bool)
 // checkSandboxSyntax is the whole-file half of checkFallbackSyntax: the
 // sandbox's /syntax-check in the file's own language.
 func checkSandboxSyntax(ctx *AgentContext, path, content string) (string, bool) {
-	if ctx.SandboxURL == "" {
-		return "", true
-	}
+	o := sandboxSyntaxOutcome(ctx, path, content)
+	return o.Detail, o.Status != ValidationFailed
+}
+
+// sandboxSyntaxOutcome is the structured core. APPLICABILITY IS EVALUATED
+// FIRST: the extension decides whether this check applies at all, before any
+// service availability question, so a missing sandbox cannot mask genuinely
+// non-applicable content. That changes the structured evidence only -- the
+// wrapper's allow/refuse decision is identical either way.
+func sandboxSyntaxOutcome(ctx *AgentContext, path, content string) checkOutcome {
 	lang, gated := syntaxGateLanguages[strings.ToLower(filepath.Ext(path))]
 	if !gated {
-		return "", true
+		return checkOutcome{Status: ValidationNotApplicable}
 	}
-	body, err := json.Marshal(map[string]string{
-		"code":     content,
-		"language": lang,
-	})
+	if ctx == nil || ctx.SandboxURL == "" {
+		return checkOutcome{Status: ValidationNotRun, Detail: "no sandbox configured"}
+	}
+	body, err := json.Marshal(map[string]string{"code": content, "language": lang})
 	if err != nil {
-		return "", true
+		return checkOutcome{Status: ValidationNotRun, Detail: "request could not be built"}
 	}
 	client := &http.Client{Timeout: 15 * time.Second}
 	req, err := http.NewRequest("POST", ctx.SandboxURL+"/syntax-check", bytes.NewReader(body))
 	if err != nil {
-		return "", true
+		return checkOutcome{Status: ValidationNotRun, Detail: "request could not be built"}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if serviceToken != "" {
@@ -462,27 +527,27 @@ func checkSandboxSyntax(ctx *AgentContext, path, content string) (string, bool) 
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", true // fail-open: gate only blocks confirmed-broken content
+		return checkOutcome{Status: ValidationNotRun, Detail: "sandbox unreachable"}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", true
+		return checkOutcome{Status: ValidationNotRun, Detail: "sandbox returned a non-200"}
 	}
 	var out struct {
 		Valid  bool     `json:"valid"`
 		Errors []string `json:"errors"`
 	}
 	if json.NewDecoder(resp.Body).Decode(&out) != nil {
-		return "", true
+		return checkOutcome{Status: ValidationNotRun, Detail: "sandbox response was undecodable"}
 	}
 	if out.Valid {
-		return "", true
+		return checkOutcome{Status: ValidationPassed}
 	}
 	first := "syntax error"
 	if len(out.Errors) > 0 {
 		first = out.Errors[0]
 	}
-	return first, false
+	return checkOutcome{Status: ValidationFailed, Detail: first}
 }
 
 // ---------------------------------------------------------------------------
@@ -984,6 +1049,7 @@ var reSyntaxLineNo = regexp.MustCompile(`line (\d+)`)
 //   - a mid-content syntax bug → point at the offending line (quoted from
 //     `content` when the error carries a line number) and tell the model to
 //     FIX that line, explicitly forbidding an identical resend.
+//
 // fusedLineRe finds a literal backslash-n inside a comment with code-shaped
 // text after it: `# ...it's a transition\n        if current_run[0][1] != ...`.
 // One mis-escaped newline in the model's JSON traps the next statement inside
