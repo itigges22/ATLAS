@@ -196,10 +196,25 @@ const (
 	ValidationKindUnknown ValidationKind = ""     // unclassified (zero value)
 	ValidationKindNone    ValidationKind = "none" // deliberately checked nothing
 	ValidationKindSyntax  ValidationKind = "syntax"
+
+	// ValidationKindStructural: the content parses but references something
+	// that does not resolve. In the write_file handler the syntax gate runs
+	// BEFORE the structural one, so a structural rejection means syntax
+	// PASSED on those exact bytes -- recording it as syntax/failed would
+	// assert the opposite of what happened.
+	//
+	// Where two checks ran with different outcomes, these singular fields
+	// carry the DECISIVE one: the failure that caused the refusal, or the
+	// applicable result for an applied write.
+	ValidationKindStructural ValidationKind = "structural"
 )
 
 func (k ValidationKind) Classified() bool {
-	return k == ValidationKindNone || k == ValidationKindSyntax
+	switch k {
+	case ValidationKindNone, ValidationKindSyntax, ValidationKindStructural:
+		return true
+	}
+	return false
 }
 
 // ValidationStatus reports the OUTCOME of that check. `not_run` and

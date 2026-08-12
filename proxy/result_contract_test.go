@@ -435,3 +435,62 @@ func TestClassificationRoundTripsInternallyEvenThoughSSEOmitsIt(t *testing.T) {
 		}
 	}
 }
+
+// Structural validation is a distinct kind, not a flavour of syntax. In the
+// write_file handler the syntax gate runs FIRST and a structural rejection
+// therefore means syntax PASSED on those exact bytes -- labelling it
+// syntax/failed would assert the opposite of what happened.
+func TestStructuralIsARecognizedValidationKind(t *testing.T) {
+	if !ValidationKindStructural.Classified() {
+		t.Error("structural must be a classified validation kind")
+	}
+	if ValidationKindStructural == ValidationKindSyntax {
+		t.Error("structural must be distinct from syntax")
+	}
+	if ValidationKindStructural != "structural" {
+		t.Errorf("ValidationKindStructural = %q, want \"structural\"",
+			ValidationKindStructural)
+	}
+	r := ToolResult{
+		MutationStatus: MutationRefused,
+		ValidationKind: ValidationKindStructural, ValidationStatus: ValidationFailed,
+	}
+	if !r.Classified() {
+		t.Error("refused + structural/failed must be a classified result")
+	}
+	if r.ValidationStatus.Passed() {
+		t.Error("structural/failed must never read as passed")
+	}
+	if r.MutationStatus.Applied() {
+		t.Error("a structural refusal must never read as applied")
+	}
+}
+
+func TestMalformedStructuralKindFailsClosed(t *testing.T) {
+	for _, k := range []ValidationKind{"", "STRUCTURAL", "Structural", " structural"} {
+		if k.Classified() {
+			t.Errorf("ValidationKind(%q) leaked through as classified", k)
+		}
+	}
+}
+
+func TestStructuralRoundTripsInternally(t *testing.T) {
+	in := ToolResult{
+		MutationStatus: MutationRefused,
+		ValidationKind: ValidationKindStructural, ValidationStatus: ValidationFailed,
+		ValidationDetail: "unresolved call: render_template",
+	}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out ToolResult
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.ValidationKind != ValidationKindStructural ||
+		out.ValidationStatus != ValidationFailed ||
+		out.ValidationDetail != in.ValidationDetail {
+		t.Fatalf("structural round trip lost fields: %+v", out)
+	}
+}

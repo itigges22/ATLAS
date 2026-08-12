@@ -1016,7 +1016,16 @@ func writeFileTool() *ToolDef {
 				if origOK {
 					if introduced := editIntroducesUnresolved(ctx, path, original, input.Content); len(introduced) > 0 {
 						log.Printf("[write_file] fast-path write introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
-						return &ToolResult{Success: false, Error: structuralWriteRejection(input.Path, introduced)}, nil
+						// Syntax ran first and PASSED on these exact bytes; the
+						// structural check is what refused them, so structural
+						// is the decisive outcome.
+						return &ToolResult{Success: false,
+							Error:            structuralWriteRejection(input.Path, introduced),
+							MutationStatus:   MutationRefused,
+							ValidationKind:   ValidationKindStructural,
+							ValidationStatus: ValidationFailed,
+							ValidationDetail: structuralWriteRejection(input.Path, introduced),
+						}, nil
 					}
 				}
 			}
