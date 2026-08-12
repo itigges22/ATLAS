@@ -1102,11 +1102,19 @@ func writeFileTool() *ToolDef {
 			// os.Stat, not readOriginalForGate: that helper returns ("", true)
 			// for a MISSING file — its bool means "usable as a baseline", not
 			// "exists" — so testing it here silently skipped the gate.
-			if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
-				if synErr, ok := checkFallbackSyntax(ctx, input.Path, input.Content); !ok {
+			// Destination absence is determined ONCE, and when the file is
+			// new the structured checker is evaluated ONCE. This route owns a
+			// real observation, so it overlays it onto the result afterwards
+			// rather than leaving writeFileDirect's conservative default.
+			_, statErr := os.Stat(path)
+			isNew := os.IsNotExist(statErr)
+			newFileCheck := checkOutcome{Status: ValidationUnknown}
+			if isNew {
+				newFileCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
+				if newFileCheck.Status == ValidationFailed {
 					log.Printf("[write_file] new file %s does not parse — writing with a warning (%s)",
-						logPath(input.Path), truncateStr(synErr, 80))
-					return writeNewFileWithWarning(path, input.Path, input.Content, synErr, ctx)
+						logPath(input.Path), truncateStr(newFileCheck.Detail, 80))
+					return writeNewFileWithWarning(path, input.Path, input.Content, newFileCheck.Detail, ctx)
 				}
 			}
 
@@ -1114,6 +1122,15 @@ func writeFileTool() *ToolDef {
 			res, err := writeFileRecorded(path, input.Content, ctx)
 			if err == nil && res != nil && res.Success {
 				ctx.SessionWrites[input.Path] = true
+			}
+			if isNew {
+				// Mutation facts stay as the writer reported them; only the
+				// validation observation is overlaid. Unknown is preserved.
+				if err != nil {
+					err = overlayValidationOnError(err, newFileCheck)
+				} else {
+					overlayValidation(res, newFileCheck)
+				}
 			}
 			return res, err
 		},
