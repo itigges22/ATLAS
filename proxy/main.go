@@ -250,6 +250,7 @@ func newProxyMux() *http.ServeMux {
 	// TUI calls this on connect to render a Lens/ASA compat badge.
 	mux.HandleFunc("/v1/calibration/status", handleCalibrationStatus)
 	mux.HandleFunc("/version", handleVersion)
+	mux.HandleFunc("/workspace", handleWorkspace)
 
 	// Catch-all: proxy to llama-server
 	mux.HandleFunc("/", handlePassthrough)
@@ -727,6 +728,42 @@ func handleVersion(w http.ResponseWriter, r *http.Request) {
 		"api_version":      APIVersion,
 		"protocol_version": ProtocolVersion,
 		"error_codes":      AllErrorCodes,
+	})
+}
+
+// dockerEnvMarker is the file the Docker runtime creates in every container.
+// A var, not a const, so tests can point it at a temp path and exercise both
+// branches — the real path is absolute and unwritable, and the test host may
+// itself be a container.
+var dockerEnvMarker = "/.dockerenv"
+
+// isContainerized reports whether this process is running inside a Docker
+// container. ATLAS_WORKSPACE_DIR is unreliable for this — the local
+// (non-Docker) proxy launcher sets it too (runtime.py:283), so both modes
+// would report the same value. /.dockerenv is Docker-runtime-created and
+// absent on bare host processes, so it's the actual signal.
+func isContainerized() bool {
+	_, err := os.Stat(dockerEnvMarker)
+	return err == nil
+}
+
+func handleWorkspace(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed,
+			ErrUnsupported, "method not allowed")
+		return
+	}
+	hostPath := os.Getenv("ATLAS_PROJECT_DIR")
+	containerPath := os.Getenv("ATLAS_WORKSPACE_DIR")
+	containerized := isContainerized()
+	if !filepath.IsAbs(hostPath) {
+		hostPath = ""
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"project_dir":   hostPath,
+		"working_dir":   containerPath,
+		"containerized": containerized,
 	})
 }
 
