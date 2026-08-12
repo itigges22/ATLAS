@@ -99,12 +99,53 @@ func allTools() []*ToolDef {
 }
 
 // executeTool dispatches a tool call to its executor.
+// executeToolCall dispatches a tool and then classifies the result at the
+// shared boundary, for the tools whose classification FOLLOWS FROM THEIR
+// EFFECT CLASS. Direct mutators are deliberately excluded: only the branch
+// that performed the mutation knows whether bytes landed, so filling that in
+// here would conceal a missed local producer.
+//
+// Nothing here reads Success. Classification is never inferred from it.
 func executeToolCall(name string, args json.RawMessage, ctx *AgentContext) *ToolResult {
+	tool := getTool(name)
+	result := executeToolCallInner(name, args, ctx)
+	if result == nil || tool == nil {
+		return result
+	}
+	// Only fill what the effect class alone can prove, and only where a local
+	// producer has not already spoken.
+	if tool.Effect.BoundaryClassifiable() && result.MutationStatus == MutationUnknown {
+		switch tool.Effect {
+		case ToolEffectReadOnly:
+			// Cannot mutate by construction, on success or failure alike.
+			result.MutationStatus = MutationNone
+		case ToolEffectCommandUnobserved:
+			// Conservative: once dispatch reached the handler, a subprocess or
+			// background job may have started and written before failing,
+			// timing out, or being killed. Only a branch that proves no
+			// execution began may claim MutationNone, and it does so locally.
+			result.MutationStatus = MutationUnobserved
+		}
+	}
+	if result.ValidationKind == ValidationKindUnknown && tool.Effect.BoundaryClassifiable() {
+		// Neither class performs content validation. Saying so explicitly is
+		// different from leaving it unknown.
+		result.ValidationKind = ValidationKindNone
+		result.ValidationStatus = ValidationNotApplicable
+	}
+	return result
+}
+
+func executeToolCallInner(name string, args json.RawMessage, ctx *AgentContext) *ToolResult {
 	tool := getTool(name)
 	if tool == nil {
 		return &ToolResult{
 			Success: false,
 			Error:   fmt.Sprintf("unknown tool: %s", name),
+			// Refused before dispatch: no handler ran, so nothing could have
+			// started or mutated. This is provable, not conservative.
+			MutationStatus: MutationNone,
+			ValidationKind: ValidationKindNone, ValidationStatus: ValidationNotApplicable,
 		}
 	}
 
@@ -123,15 +164,22 @@ func executeToolCall(name string, args json.RawMessage, ctx *AgentContext) *Tool
 		return &ToolResult{
 			Success: false,
 			Error:   missingArgsHint(name),
+			// Pre-dispatch: no handler ran.
+			MutationStatus: MutationNone,
+			ValidationKind: ValidationKindNone, ValidationStatus: ValidationNotApplicable,
 		}
 	}
 	if reason := validateToolWorkspacePaths(name, args, ctx); reason != "" {
-		return &ToolResult{Success: false, Error: reason}
+		return &ToolResult{Success: false, Error: reason,
+			MutationStatus: MutationNone,
+			ValidationKind: ValidationKindNone, ValidationStatus: ValidationNotApplicable}
 	}
 	// Safety deny-list — sensitive targets (.env, *.pem, *credentials*,
 	// destructive shell patterns) are refused in every permission mode.
 	if denied, reason := shouldDenyToolCall(name, args); denied {
-		return &ToolResult{Success: false, Error: fmt.Sprintf("%s refused: %s", name, reason)}
+		return &ToolResult{Success: false, Error: fmt.Sprintf("%s refused: %s", name, reason),
+			MutationStatus: MutationNone,
+			ValidationKind: ValidationKindNone, ValidationStatus: ValidationNotApplicable}
 	}
 
 	result, err := tool.Execute(args, ctx)
@@ -187,6 +235,7 @@ func missingArgsHint(name string) string {
 func readFileTool() *ToolDef {
 	return &ToolDef{
 		Name:        "read_file",
+		Effect:      ToolEffectReadOnly,
 		Description: "Read the contents of a file. Returns numbered lines. Use offset and limit for large files.",
 		InputSchema: ReadFileInput{},
 		ReadOnly:    true,
@@ -286,7 +335,7 @@ func readFileTool() *ToolDef {
 					cut = nl + 1
 				}
 				shown := strings.Count(content[:cut], "\n")
-					content = content[:cut] + readFileTruncationNotice(shown, totalLines, len(data))
+				content = content[:cut] + readFileTruncationNotice(shown, totalLines, len(data))
 				truncated = true
 				shownEnd = start + shown
 				if shownEnd > totalLines {
@@ -341,7 +390,8 @@ func readFileTool() *ToolDef {
 
 func outlineFileTool() *ToolDef {
 	return &ToolDef{
-		Name: "outline_file",
+		Name:   "outline_file",
+		Effect: ToolEffectReadOnly,
 		Description: "List a file's top-level functions and classes with their " +
 			"line ranges. Returns NO code: an outline tells you WHERE something is " +
 			"defined and never what it does, so you cannot answer a question, " +
@@ -568,6 +618,7 @@ func outlineByRegex(path, source string) []OutlineSymbol {
 func searchFilesTool() *ToolDef {
 	return &ToolDef{
 		Name:        "search_files",
+		Effect:      ToolEffectReadOnly,
 		Description: "Search for a regex pattern inside file CONTENTS. Returns matching lines with file paths and line numbers. Use glob to filter by filename pattern. To find a file by its name (not contents), use find_file or list_directory instead.",
 		InputSchema: SearchFilesInput{},
 		ReadOnly:    true,
@@ -681,6 +732,7 @@ func searchFilesTool() *ToolDef {
 func listDirectoryTool() *ToolDef {
 	return &ToolDef{
 		Name:        "list_directory",
+		Effect:      ToolEffectReadOnly,
 		Description: "List the contents of a directory. Returns file names, types (file/dir/symlink), and sizes.",
 		InputSchema: ListDirectoryInput{},
 		ReadOnly:    true,
@@ -735,7 +787,8 @@ func listDirectoryTool() *ToolDef {
 
 func writeFileTool() *ToolDef {
 	return &ToolDef{
-		Name: "write_file",
+		Name:   "write_file",
+		Effect: ToolEffectDirectMutation,
 		Description: "Create a NEW file from scratch. Creates parent directories if needed. " +
 			"For any file longer than a few lines, set content to \"@fenced\" and provide " +
 			"the file as a plain fenced code block when asked — code embedded in a JSON " +
@@ -1705,7 +1758,8 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 
 func editFileTool() *ToolDef {
 	return &ToolDef{
-		Name: "edit_file",
+		Name:   "edit_file",
+		Effect: ToolEffectDirectMutation,
 		Description: "SURGICAL inline string replacement, ONLY. Use ONLY when changing a few lines inside a function (a None check, a regex, a constant). " +
 			"DO NOT use for whole-function rewrites, whole-class rewrites, whole-file replacements, or any change >10 lines — for those, use structural_edit (named node) or write_file (new file). " +
 			"old_str must match exactly once (or replace_all=true). Always read_file before editing. " +
@@ -2153,7 +2207,8 @@ func editFileTool() *ToolDef {
 
 func structuralEditTool() *ToolDef {
 	return &ToolDef{
-		Name: "structural_edit",
+		Name:   "structural_edit",
+		Effect: ToolEffectDirectMutation,
 		Description: "REQUIRED tool for whole-function, whole-class, or whole-HTML-element rewrites in existing files. " +
 			"ALWAYS prefer over edit_file when replacing a named node or changing more than ~10 lines — edit_file is the WRONG tool for those cases (it forces you to copy the entire existing block as old_str, wasting tokens and frequently truncating). " +
 			"Selectors v1: python `function:NAME` or `class:NAME` (decorators included automatically); html `<tag>` (top-level element). " +
@@ -2865,7 +2920,8 @@ func buildDiffPreview(oldContent, newContent, oldStr, newStr string) string {
 // newly unresolved calls.
 func insertAfterTool() *ToolDef {
 	return &ToolDef{
-		Name: "insert_after",
+		Name:   "insert_after",
+		Effect: ToolEffectDirectMutation,
 		Description: "Insert new lines into a file AFTER a given line number, without touching anything else. " +
 			"Use this to ADD code — a new branch, function, import, or case — when you are not changing existing lines. " +
 			"`line` is the 1-based number shown by read_file (0 inserts at the top of the file); `content` is only the new text. " +
@@ -2975,7 +3031,6 @@ func insertAfterTool() *ToolDef {
 // range, and they cost the same two lines whether the span is 5 or 50.
 const replaceLinesMaxSpan = 60
 
-
 // relocateStaleRange finds where a stale replace_lines range moved to.
 //
 // The model's line numbers go stale the moment an earlier edit changes the
@@ -3079,7 +3134,8 @@ func lineAssertionMismatch(expected, actual string, lineNum int, path string, fi
 // One line each is the length regime this model is reliable in.
 func replaceLinesTool() *ToolDef {
 	return &ToolDef{
-		Name: "replace_lines",
+		Name:   "replace_lines",
+		Effect: ToolEffectDirectMutation,
 		Description: "Replace a RANGE OF LINES with new content, addressed by the line numbers read_file printed. " +
 			"Use this to CHANGE existing code spanning more than a line or two: cite `start_line` and `end_line` instead of " +
 			"reproducing the old text, so a long span cannot go wrong in transcription. Both are 1-based and INCLUSIVE. " +
@@ -3209,6 +3265,7 @@ func replaceLinesTool() *ToolDef {
 func deleteFileTool() *ToolDef {
 	return &ToolDef{
 		Name:        "delete_file",
+		Effect:      ToolEffectDirectMutation,
 		Description: "Delete a file or empty directory. Use for removing files that are no longer needed.",
 		InputSchema: DeleteFileInput{},
 		ReadOnly:    false,
@@ -3274,6 +3331,7 @@ func deleteFileTool() *ToolDef {
 func moveFileTool() *ToolDef {
 	return &ToolDef{
 		Name:        "move_file",
+		Effect:      ToolEffectDirectMutation,
 		Description: "Move or rename a file within the project (e.g. move index.html into templates/, or rename old.py to new.py). Use this to reorganize files — shell `mv`/`cp` are refused. If destination is an existing directory, the file is moved into it keeping its name. Content is preserved exactly.",
 		InputSchema: MoveFileInput{},
 		ReadOnly:    false,
@@ -3383,6 +3441,7 @@ func moveFileTool() *ToolDef {
 func findFileTool() *ToolDef {
 	return &ToolDef{
 		Name:        "find_file",
+		Effect:      ToolEffectReadOnly,
 		Description: "Find files by NAME using a regex against the filename or relative path. Use this to check whether a file exists or to locate it. For searching inside file contents, use search_files instead.",
 		InputSchema: FindFileInput{},
 		ReadOnly:    true,
@@ -3471,6 +3530,7 @@ func findFileTool() *ToolDef {
 func runCommandTool() *ToolDef {
 	return &ToolDef{
 		Name:        "run_command",
+		Effect:      ToolEffectCommandUnobserved,
 		Description: "Execute a shell command and WAIT for it to exit. Returns stdout, stderr, and exit code. Use for building, testing, and verifying code: `pytest`, `npm test`, `go build`, `curl`, `ls`. NOT for anything that doesn't exit on its own — a server, watcher, or `--watch` build blocks here until the timeout kills it, and the port it bound may still be held when you retry, so the identical command fails again with \"address already in use\". Use `run_background` for those.",
 		InputSchema: RunCommandInput{},
 		ReadOnly:    false,
@@ -4213,6 +4273,7 @@ func truncateStr(s string, maxLen int) string {
 func runBackgroundTool() *ToolDef {
 	return &ToolDef{
 		Name:        "run_background",
+		Effect:      ToolEffectCommandUnobserved,
 		Description: "Start a long-running command (server, watcher, etc.) in the background and return a job_id. Use for `python app.py`, `npm start`, `cargo run`, `flask run` — anything that doesn't exit. Returns initial stdout/stderr captured during a brief settle window so you can confirm startup. Pair with run_command/curl to probe the running service, then stop_background to clean up.",
 		InputSchema: RunBackgroundInput{},
 		ReadOnly:    false,
@@ -4287,6 +4348,7 @@ func runBackgroundTool() *ToolDef {
 func tailBackgroundTool() *ToolDef {
 	return &ToolDef{
 		Name:        "tail_background",
+		Effect:      ToolEffectReadOnly,
 		Description: "Read the recent stdout/stderr of a background job started via run_background. Returns the last N lines of each stream (default 50), the run state (running/exited), and the exit code if applicable. Use to check whether a server is still up, watch test runner output, or read the failure traceback after a crash.",
 		InputSchema: TailBackgroundInput{},
 		ReadOnly:    true,
@@ -4321,6 +4383,7 @@ func tailBackgroundTool() *ToolDef {
 func stopBackgroundTool() *ToolDef {
 	return &ToolDef{
 		Name:        "stop_background",
+		Effect:      ToolEffectCommandUnobserved,
 		Description: "Stop a background job started via run_background. Sends SIGTERM, waits briefly, then SIGKILL if needed. Returns the final stdout/stderr buffer. Always call this when you're done with a background job — leaving them running blocks future job slots.",
 		InputSchema: StopBackgroundInput{},
 		ReadOnly:    false,

@@ -93,8 +93,50 @@ type AgentMessage struct {
 // Tool definitions
 // ---------------------------------------------------------------------------
 
+// ToolEffect declares what a tool is CAPABLE of doing to workspace state. It
+// is a property of the tool, not of any one call, and it lives on ToolDef so a
+// new tool cannot be registered without the decision being made. A parallel
+// map keyed by tool name would drift; this cannot.
+//
+// Capability is not outcome. A direct mutator still reports applied, refused,
+// failed or none per branch -- the effect only says the tool is capable of
+// mutating and therefore owes a local classification that the shared boundary
+// must not invent for it.
+type ToolEffect string
+
+const (
+	// ToolEffectUnknown is the zero value: a registration that never declared
+	// its effect. It is a migration defect, never a runtime state.
+	ToolEffectUnknown ToolEffect = ""
+
+	// ToolEffectReadOnly cannot mutate workspace state by construction.
+	ToolEffectReadOnly ToolEffect = "read_only"
+
+	// ToolEffectDirectMutation performs and observes its own mutation, so only
+	// the branch that ran it knows the outcome.
+	ToolEffectDirectMutation ToolEffect = "direct_mutation"
+
+	// ToolEffectCommandUnobserved may change the workspace without measuring
+	// it: arbitrary shell, background jobs, and killing a running process
+	// (SIGTERM/SIGKILL mid-write can leave partial bytes nobody compared).
+	ToolEffectCommandUnobserved ToolEffect = "command_unobserved"
+)
+
+// BoundaryClassifiable reports whether executeToolCall may supply the
+// classification itself. It may do so only where the ANSWER FOLLOWS FROM THE
+// CLASS: read-only tools mutate nothing, command tools measure nothing.
+// Direct mutators are excluded on purpose -- their outcome is branch-local,
+// and letting the boundary fill it in would conceal a missed producer.
+func (e ToolEffect) BoundaryClassifiable() bool {
+	return e == ToolEffectReadOnly || e == ToolEffectCommandUnobserved
+}
+
 // ToolDef defines a tool that the model can call.
 type ToolDef struct {
+	// Effect is required. The registry exhaustiveness test fails on any
+	// production tool left at ToolEffectUnknown.
+	Effect ToolEffect
+
 	Name        string
 	Description string
 	InputSchema interface{} // Go struct with json tags, marshaled to JSON Schema
