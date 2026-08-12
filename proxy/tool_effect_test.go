@@ -191,10 +191,13 @@ func TestDirectMutatorStillMutatesWhileUnclassified(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("legacy Success regressed to false: %+v", res)
 	}
-	// 3. The boundary did not invent a classification for it.
-	if res.MutationStatus != MutationUnknown {
-		t.Errorf("boundary classified a direct mutator as %q; only the local "+
-			"branch may do that", res.MutationStatus)
+	// 3. Any classification present came from the LOCAL branch, not the
+	// boundary. write_file's direct path is migrated (Slice 1), so applied is
+	// expected here; what must never happen is the boundary inventing it for
+	// a branch that has not been migrated.
+	if !ToolEffectDirectMutation.BoundaryClassifiable() && res.MutationStatus != MutationApplied {
+		t.Errorf("locally-classified direct write should report applied, got %q",
+			res.MutationStatus)
 	}
 	// 4. Unknown is a pending-migration state, not an operational rejection.
 	if res.Error != "" {
@@ -221,5 +224,90 @@ func TestDirectMutatorFailurePassesThroughUnclassified(t *testing.T) {
 	}
 	if res.Error == "" {
 		t.Error("the real error was suppressed")
+	}
+}
+
+// --- write_file Slice 1: non-code and simple filesystem outcomes ------------
+//
+// writeFileDirect is the terminal writer for the direct (non-V3) path. It
+// demonstrates the mutation but performs no syntax check, so it reports
+// applied plus an honest validation state -- never passed.
+
+func TestWriteFileDirectClassification(t *testing.T) {
+	for _, c := range []struct {
+		name, file, content string
+		wantKind            ValidationKind
+		wantStatus          ValidationStatus
+	}{
+		{"non-code write", "notes.txt", "hello\n",
+			ValidationKindNone, ValidationNotApplicable},
+		{"recognized code, unvalidated at this layer", "mod.py", "A = 1\n",
+			ValidationKindSyntax, ValidationNotRun},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			ctx := NewAgentContext(dir, Tier2Medium)
+			ctx.PermissionMode = PermissionYolo
+			ctx.StreamFn = func(string, interface{}) {}
+
+			args, _ := json.Marshal(map[string]string{"path": c.file, "content": c.content})
+			res := executeToolCall("write_file", args, ctx)
+
+			if !res.Success {
+				t.Fatalf("legacy Success regressed: %+v", res)
+			}
+			if res.MutationStatus != MutationApplied {
+				t.Errorf("MutationStatus = %q, want applied", res.MutationStatus)
+			}
+			if res.ValidationKind != c.wantKind {
+				t.Errorf("ValidationKind = %q, want %q", res.ValidationKind, c.wantKind)
+			}
+			if res.ValidationStatus != c.wantStatus {
+				t.Errorf("ValidationStatus = %q, want %q", res.ValidationStatus, c.wantStatus)
+			}
+			if res.ValidationStatus.Passed() {
+				t.Error("a successful write must not synthesize validation passed")
+			}
+			if !res.Classified() {
+				t.Errorf("result not fully classified: %+v", res)
+			}
+			got, err := os.ReadFile(filepath.Join(dir, c.file))
+			if err != nil || string(got) != c.content {
+				t.Fatalf("final bytes wrong: %q err=%v", string(got), err)
+			}
+		})
+	}
+}
+
+// Refusals that happen before the handler can mutate. The unread-existing-file
+// guard lives in the agent loop, not here, so this uses a deny-list refusal --
+// a pre-dispatch check inside executeToolCall itself.
+func TestWriteFileRefusalBeforeMutationLeavesBytes(t *testing.T) {
+	dir := t.TempDir()
+	prior := "SECRET=keepme\n"
+	os.WriteFile(filepath.Join(dir, ".env"), []byte(prior), 0o644)
+
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.PermissionMode = PermissionYolo
+	ctx.StreamFn = func(string, interface{}) {}
+
+	args, _ := json.Marshal(map[string]string{"path": ".env", "content": "SECRET=stolen\n"})
+	res := executeToolCall("write_file", args, ctx)
+	if res.Success {
+		t.Fatal("expected the deny-list to refuse a write to .env")
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, ".env"))
+	if string(got) != prior {
+		t.Fatalf("prior bytes changed on a refusal: %q", string(got))
+	}
+	// Pre-dispatch refusal: no handler ran, so nothing could have mutated.
+	if res.MutationStatus != MutationNone {
+		t.Errorf("MutationStatus = %q, want none", res.MutationStatus)
+	}
+	if res.MutationStatus.Applied() {
+		t.Error("a refused write must never read as applied")
+	}
+	if !res.Classified() {
+		t.Errorf("pre-dispatch refusal not classified: %+v", res)
 	}
 }

@@ -1303,7 +1303,23 @@ func writeFileDirect(path, content string) (*ToolResult, error) {
 	}
 	out := WriteFileOutput{BytesWritten: len(content)}
 	outBytes, _ := json.Marshal(out)
-	return &ToolResult{Success: true, Data: outBytes}, nil
+	// Slice 1 classification. The bytes are on disk after the rename, so the
+	// mutation is demonstrated rather than intended.
+	//
+	// Validation is deliberately NOT claimed here. This layer performs no
+	// syntax check, so for recognized code the honest answer is not_run: a
+	// caller that did validate these exact bytes upgrades it, and one that
+	// did not leaves the truth visible. Claiming passed because a write
+	// succeeded is the conflation this whole contract exists to remove.
+	kind, status := ValidationKindNone, ValidationNotApplicable
+	if _, gated := syntaxGateLanguages[strings.ToLower(filepath.Ext(path))]; gated {
+		kind, status = ValidationKindSyntax, ValidationNotRun
+	}
+	return &ToolResult{
+		Success: true, Data: outBytes,
+		MutationStatus: MutationApplied,
+		ValidationKind: kind, ValidationStatus: status,
+	}, nil
 }
 
 // v3CandidatesTested unwraps a possibly-nil V3 response so the
