@@ -163,3 +163,63 @@ func TestBoundaryDoesNotClassifyDirectMutators(t *testing.T) {
 		t.Fatal("unknown effect must not be boundary-classifiable")
 	}
 }
+
+// Intermediate-state safety check. The boundary now declines to classify
+// direct mutators, and "declines to classify" must mean exactly that: the
+// result passes through untouched and the mutation still happens. If
+// BoundaryClassifiable were ever read as an authorization check, write_file
+// would start failing operationally while every unit test still passed.
+func TestDirectMutatorStillMutatesWhileUnclassified(t *testing.T) {
+	dir := t.TempDir()
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.PermissionMode = PermissionYolo
+	ctx.StreamFn = func(string, interface{}) {}
+
+	args, _ := json.Marshal(map[string]string{
+		"path": "new.py", "content": "VALUE = 1\n"})
+	res := executeToolCall("write_file", args, ctx)
+
+	// 1. The mutation actually occurred.
+	got, err := os.ReadFile(filepath.Join(dir, "new.py"))
+	if err != nil {
+		t.Fatalf("write_file no longer writes: %v", err)
+	}
+	if string(got) != "VALUE = 1\n" {
+		t.Fatalf("bytes on disk = %q", string(got))
+	}
+	// 2. Legacy Success is untouched.
+	if !res.Success {
+		t.Fatalf("legacy Success regressed to false: %+v", res)
+	}
+	// 3. The boundary did not invent a classification for it.
+	if res.MutationStatus != MutationUnknown {
+		t.Errorf("boundary classified a direct mutator as %q; only the local "+
+			"branch may do that", res.MutationStatus)
+	}
+	// 4. Unknown is a pending-migration state, not an operational rejection.
+	if res.Error != "" {
+		t.Errorf("unclassified direct mutator was rejected: %q", res.Error)
+	}
+}
+
+// The same for a direct mutator that legitimately fails: still no boundary
+// classification, still the real error, still no invented facts.
+func TestDirectMutatorFailurePassesThroughUnclassified(t *testing.T) {
+	dir := t.TempDir()
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.PermissionMode = PermissionYolo
+	ctx.StreamFn = func(string, interface{}) {}
+
+	args, _ := json.Marshal(map[string]string{"path": "missing.txt"})
+	res := executeToolCall("delete_file", args, ctx)
+	if res.Success {
+		t.Fatal("deleting a missing file unexpectedly succeeded")
+	}
+	if res.MutationStatus != MutationUnknown {
+		t.Errorf("boundary classified a failing direct mutator as %q",
+			res.MutationStatus)
+	}
+	if res.Error == "" {
+		t.Error("the real error was suppressed")
+	}
+}
