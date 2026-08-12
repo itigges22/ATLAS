@@ -456,12 +456,18 @@ type fallbackSyntaxOutcome struct {
 // aggregate collapses the observations for callers that need one verdict.
 //
 //	any demonstrated failure            -> failed (decisive)
+//	else any Unknown observation        -> unknown
 //	else any applicable-but-unavailable -> not_run
 //	else >=1 pass, rest not_applicable  -> passed
 //	else all not_applicable             -> not_applicable
 //
-// Unknown never becomes passed: an unrecognised status is treated as
-// unavailable, which is the fail-closed direction for evidence.
+// Unknown surfaces AS Unknown rather than being softened to not_run. not_run
+// is a deliberate statement that an applicable check could not be executed;
+// Unknown means no observation was recorded at all, which is a defect in the
+// producer. Collapsing the two would let an unclassified check masquerade as
+// a considered one. The legacy wrapper stays fail-open for Unknown, but a
+// structured consumer sees Unknown and therefore cannot claim validation
+// occurred.
 func (f fallbackSyntaxOutcome) aggregate() checkOutcome {
 	checks := []checkOutcome{f.WholeFile, f.Embedded}
 	for _, c := range checks {
@@ -470,7 +476,12 @@ func (f fallbackSyntaxOutcome) aggregate() checkOutcome {
 		}
 	}
 	for _, c := range checks {
-		if c.Status == ValidationNotRun || c.Status == ValidationUnknown {
+		if c.Status == ValidationUnknown {
+			return checkOutcome{Status: ValidationUnknown, Detail: c.Detail}
+		}
+	}
+	for _, c := range checks {
+		if c.Status == ValidationNotRun {
 			return checkOutcome{Status: ValidationNotRun, Detail: c.Detail}
 		}
 	}

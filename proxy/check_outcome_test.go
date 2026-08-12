@@ -91,8 +91,10 @@ func TestFallbackSyntaxAggregate(t *testing.T) {
 		{"pass plus not_applicable", fallbackSyntaxOutcome{pass, na}, ValidationPassed},
 		{"not_applicable plus pass", fallbackSyntaxOutcome{na, pass}, ValidationPassed},
 		{"all not_applicable", fallbackSyntaxOutcome{na, na}, ValidationNotApplicable},
-		{"unknown never becomes passed", fallbackSyntaxOutcome{pass, unk}, ValidationNotRun},
-		{"unknown alone is not passed", fallbackSyntaxOutcome{unk, na}, ValidationNotRun},
+		{"unknown surfaces as unknown, not not_run", fallbackSyntaxOutcome{pass, unk}, ValidationUnknown},
+		{"unknown alone surfaces as unknown", fallbackSyntaxOutcome{unk, na}, ValidationUnknown},
+		{"failure still decisive over unknown", fallbackSyntaxOutcome{unk, fail}, ValidationFailed},
+		{"unknown outranks not_run", fallbackSyntaxOutcome{notRun, unk}, ValidationUnknown},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := c.in.aggregate(); got.Status != c.want {
