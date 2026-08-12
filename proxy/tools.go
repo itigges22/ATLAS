@@ -1047,7 +1047,20 @@ func writeFileTool() *ToolDef {
 				if original, ok := readOriginalForGate(path); ok {
 					if introduced := editIntroducesUnresolved(ctx, path, original, input.Content); len(introduced) > 0 {
 						log.Printf("[write_file] direct write introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
-						return &ToolResult{Success: false, Error: structuralWriteRejection(input.Path, introduced)}, nil
+						// Structural is decisive here for a DIFFERENT reason
+						// than at the fast-path site: this branch runs the
+						// structural gate ONLY (see the comment above), so
+						// syntax never ran rather than having passed. Either
+						// way the structural failure is what refused the
+						// write, and the refusal precedes any filesystem
+						// operation -- no temp file is created on this path.
+						return &ToolResult{Success: false,
+							Error:            structuralWriteRejection(input.Path, introduced),
+							MutationStatus:   MutationRefused,
+							ValidationKind:   ValidationKindStructural,
+							ValidationStatus: ValidationFailed,
+							ValidationDetail: structuralWriteRejection(input.Path, introduced),
+						}, nil
 					}
 				}
 			}
