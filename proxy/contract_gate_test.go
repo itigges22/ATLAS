@@ -104,23 +104,71 @@ func TestStdinRedirectSourceWiderShapes(t *testing.T) {
 // bytes; nothing here rebuilds an equivalent struct by hand, because two
 // hand-written shapes agreeing with each other proves nothing about the wire.
 
-const evidenceFixtureDir = "../v3-service/testdata/evidence_wire"
+const evidenceCaseFile = "../v3-service/testdata/evidence_wire_cases.json"
 
-func readFixture(t *testing.T, name string) []byte {
-	t.Helper()
-	b, err := os.ReadFile(filepath.Join(evidenceFixtureDir, name+".json"))
-	if err != nil {
-		t.Fatalf("golden fixture missing (regenerate with "+
-			"v3-service/testdata/generate_evidence_fixtures.py): %v", err)
-	}
-	return b
+// evidenceCase is one cross-language case: the exact response bytes the
+// service produces, and what BOTH sides must conclude from them. The
+// expectations are declared by the producer and checked here independently, so
+// the two languages agree with the contract rather than with each other.
+type evidenceCase struct {
+	ID          string          `json:"id"`
+	Description string          `json:"description"`
+	Response    json.RawMessage `json:"response"`
+	Expect      struct {
+		Availability                string `json:"availability"`
+		EvidenceStrength            string `json:"evidence_strength"`
+		SelectionStatus             string `json:"selection_status"`
+		DescribesDeliveredCandidate bool   `json:"describes_delivered_candidate"`
+		ReasonContains              string `json:"reason_contains"`
+	} `json:"expect"`
 }
 
-func decodeFixture(t *testing.T, name string) V3GenerateResponse {
+func evidenceCases(t *testing.T) []evidenceCase {
+	t.Helper()
+	raw, err := os.ReadFile(evidenceCaseFile)
+	if err != nil {
+		t.Fatalf("golden cases missing (regenerate with "+
+			"ATLAS_WRITE_EVIDENCE_FIXTURES=1 pytest "+
+			"tests/v3-service/test_contract_genericity.py): %v", err)
+	}
+	var doc struct {
+		Schema string         `json:"schema"`
+		Cases  []evidenceCase `json:"cases"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("golden cases undecodable: %v", err)
+	}
+	if doc.Schema != "atlas.evidence_wire.cases/1" {
+		t.Fatalf("unknown case-document schema %q", doc.Schema)
+	}
+	if len(doc.Cases) != 13 {
+		t.Fatalf("case count = %d, want 13; cross-language coverage shrank",
+			len(doc.Cases))
+	}
+	return doc.Cases
+}
+
+func evidenceCaseByID(t *testing.T, id string) evidenceCase {
+	t.Helper()
+	for _, c := range evidenceCases(t) {
+		if c.ID == id {
+			return c
+		}
+	}
+	t.Fatalf("no golden case %q", id)
+	return evidenceCase{}
+}
+
+func readFixture(t *testing.T, id string) []byte {
+	t.Helper()
+	return evidenceCaseByID(t, id).Response
+}
+
+func decodeFixture(t *testing.T, id string) V3GenerateResponse {
 	t.Helper()
 	var got V3GenerateResponse
-	if err := json.Unmarshal(readFixture(t, name), &got); err != nil {
-		t.Fatalf("%s: %v", name, err)
+	if err := json.Unmarshal(readFixture(t, id), &got); err != nil {
+		t.Fatalf("%s: %v", id, err)
 	}
 	return got
 }
@@ -203,56 +251,48 @@ func TestEnvelopeSurvivesDecodeWithoutFieldLoss(t *testing.T) {
 	}
 }
 
-// Every golden fixture, and what a strict consumer must conclude from it.
-func TestGoldenFixtureAvailability(t *testing.T) {
-	for _, c := range []struct {
-		fixture   string
-		want      EvidenceAvailability
-		strength  string
-		selection string
-		describes bool
-	}{
-		{"01_verified_winner", EvidenceAvailable, "behavioral", "verified_winner", true},
-		{"02_behavioral_incomplete_requirements", EvidenceAvailable, "behavioral", "best_not_closure_eligible", true},
-		{"03_syntax_only", EvidenceAvailable, "syntax", "best_not_closure_eligible", true},
-		{"04_best_not_closure_eligible", EvidenceAvailable, "runtime", "best_not_closure_eligible", true},
-		{"05_unsupported_candidate", EvidenceAvailable, "syntax", "ineligible", true},
-		{"06_no_verified_winner", EvidenceAvailable, "syntax", "ineligible", true},
-		{"07_incomparable_records", EvidenceAvailable, "behavioral", "incomparable", true},
-		{"08_tied_records", EvidenceAvailable, "behavioral", "tied", true},
-		{"09_evidence_for_other_candidate", EvidenceAvailable, "behavioral", "verified_winner", false},
-		{"11_unknown_wire_version", EvidenceUnavailable, "", "", false},
-		{"12_malformed_identity", EvidenceUnavailable, "", "", false},
-		{"13_closure_contradicts_execution", EvidenceUnavailable, "", "", false},
-	} {
+// Every golden case, and what a strict consumer must conclude from it. The
+// expectations travel with the bytes, so adding a case on the Python side
+// automatically binds this side to it.
+func TestGoldenCaseAvailability(t *testing.T) {
+	for _, c := range evidenceCases(t) {
 		c := c
-		t.Run(c.fixture, func(t *testing.T) {
-			got := decodeFixture(t, c.fixture)
+		t.Run(c.ID, func(t *testing.T) {
+			var got V3GenerateResponse
+			if err := json.Unmarshal(c.Response, &got); err != nil {
+				t.Fatalf("%s (%s): %v", c.ID, c.Description, err)
+			}
 			availability, reason := got.Evidence.Validate()
-			if availability != c.want {
-				t.Fatalf("availability = %q (%s), want %q", availability, reason, c.want)
+			if string(availability) != c.Expect.Availability {
+				t.Fatalf("availability = %q (%s), want %q -- %s",
+					availability, reason, c.Expect.Availability, c.Description)
+			}
+			if c.Expect.ReasonContains != "" &&
+				!strings.Contains(reason, c.Expect.ReasonContains) {
+				t.Errorf("reason = %q, want it to name %q", reason, c.Expect.ReasonContains)
 			}
 			if availability != EvidenceAvailable {
-				// Unavailable is never a verdict about the candidate.
+				// Unavailable and absent are never verdicts about the candidate.
 				if got.Evidence.Available() {
-					t.Error("an unavailable envelope must not read as available")
+					t.Error("a non-available envelope must not read as available")
 				}
 				if reason == "" {
-					t.Error("an unavailable envelope must say why")
+					t.Error("a non-available envelope must say why")
 				}
 				return
 			}
-			if got.Evidence.Evaluation.EvidenceStrength != c.strength {
+			if got.Evidence.Evaluation.EvidenceStrength != c.Expect.EvidenceStrength {
 				t.Errorf("strength = %q, want %q",
-					got.Evidence.Evaluation.EvidenceStrength, c.strength)
+					got.Evidence.Evaluation.EvidenceStrength, c.Expect.EvidenceStrength)
 			}
-			if got.Evidence.Selection.Status != c.selection {
+			if got.Evidence.Selection.Status != c.Expect.SelectionStatus {
 				t.Errorf("selection = %q, want %q",
-					got.Evidence.Selection.Status, c.selection)
+					got.Evidence.Selection.Status, c.Expect.SelectionStatus)
 			}
-			if got.Evidence.DescribesBytes(got.Code) != c.describes {
+			if got.Evidence.DescribesBytes(got.Code) != c.Expect.DescribesDeliveredCandidate {
 				t.Errorf("DescribesBytes(delivered) = %v, want %v",
-					got.Evidence.DescribesBytes(got.Code), c.describes)
+					got.Evidence.DescribesBytes(got.Code),
+					c.Expect.DescribesDeliveredCandidate)
 			}
 		})
 	}

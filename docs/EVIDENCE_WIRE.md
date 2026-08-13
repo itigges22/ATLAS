@@ -85,13 +85,17 @@ hashes what it is delivering.
 
 ## Golden fixtures
 
-`v3-service/testdata/evidence_wire/*.json` are complete response bodies written
-by the real serialiser. They are built and verified byte-for-byte by
+`v3-service/testdata/evidence_wire_cases.json` is one document holding all 13
+cases: id, description, the exact response body written by the real serialiser,
+and what both sides must conclude (availability, strength, selection status,
+whether the evidence describes the delivered bytes, and the reason an
+unavailable envelope must give). It is built and verified byte-for-byte by
 `tests/v3-service/test_contract_genericity.py`; regenerate with
 `ATLAS_WRITE_EVIDENCE_FIXTURES=1 pytest tests/v3-service/test_contract_genericity.py`.
-The Go tests (`proxy/contract_gate_test.go`) decode those exact bytes rather
-than rebuilding equivalent structs, so a cross-language drift fails a test
-instead of passing two agreeing hand-written shapes.
+The Go tests (`proxy/contract_gate_test.go`) read the same document, decode
+those exact bytes and check the declared expectations independently — so the
+two languages agree with the contract rather than with each other, and adding a
+case on the Python side automatically binds the Go side to it.
 
 ## `evidence.py` retirement inventory
 

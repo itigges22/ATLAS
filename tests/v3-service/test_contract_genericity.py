@@ -314,7 +314,7 @@ def test_records_with_incomplete_identity_are_incomparable(field):
 # decision changed: this phase moves evidence across the boundary losslessly.
 
 V3DIR = Path(__file__).resolve().parents[2] / "v3-service"
-FIXTURES = V3DIR / "testdata" / "evidence_wire"
+FIXTURES = V3DIR / "testdata" / "evidence_wire_cases.json"
 
 C1, C2, OPT = "criterion_a", "criterion_b", "criterion_c"
 CODE = "const board = [];\n"
@@ -569,99 +569,190 @@ def _fix_response(env, *, passed, code=FIX_DELIVERED):
             "evidence": env, "evidence_unavailable_reason": ""}
 
 
-def _build_fixtures():
-    """Every golden payload, by name, from the real serialiser."""
+def _case(case_id, description, response, *, availability, strength="",
+          selection="", describes_delivered=False, reason_contains=""):
+    """One cross-language case: the bytes, and what BOTH sides must conclude.
+
+    The expectations are declared here, by hand, and verified independently on
+    the Go side. Deriving them from the same code that validates them would
+    make the pair agree with itself rather than with the contract.
+    """
+    return {"id": case_id, "description": description, "response": response,
+            "expect": {"availability": availability,
+                       "evidence_strength": strength,
+                       "selection_status": selection,
+                       "describes_delivered_candidate": describes_delivered,
+                       "reason_contains": reason_contains}}
+
+
+def _build_cases():
+    """Every golden case, from the real serialiser, in one document."""
     h = C.content_hash(FIX_DELIVERED)
-    out = {}
+    cases = []
 
     winner = _fix_record(observations=_fix_demonstrated(FIX_C1, FIX_C2, FIX_OPT),
                          strength=C.BEHAVIORAL)
     sel = C.select([winner], winner)
-    out["01_verified_winner"] = _fix_response(C.envelope(winner, sel, h), passed=True)
+    cases.append(_case(
+        "01_verified_winner",
+        "behavioural, requirements complete, closure eligible, delivered",
+        _fix_response(C.envelope(winner, sel, h), passed=True),
+        availability="available", strength=C.BEHAVIORAL,
+        selection="verified_winner", describes_delivered=True))
 
     partial = _fix_record(observations=_fix_demonstrated(FIX_C1), strength=C.BEHAVIORAL)
-    out["02_behavioral_incomplete_requirements"] = _fix_response(
-        C.envelope(partial, C.select([partial], partial), h), passed=False)
+    cases.append(_case(
+        "02_behavioral_incomplete_requirements",
+        "behavioural evidence with one required criterion never demonstrated",
+        _fix_response(C.envelope(partial, C.select([partial], partial), h), passed=False),
+        availability="available", strength=C.BEHAVIORAL,
+        selection="best_not_closure_eligible", describes_delivered=True))
 
     syn = _fix_record(observations={}, strength=C.SYNTAX)
-    out["03_syntax_only"] = _fix_response(
-        C.envelope(syn, C.select([syn], syn), h), passed=False)
+    cases.append(_case(
+        "03_syntax_only",
+        "the verifier could observe nothing beyond parsing",
+        _fix_response(C.envelope(syn, C.select([syn], syn), h), passed=False),
+        availability="available", strength=C.SYNTAX,
+        selection="best_not_closure_eligible", describes_delivered=True))
 
     best = _fix_record(observations=_fix_demonstrated(FIX_C1, FIX_C2, FIX_OPT),
                        strength=C.RUNTIME, minimum=C.BEHAVIORAL)
-    out["04_best_not_closure_eligible"] = _fix_response(
-        C.envelope(best, C.select([best], best), h), passed=False)
+    cases.append(_case(
+        "04_best_not_closure_eligible",
+        "complete and healthy, but below the contract's strength floor",
+        _fix_response(C.envelope(best, C.select([best], best), h), passed=False),
+        availability="available", strength=C.RUNTIME,
+        selection="best_not_closure_eligible", describes_delivered=True))
 
     unsup = _fix_record(observations={}, strength=C.SYNTAX,
                         execution=C.EXEC_SKIPPED, supported=False)
-    out["05_unsupported_candidate"] = _fix_response(
-        C.envelope(unsup, C.select([unsup], unsup), h), passed=False)
+    cases.append(_case(
+        "05_unsupported_candidate",
+        "unsupported artifact: unverified, never failed",
+        _fix_response(C.envelope(unsup, C.select([unsup], unsup), h), passed=False),
+        availability="available", strength=C.SYNTAX,
+        selection="ineligible", describes_delivered=True))
 
     dead = _fix_record(observations={}, strength=C.SYNTAX, execution=C.EXEC_CRASH)
-    out["06_no_verified_winner"] = _fix_response(
-        C.envelope(dead, C.select([dead], winner), h), passed=False)
+    cases.append(_case(
+        "06_no_verified_winner",
+        "every comparable record died: a record exists, a winner does not",
+        _fix_response(C.envelope(dead, C.select([dead], winner), h), passed=False),
+        availability="available", strength=C.SYNTAX,
+        selection="ineligible", describes_delivered=True))
 
     foreign = _fix_record(observations=_fix_demonstrated(FIX_C1, FIX_C2, FIX_OPT),
                           strength=C.BEHAVIORAL, scope="static/other.js")
-    out["07_incomparable_records"] = _fix_response(
-        C.envelope(foreign, C.select([foreign], winner), h), passed=False)
+    cases.append(_case(
+        "07_incomparable_records",
+        "measured under a different rubric than the expected one",
+        _fix_response(C.envelope(foreign, C.select([foreign], winner), h), passed=False),
+        availability="available", strength=C.BEHAVIORAL,
+        selection="incomparable", describes_delivered=True))
 
     twin = _fix_record(observations=_fix_demonstrated(FIX_C1, FIX_C2, FIX_OPT),
                        strength=C.BEHAVIORAL, code=FIX_OTHER)
-    out["08_tied_records"] = _fix_response(
-        C.envelope(winner, C.select([winner, twin], winner), h), passed=True)
+    cases.append(_case(
+        "08_tied_records",
+        "two records of identical rank",
+        _fix_response(C.envelope(winner, C.select([winner, twin], winner), h), passed=True),
+        availability="available", strength=C.BEHAVIORAL,
+        selection="tied", describes_delivered=True))
 
     stale = _fix_record(observations=_fix_demonstrated(FIX_C1, FIX_C2, FIX_OPT),
                         strength=C.BEHAVIORAL, code=FIX_OTHER)
-    out["09_evidence_for_other_candidate"] = _fix_response(
-        C.envelope(stale, C.select([stale], stale), h), passed=True)
+    cases.append(_case(
+        "09_evidence_for_other_candidate",
+        "well formed, and about bytes other than the delivered ones",
+        _fix_response(C.envelope(stale, C.select([stale], stale), h), passed=True),
+        availability="available", strength=C.BEHAVIORAL,
+        selection="verified_winner", describes_delivered=False))
 
     legacy = _fix_response(None, passed=True)
     del legacy["evidence"]
     del legacy["evidence_unavailable_reason"]
-    out["10_legacy_no_envelope"] = legacy
+    cases.append(_case(
+        "10_legacy_no_envelope",
+        "a producer that predates the envelope entirely",
+        legacy, availability="absent", reason_contains="no evidence envelope"))
 
     # Deliberately damaged AFTER serialisation. No producer emits these; a
     # consumer that cannot survive a buggy or future one fails in the field.
     good = C.envelope(winner, sel, h)
     future = copy.deepcopy(good)
     future["wire_version"] = "99.0.0"
-    out["11_unknown_wire_version"] = _fix_response(future, passed=True)
+    cases.append(_case(
+        "11_unknown_wire_version",
+        "a future producer's wire major: not interpreted at all",
+        _fix_response(future, passed=True),
+        availability="unavailable", reason_contains="unsupported wire version"))
 
     broken = copy.deepcopy(good)
     broken["identity"]["evaluation_context_hash"] = ""
-    out["12_malformed_identity"] = _fix_response(broken, passed=True)
+    cases.append(_case(
+        "12_malformed_identity",
+        "identity with a blank required component",
+        _fix_response(broken, passed=True),
+        availability="unavailable", reason_contains="identity incomplete"))
 
     contradiction = copy.deepcopy(good)
     contradiction["evaluation"]["execution_status"] = C.EXEC_TIMEOUT
-    out["13_closure_contradicts_execution"] = _fix_response(contradiction, passed=True)
-    return out
+    cases.append(_case(
+        "13_closure_contradicts_execution",
+        "closure claimed over an execution that did not complete",
+        _fix_response(contradiction, passed=True),
+        availability="unavailable",
+        reason_contains="closure claimed over execution status"))
+
+    return {"schema": "atlas.evidence_wire.cases/1", "cases": cases}
 
 
-def test_golden_fixtures_match_the_serialiser():
-    """The committed bytes are exactly what the serialiser produces today. Go
-    decodes these, so a silent drift here is a cross-language drift."""
-    fixtures = _build_fixtures()
-    write = os.environ.get("ATLAS_WRITE_EVIDENCE_FIXTURES") == "1"
-    FIXTURES.mkdir(parents=True, exist_ok=True)
-    for name, payload in fixtures.items():
-        rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
-        path = FIXTURES / f"{name}.json"
-        if write:
-            path.write_text(rendered)
-            continue
-        assert path.exists(), f"missing golden fixture {name}"
-        assert path.read_text() == rendered, (
-            f"{name}.json is stale; regenerate with "
-            f"ATLAS_WRITE_EVIDENCE_FIXTURES=1 pytest {Path(__file__).name}")
+def test_golden_cases_match_the_serialiser():
+    """The committed bytes are exactly what the serialiser produces today, in
+    ONE document both languages read. Go decodes these, so a silent drift here
+    is a cross-language drift."""
+    rendered = json.dumps(_build_cases(), indent=2, sort_keys=True) + "\n"
+    if os.environ.get("ATLAS_WRITE_EVIDENCE_FIXTURES") == "1":
+        FIXTURES.write_text(rendered)
+        return
+    assert FIXTURES.exists(), f"missing golden case file {FIXTURES}"
+    assert FIXTURES.read_text() == rendered, (
+        "evidence_wire_cases.json is stale; regenerate with "
+        "ATLAS_WRITE_EVIDENCE_FIXTURES=1 pytest tests/v3-service/test_contract_genericity.py")
 
 
-def test_every_required_fixture_exists():
-    names = {p.stem for p in FIXTURES.glob("*.json")}
-    assert names == set(_build_fixtures()), sorted(names)
+def test_every_required_case_exists_exactly_once():
+    doc = json.loads(FIXTURES.read_text())
+    ids = [c["id"] for c in doc["cases"]]
+    assert len(ids) == len(set(ids)) == 13, ids
+    for expected in ("01_verified_winner", "02_behavioral_incomplete_requirements",
+                     "03_syntax_only", "04_best_not_closure_eligible",
+                     "05_unsupported_candidate", "06_no_verified_winner",
+                     "07_incomparable_records", "08_tied_records",
+                     "09_evidence_for_other_candidate", "10_legacy_no_envelope",
+                     "11_unknown_wire_version", "12_malformed_identity",
+                     "13_closure_contradicts_execution"):
+        assert expected in ids, f"missing golden case {expected}"
+    # Every case declares what both sides must conclude from it.
+    for c in doc["cases"]:
+        assert c["description"]
+        assert c["expect"]["availability"] in ("available", "unavailable", "absent")
+        if c["expect"]["availability"] == "available":
+            assert c["expect"]["evidence_strength"]
+            assert c["expect"]["selection_status"]
+        else:
+            assert c["expect"]["reason_contains"]
 
 
-def test_legacy_fixture_has_no_envelope_at_all():
-    payload = json.loads((FIXTURES / "10_legacy_no_envelope.json").read_text())
+def _case_by_id(case_id):
+    for c in json.loads(FIXTURES.read_text())["cases"]:
+        if c["id"] == case_id:
+            return c
+    raise AssertionError(f"no case {case_id}")
+
+
+def test_legacy_case_has_no_envelope_at_all():
+    payload = _case_by_id("10_legacy_no_envelope")["response"]
     assert "evidence" not in payload
     assert payload["passed"] is True
