@@ -1,5 +1,5 @@
 # python:3.11-slim — digest-pinned for reproducible builds (Dependabot maintains)
-FROM docker.io/python:3.11-slim@sha256:db3ff2e1800a8581e2c48a27c3995339d47bdf046da21c7627accd3d51053a93
+FROM docker.io/python:3.11-slim@sha256:90744cff8f32887f075c47d747a173ff333e9e98801667af93c357fa9f5e28ff
 WORKDIR /app
 
 # Install curl for healthcheck
