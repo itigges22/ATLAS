@@ -604,115 +604,142 @@ class EmbedAdapter:
 
 
 # ---------------------------------------------------------------------------
-# Live evidence record -> contract record
+# Adapter records
 # ---------------------------------------------------------------------------
 #
-# ADAPTER KNOWLEDGE, which is why it lives here: which criteria an adapter can
-# observe at all, and what its own grading scale means in contract terms.
-# contract.py must not learn either -- it stays prompt-agnostic and generic.
+# ADAPTER KNOWLEDGE, which is why it lives here: which criteria each adapter
+# can observe, and what its verifier can therefore demonstrate. contract.py
+# must not learn either -- it stays generic and derives completeness, coverage
+# and closure from what an adapter reports.
 #
-# evidence.py is the prototype this bridges FROM. When each adapter emits
-# contract records directly (step 1 of the retirement plan in
-# docs/EVIDENCE_WIRE.md), this section and that import disappear together. No
-# new behaviour is added to evidence.py to support it.
+# Records are built by calling contract.build directly. Nothing here consults
+# the retiring evidence.py: strength is read from the OBSERVATIONS, not from
+# that module's graded string, so this file is a producer of contract records
+# rather than a translator of someone else's grade.
 
 import contract
-import evidence as _live
 
-# Identity of the grading that produced today's live records. Not a version of
-# this file: it identifies evidence.py's prototype grading and must change
-# whenever that grading changes, or two incomparable measurements compare equal.
+# Adapter identities. These are the ids the pipeline records carry, declared
+# here because they name THIS layer's verifiers. test_adapters.py pins them
+# against the retiring module's copies for as long as that module exists.
+ADAPTER_BROWSER_CANVAS_JS = "browser_canvas_js"
+ADAPTER_BROWSER_INLINE_SCRIPT = "browser_inline_script"
+ADAPTER_JAVASCRIPT_COMPILE = "javascript_compile"
+ADAPTER_CSS_SYNTAX = "css_syntax"
+ADAPTER_ALGORITHMIC_IO = "algorithmic_io"
+ADAPTER_PYTHON_COMPILE = "python_compile"
+ADAPTER_INTERACTIVE_PYTHON_UNSUPPORTED = "interactive_python_unsupported"
+ADAPTER_UNSUPPORTED = "unsupported"
+
+_BROWSER_ADAPTERS = (ADAPTER_BROWSER_CANVAS_JS, ADAPTER_BROWSER_INLINE_SCRIPT)
+
+# What the browser probe can observe. Opaque ids: nothing above this layer
+# interprets them, and this layer never decides what the TASK required.
+BROWSER_REQUIRED = ["temporal_progress", "input_causality"]
+BROWSER_OPTIONAL = ["collision_transition", "food_or_score_transition"]
+
+# Adapters that answer the same question and cannot observe any of it. They
+# declare the criteria so coverage can report them unmeasurable rather than
+# silently missing.
+_DECLARES_BROWSER_CRITERIA = _BROWSER_ADAPTERS + (
+    ADAPTER_JAVASCRIPT_COMPILE, ADAPTER_PYTHON_COMPILE,
+    ADAPTER_INTERACTIVE_PYTHON_UNSUPPORTED, ADAPTER_UNSUPPORTED)
+
+# Identity of this producer's grading. It must change whenever the grading
+# changes, or two incomparable measurements would compare equal.
 LIVE_ADAPTER_VERSION = "0.1.0-prototype"
-
-# Strength mapping, conservative in one direction: an oracle claim is made only
-# where an oracle actually ran, and a partial behavioural grade does not become
-# a complete one by crossing a wire.
-_STRENGTH_BY_ADAPTER = {
-    _live.ALGORITHMIC_IO: {
-        _live.BEHAVIORAL_COMPLETE: contract.ORACLE,
-        _live.BEHAVIORAL_PARTIAL: contract.BEHAVIORAL,
-        _live.RUNTIME: contract.RUNTIME,
-        _live.SYNTAX: contract.SYNTAX,
-    },
-}
-_STRENGTH_DEFAULT = {
-    _live.BEHAVIORAL_COMPLETE: contract.BEHAVIORAL,
-    _live.BEHAVIORAL_PARTIAL: contract.BEHAVIORAL,
-    _live.RUNTIME: contract.RUNTIME,
-    _live.SYNTAX: contract.SYNTAX,
-}
-
-
-def _strength(adapter, strength):
-    """None means the live record carries no evidence at all (live NONE)."""
-    return _STRENGTH_BY_ADAPTER.get(adapter, _STRENGTH_DEFAULT).get(strength)
 
 
 def _capabilities(adapter):
-    """What this adapter can observe. Anything else is reported not_applicable
-    by contract.build, so "we did not look" stays distinct from "absent"."""
-    if adapter in (_live.BROWSER_CANVAS_JS, _live.BROWSER_INLINE_SCRIPT):
-        return list(_live.INTERACTIVE_REQUIRED) + list(_live.INTERACTIVE_OPTIONAL)
+    """What this adapter can observe. Everything else contract.build reports
+    not_applicable, so "we could not look" stays distinct from "absent"."""
+    if adapter in _BROWSER_ADAPTERS:
+        return list(BROWSER_REQUIRED) + list(BROWSER_OPTIONAL)
     return []
 
 
 def _requirements(adapter):
-    if adapter in (_live.BROWSER_CANVAS_JS, _live.BROWSER_INLINE_SCRIPT,
-                   _live.JAVASCRIPT_COMPILE, _live.PYTHON_COMPILE,
-                   _live.INTERACTIVE_PYTHON_UNSUPPORTED, _live.UNSUPPORTED):
-        return ([contract.requirement(c) for c in _live.INTERACTIVE_REQUIRED]
+    if adapter in _DECLARES_BROWSER_CRITERIA:
+        return ([contract.requirement(c) for c in BROWSER_REQUIRED]
                 + [contract.requirement(c, required=False)
-                   for c in _live.INTERACTIVE_OPTIONAL])
+                   for c in BROWSER_OPTIONAL])
     # An adapter with no declared criteria says so plainly. That is not the
     # same as an adapter whose criteria all passed.
     return []
+
+
+def _observations(adapter, behavior):
+    """One observation per criterion this adapter can measure.
+
+    A criterion it can measure and did not see is UNOBSERVED, never REFUTED --
+    except an OPTIONAL one on a run that did produce a behaviour trace, where
+    absence is a real negative observation rather than a gap.
+    """
+    observations = {}
+    if adapter not in _BROWSER_ADAPTERS:
+        return observations
+    for cid in BROWSER_REQUIRED:
+        observations[cid] = contract.observation(
+            contract.DEMONSTRATED if behavior.get(cid) else contract.UNOBSERVED)
+    for cid in BROWSER_OPTIONAL:
+        if behavior.get(cid):
+            status = contract.DEMONSTRATED
+        elif behavior:
+            status = contract.REFUTED
+        else:
+            status = contract.UNOBSERVED
+        observations[cid] = contract.observation(status)
+    return observations
+
+
+def _strength_and_execution(adapter, accepted, supported, behavior):
+    """What this verifier demonstrated, and whether its run completed.
+
+    Derived from the observations themselves. An oracle claim is made only
+    where an oracle ran; a probe that executed cleanly but missed a required
+    behaviour demonstrated runtime, not behaviour; and an artifact the adapter
+    cannot support is unverified, never failed.
+    """
+    if not accepted and not (adapter in _BROWSER_ADAPTERS and behavior):
+        # The verifier demonstrated nothing at all. A browser probe that DID
+        # produce a trace is the exception: its own observations stand even
+        # when the smoke check rejected the candidate.
+        return contract.SYNTAX, contract.EXEC_ERROR, False
+    if not supported:
+        return contract.SYNTAX, contract.EXEC_SKIPPED, False
+    if adapter == ADAPTER_ALGORITHMIC_IO:
+        return contract.ORACLE, contract.EXEC_OK, True
+    if adapter in _BROWSER_ADAPTERS:
+        if not behavior or not behavior.get("runtime_clean", True):
+            return contract.SYNTAX, contract.EXEC_OK, True
+        if any(not behavior.get(cid) for cid in BROWSER_REQUIRED):
+            return contract.RUNTIME, contract.EXEC_OK, True
+        return contract.BEHAVIORAL, contract.EXEC_OK, True
+    return contract.SYNTAX, contract.EXEC_OK, True
 
 
 def contract_record(live_record, *, contract_id, contract_version,
                     artifact_scope, evaluation_context_hash,
                     candidate_content_hash,
                     minimum_closure_strength=contract.BEHAVIORAL):
-    """One contract record built from one live evidence record."""
-    adapter = live_record.get("adapter") or _live.UNSUPPORTED
+    """One finalized contract record, built here and derived by contract.py."""
+    adapter = live_record.get("adapter") or ADAPTER_UNSUPPORTED
     behavior = live_record.get("behavior") or {}
-    missing = set(live_record.get("missing_required") or [])
-    caps = _capabilities(adapter)
-    reqs = _requirements(adapter)
-
-    observations = {}
-    for r in reqs:
-        cid = r["id"]
-        if cid not in caps:
-            continue  # contract.build materialises this as not_applicable
-        if behavior.get(cid):
-            observations[cid] = contract.observation(contract.DEMONSTRATED)
-        elif cid in missing or not behavior:
-            observations[cid] = contract.observation(contract.UNOBSERVED)
-        else:
-            observations[cid] = contract.observation(contract.REFUTED)
-
-    strength = _strength(adapter, live_record.get("strength", _live.NONE))
+    accepted = bool(live_record.get("accepted", True))
     supported = bool(live_record.get("supported", True))
-    if strength is None:
-        # The verifier ran and demonstrated nothing. Report the weakest
-        # strength with the execution marked errored rather than inventing a
-        # level the contract scale does not have.
-        strength, execution_status = contract.SYNTAX, contract.EXEC_ERROR
+    if adapter in _BROWSER_ADAPTERS and behavior and not behavior.get("supported", True):
         supported = False
-    else:
-        execution_status = contract.EXEC_OK
-    if not supported:
-        # Unsupported is unverified, never failed. contract._validate rejects a
-        # skipped execution that claims support.
-        execution_status = (contract.EXEC_SKIPPED
-                            if execution_status == contract.EXEC_OK else execution_status)
 
-    task = contract.task_contract(contract_id, contract_version, reqs,
+    strength, execution_status, supported = _strength_and_execution(
+        adapter, accepted, supported, behavior)
+
+    task = contract.task_contract(contract_id, contract_version,
+                                  _requirements(adapter),
                                   minimum_closure_strength=minimum_closure_strength)
     return contract.build(
-        task, adapter, LIVE_ADAPTER_VERSION, observations, caps,
-        strength, execution_status=execution_status, supported=supported,
-        artifact_scope=artifact_scope,
+        task, adapter, LIVE_ADAPTER_VERSION, _observations(adapter, behavior),
+        _capabilities(adapter), strength, execution_status=execution_status,
+        supported=supported, artifact_scope=artifact_scope,
         evaluation_context_hash=evaluation_context_hash,
         candidate_content_hash=candidate_content_hash)
 

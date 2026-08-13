@@ -421,9 +421,10 @@ def test_unmeasurable_is_distinct_from_missing():
 
 def test_live_unsupported_record_is_unverified_never_failed():
     import evidence as live
+    # A record production can actually emit: the probe could not run, so the
+    # artifact is unsupported while the smoke check itself passed.
     rec = A.contract_record(
-        live.result(False, live.SYNTAX, live.BROWSER_CANVAS_JS, supported=False,
-                    missing_required=list(live.INTERACTIVE_REQUIRED)),
+        live.result_from_adapter(live.BROWSER_CANVAS_JS, True, None),
         contract_id="generate:js", contract_version="1",
         artifact_scope="static/game.js",
         evaluation_context_hash=C.content_hash("ctx"),
@@ -512,7 +513,7 @@ def test_evidence_py_importers_are_inventoried():
         if "import evidence\n" in text or "import evidence as" in text \
                 or "from evidence import" in text:
             importers.add(path.name)
-    assert importers == {"pipeline.py", "adapters.py"}, (
+    assert importers == {"pipeline.py"}, (
         f"evidence.py importers changed: {sorted(importers)}. Update the "
         f"retirement inventory in docs/EVIDENCE_WIRE.md before adding one.")
 

@@ -102,22 +102,22 @@ case on the Python side automatically binds the Go side to it.
 `evidence.py` is the prototype that predates `contract.py`. It is **not deleted
 in this phase**. Its live importer set is pinned by
 `test_evidence_py_importers_are_inventoried`, so a new one cannot appear
-unnoticed. It is currently `{pipeline.py, adapters.py}` — the second is the
-bridge below, which exists only until step 1 of the cutover.
+unnoticed. **Step 1 is done**: `adapters.py` no longer imports it, so the live
+importer set is `{pipeline.py}`.
 
 | Live use | Belongs in | Cutover |
 | --- | --- | --- |
 | `select_adapter`, `js_is_instrumentable`, `extract_inline_script`, `js_probe_source_inline`, `parse_probe_output`, `combine_runs` | adapter-specific probing, beside its adapter | Move with the browser probe adapter; no policy involved |
-| `result`, `result_from_adapter`, `grade_interactive` | adapter → contract record construction | Replace with `contract.build` calls emitted by each adapter; `adapters.contract_record` is the interim bridge and disappears with it |
-| `INTERACTIVE_REQUIRED`, `INTERACTIVE_OPTIONAL` | the adapter's declared capabilities | Become the adapter's requirement/capability declaration; the ids stay opaque above it |
+| `result`, `result_from_adapter`, `grade_interactive` | adapter → contract record construction | **Done**: `adapters.contract_record` builds contract records directly from the reported observations. These remain only as `pipeline.py`'s producer and go with step 2 |
+| `INTERACTIVE_REQUIRED`, `INTERACTIVE_OPTIONAL` | the adapter's declared capabilities | **Done**: declared as `adapters.BROWSER_REQUIRED` / `BROWSER_OPTIONAL`; the copies here serve `pipeline.py` until step 2, and a test pins them equal |
 | `STRENGTH_ORDER`, `at_least`, `rank_key` | `contract.py` (already has `STRENGTH_ORDER`, `rank_key`, `select`) | Delete on cutover — duplicated policy, and the two scales differ (`behavioral_partial`/`behavioral_complete` vs `behavioral`/`oracle`) |
 | `may_return_early`, `may_return_early_result`, `selection_mode`, `selection_enabled`, `probing_enabled` | orchestration policy → `pipeline.py`, with the floor read from the contract | Requires the early-return decision to move onto contract records; **this is the first behaviour-changing slice and is out of scope here** |
 
 Cutover order, each with its own evidence:
 
-1. Adapters emit `contract.build` records directly; `adapters.contract_record`
-   becomes a pass-through and is deleted, taking `adapters.py`'s `import
-   evidence` with it.
+1. ~~Adapters emit `contract.build` records directly.~~ **Done.**
+   `adapters.py` declares its own adapter ids and capabilities and derives
+   strength from the reported observations; `import evidence` is gone from it.
 2. Early-return and shadow-selection read contract records; `evidence.py`'s
    ranking and strength scale are removed.
 3. Probing helpers move beside the browser adapter.
