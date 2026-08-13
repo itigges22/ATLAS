@@ -968,7 +968,15 @@ func writeFileTool() *ToolDef {
 			// model emitted markdown bold inside code (`data = [1, 2, **3**]`)
 			// four times, each costing 180s before it was told anything.
 			if fileTier >= Tier2Medium && ctx.V3URL != "" && !ctx.BypassV3 && !iterating {
-				if synErr, ok := checkFallbackSyntax(ctx, input.Path, input.Content); !ok {
+				// The regression gate above evaluated these exact bytes
+				// whenever the destination exists, so the evaluation here is
+				// for the case it skipped: a file that does not exist yet,
+				// which is this gate's main case.
+				if proposalCheck.Status == ValidationUnknown {
+					proposalCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
+				}
+				if proposalCheck.Status == ValidationFailed {
+					synErr := proposalCheck.Detail
 					// Feeding V3 broken content wastes its whole budget, so
 					// V3 is skipped either way. What happens to the bytes
 					// depends on what is at the path: clobbering an existing
@@ -978,7 +986,7 @@ func writeFileTool() *ToolDef {
 					if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
 						log.Printf("[write_file] new file %s does not parse — writing with a warning, skipping V3 (%s)",
 							logPath(input.Path), truncateStr(synErr, 80))
-						return writeNewFileWithWarning(path, input.Path, input.Content, synErr, ctx)
+						return preflightWarnedWrite(path, input.Path, input.Content, proposalCheck, ctx)
 					}
 					// The strictness on existing files protects WORKING code.
 					// When what is on disk is itself unparseable, there is
@@ -992,20 +1000,41 @@ func writeFileTool() *ToolDef {
 					// repetition breaker ended the session with the ORIGINAL
 					// broken file still on disk.
 					if prior, priorOK := readOriginalForGate(path); priorOK {
-						if _, wasHealthy := checkFallbackSyntax(ctx, input.Path, prior); !wasHealthy {
+						if baselineCheck.Status == ValidationUnknown {
+							baselineCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, prior).aggregate()
+						}
+						if baselineAllowsRepair(baselineCheck) {
 							log.Printf("[write_file] %s already broken on disk — landing the repair attempt with a warning (%s)",
 								logPath(input.Path), truncateStr(synErr, 80))
-							return writeNewFileWithWarning(path, input.Path, input.Content, synErr, ctx)
+							return preflightWarnedWrite(path, input.Path, input.Content, proposalCheck, ctx)
 						}
 					}
 					log.Printf("[write_file] %s does not parse — rejecting before V3 (%s)",
 						logPath(input.Path), truncateStr(synErr, 80))
+					// Refused before any byte reached disk, on exactly the
+					// content that would have been written. An unreadable
+					// baseline arrives here too: without a baseline there is
+					// no healthy->broken comparison to make, and the
+					// conservative answer is the refusal.
 					return &ToolResult{
-						Success: false,
-						Error:   fallbackSyntaxRejection(input.Path, input.Content, synErr),
+						Success:          false,
+						Error:            fallbackSyntaxRejection(input.Path, input.Content, synErr),
+						MutationStatus:   MutationRefused,
+						ValidationKind:   ValidationKindSyntax,
+						ValidationStatus: ValidationFailed,
+						ValidationDetail: synErr,
 					}, nil
 				}
 
+				// proposalCheck now describes input.Content: the BASELINE
+				// handed to the pipeline, not the bytes it may come back with.
+				// A winning candidate is different content and needs its own
+				// observation, and the fallback write inside writeFileWithV3
+				// re-checks the baseline itself. Threading this observation in
+				// there is a separate change: it would start a partial
+				// migration of that function's own state machine, so the
+				// handoff is left explicitly pending rather than stored on the
+				// context or in a package-level value.
 				log.Printf("[write_file] V3 pipeline activating for %s", input.Path)
 				res, err := writeFileWithV3(path, input.Content, ctx)
 				if err == nil && res != nil && res.Success {
@@ -1393,6 +1422,19 @@ func writeNewFileWithWarning(path, inputPath, content, synErr string, ctx *Agent
 	res.ValidationStatus = ValidationFailed
 	res.ValidationDetail = synErr
 	return res, nil
+}
+
+// preflightWarnedWrite lands a warned write for the V3 preflight and keeps the
+// observation that justified the warning attached to whichever outcome the
+// filesystem produced.
+//
+// writeNewFileWithWarning already states applied + syntax/failed when the bytes
+// land. When they do not, the writer reports not_run, which is honest for a
+// layer that ran no check of its own -- but this route did run one, on exactly
+// these bytes, and a failed mutation does not unmake that observation.
+func preflightWarnedWrite(path, inputPath, content string, o checkOutcome, ctx *AgentContext) (*ToolResult, error) {
+	res, err := writeNewFileWithWarning(path, inputPath, content, o.Detail, ctx)
+	return applyRouteObservation(res, err, o)
 }
 
 // writeFileRecorded is writeFileDirect plus the body-seen record.

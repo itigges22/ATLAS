@@ -592,11 +592,17 @@ def perimeter(radius):
 	}
 }
 
-// Structural pin on the producers themselves. Five structured evaluations
-// exist in tools.go -- proposal and baseline in the shared regression gate,
-// proposal and baseline in the active-debug branch's residual case, and the
-// new-file gate -- and none of them is in the final direct-write block. A
-// sixth would mean a route recomputed an observation it already held.
+// Structural pin on the producers themselves. Seven structured evaluations
+// exist in tools.go, and every one of them is a case some other gate did not
+// already answer:
+//
+//	regression gate     proposal + baseline   existing destination
+//	V3 preflight        proposal + baseline   new destination / unread baseline
+//	active-debug branch proposal + baseline   destination gone since the write
+//	new-file gate       proposal              sub-Tier2 or unconfigured V3
+//
+// None is in the final direct-write block. An eighth would mean a route
+// recomputed an observation it already held.
 func TestWriteRoutesDoNotRecomputeTheirObservation(t *testing.T) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "tools.go", nil, 0)
@@ -621,14 +627,15 @@ func TestWriteRoutesDoNotRecomputeTheirObservation(t *testing.T) {
 		}
 		return true
 	})
-	if structured != 5 {
-		t.Errorf("fallbackSyntaxOutcomeFor call sites = %d, want 5; a new one on a "+
+	if structured != 7 {
+		t.Errorf("fallbackSyntaxOutcomeFor call sites = %d, want 7; a new one on a "+
 			"route that already holds an observation is a recomputation", structured)
 	}
-	// The V3 preflight and fallback, edit_file, insert_after and replace_lines
-	// still use the legacy wrapper. This migration removed none of them.
-	if legacy != 10 {
-		t.Errorf("checkFallbackSyntax call sites = %d, want 10 -- this route "+
-			"removes no legacy call outside itself", legacy)
+	// The fallback write inside writeFileWithV3, edit_file, insert_after and
+	// replace_lines still use the legacy wrapper, two calls each. Those are
+	// the unmigrated routes; nothing outside a migrated one was removed.
+	if legacy != 8 {
+		t.Errorf("checkFallbackSyntax call sites = %d, want 8 -- the four "+
+			"unmigrated routes, two calls each", legacy)
 	}
 }
