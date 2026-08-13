@@ -26,6 +26,7 @@ from stages.self_test_gen import SelfTestGen, SelfTestGenConfig
 from stages.candidate_selection import CandidateInfo, select_candidate
 
 import adapters
+import contract
 import evidence
 import scoring
 import symbols
@@ -373,12 +374,17 @@ _CONSENSUS_MARK = "V3_OUT:"
 
 
 
-def _evaluate_candidate(file_path, code, smoke_passed, has_oracle, emit, sandbox=None):
-    """Structured evidence for ONE artifact, shared by every candidate.
+def _evaluate_candidate(file_path, code, smoke_passed, has_oracle, emit,
+                       sandbox=None, *, task=None):
+    """THE canonical contract record for ONE artifact.
 
     Behavioural adapters actually run here; an unsupported or inconclusive
     candidate stays available as a fallback but is never represented as
     behaviourally verified.
+
+    One record, bound to the exact bytes it describes. No parallel strength,
+    score or coverage field is kept beside it: a second authoritative copy is
+    how two answers about one candidate start to disagree.
     """
     adapter = evidence.select_adapter(file_path, code, has_oracle)
     probe_ev = None
@@ -396,7 +402,44 @@ def _evaluate_candidate(file_path, code, smoke_passed, has_oracle, emit, sandbox
         except Exception as exc:                      # noqa: BLE001
             emit("behavior_probe_error", str(exc)[:120])
             probe_ev = None
-    return evidence.result_from_adapter(adapter, smoke_passed, probe_ev)
+    task = task or _task_identity("", "")
+    return adapters.contract_record(
+        adapter=adapter, accepted=bool(smoke_passed), probe=probe_ev,
+        contract_id=task["contract_id"], contract_version=task["contract_version"],
+        artifact_scope=task["artifact_scope"],
+        evaluation_context_hash=task["evaluation_context_hash"],
+        candidate_content_hash=contract.content_hash(code))
+
+
+def _task_identity(file_path, problem):
+    """What every record in this run is measured under.
+
+    The rubric is the TASK's, not a candidate's: same contract, same artifact
+    scope, same evaluation context for every candidate, so records that
+    disagree about any of them are incomparable rather than silently ranked
+    against each other.
+    """
+    ext = (file_path or "").rsplit(".", 1)
+    suffix = ext[-1].lower() if len(ext) == 2 else "unknown"
+    return {"contract_id": f"generate:{suffix}",
+            "contract_version": "1",
+            "artifact_scope": file_path or "",
+            "evaluation_context_hash": contract.content_hash(problem or "")}
+
+
+def _record_closes(record, code):
+    """Closure is contract.select's verdict, on a record proven to describe
+    these exact bytes. A record whose hash does not match the candidate it is
+    attached to may neither close nor win -- stale evidence about other bytes
+    is the one way a verified claim becomes a false one.
+    """
+    if not record or record.get("candidate_content_hash") != contract.content_hash(code):
+        return False
+    try:
+        selection = contract.select([record], record)
+    except contract.ContractError:
+        return False
+    return selection.get("verified_winner") is record
 
 
 # Execution budget for ONE probe arm. Kept modest: two arms run per
@@ -997,14 +1040,16 @@ class V3PipelineService:
         # nothing more, and would have closed the pipeline claiming behaviour
         # nobody demonstrated.
         _has_oracle = bool(self_tests and getattr(self_tests, "test_cases", None))
+        _task = _task_identity(file_path, problem)
         probe_result = _evaluate_candidate(
-            file_path, probe_code, probe_passed, _has_oracle, emit, sandbox)
-        probe_adapter = probe_result["adapter"]
-        result["evidence"] = probe_result
+            file_path, probe_code, probe_passed, _has_oracle, emit, sandbox,
+            task=_task)
+        probe_adapter = probe_result["adapter_id"]
+        result["evidence_record"] = probe_result
         emit("probe_evidence",
-             f"adapter={probe_adapter} strength={probe_result['strength']} "
+             f"adapter={probe_adapter} strength={probe_result['evidence_strength']} "
              f"supported={probe_result['supported']}",
-             adapter=probe_adapter, strength=probe_result["strength"])
+             adapter=probe_adapter, strength=probe_result["evidence_strength"])
 
         # Early return is a LIVE decision, so it is mode-aware. In shadow the
         # probe runs and its verdict is recorded, but only the probe-free
@@ -1012,22 +1057,33 @@ class V3PipelineService:
         # candidate would return early and skip candidate generation, which
         # is a control-flow change, not observation.
         #
-        # The probe-free judgement still suppresses syntax-only early return:
-        # that determination comes from the adapter, needs no probe, and is
-        # the defect this whole line of work exists to fix, so it must hold
-        # in every mode including off.
+        # The judgement itself is contract.select over the candidate's own
+        # record: it closes only when that exact record is the VERIFIED WINNER
+        # under its own rubric. A best record that is not closure-eligible,
+        # anything unsupported, failed or incomparable, and any record whose
+        # hash does not match these bytes, all leave the pipeline open. The
+        # strength floor comes from the contract, so an artifact class whose
+        # contract closes on syntax legitimately may, and one that demands an
+        # oracle still cannot close on a compile.
         _mode = evidence.selection_mode()
-        _probe_free = evidence.result_from_adapter(
-            probe_result["adapter"], probe_passed, probe_evidence=None)
-        probe_free_early = probe_passed and evidence.may_return_early_result(_probe_free)
-        evidence_early = probe_passed and evidence.may_return_early_result(probe_result)
+        _probe_free = adapters.contract_record(
+            adapter=probe_result["adapter_id"], accepted=bool(probe_passed),
+            probe=None, contract_id=_task["contract_id"],
+            contract_version=_task["contract_version"],
+            artifact_scope=_task["artifact_scope"],
+            evaluation_context_hash=_task["evaluation_context_hash"],
+            candidate_content_hash=contract.content_hash(probe_code))
+        probe_free_early = probe_passed and _record_closes(_probe_free, probe_code)
+        evidence_early = probe_passed and _record_closes(probe_result, probe_code)
         result["evidence_early_return"] = {
             "mode": _mode,
             "probe_free_would_return_early": probe_free_early,
             "evidence_would_return_early": evidence_early,
             "agreement": probe_free_early == evidence_early,
-            "adapter": probe_result["adapter"],
-            "strength": probe_result["strength"],
+            "adapter": probe_adapter,
+            "strength": probe_result["evidence_strength"],
+            "closure_eligible": probe_result["closure_eligible"],
+            "minimum_closure_strength": adapters.closure_floor(probe_adapter),
         }
         emit("evidence_early_return", f"mode={_mode} probe_free={probe_free_early} "
              f"evidence={evidence_early}", **result["evidence_early_return"])
@@ -1216,12 +1272,9 @@ class V3PipelineService:
             if probe_code:
                 candidates.append({
                     # Phase-zero evidence is cached here so candidate zero is
-                    # never re-probed, and never enters ranking with defaults.
-                    "evidence": probe_result,
-                    "evidence_strength": probe_result["strength"],
-                    "behavior": probe_result["behavior"],
-                    "behavior_score": probe_result["behavior_score"],
-                    "missing_required": probe_result["missing_required"],
+                    # never re-probed, and never enters selection with defaults.
+                    # One canonical record, no parallel copies of its fields.
+                    "contract_record": probe_result,
                     "index": 0, "code": probe_code,
                     "energy": probe_energy_raw, "energy_norm": probe_energy_norm,
                     "energy_calibrated": probe_cx_calibrated,
@@ -1339,13 +1392,10 @@ class V3PipelineService:
                     # an interactive artifact, so the real Snake candidate
                     # entered the pool with no behavioural evidence at all and
                     # rank_key saw defaults for it.
-                    if "evidence" not in c:
-                        c["evidence"] = _evaluate_candidate(
-                            file_path, c["code"], True, _has_oracle, emit, sandbox)
-                        c["evidence_strength"] = c["evidence"]["strength"]
-                        c["behavior"] = c["evidence"]["behavior"]
-                        c["behavior_score"] = c["evidence"]["behavior_score"]
-                        c["missing_required"] = c["evidence"]["missing_required"]
+                    if "contract_record" not in c:
+                        c["contract_record"] = _evaluate_candidate(
+                            file_path, c["code"], True, _has_oracle, emit, sandbox,
+                            task=_task)
                     passing.append(c)
                     continue
                 sb_start = time.time()
@@ -1360,12 +1410,9 @@ class V3PipelineService:
                 # the same evidence record. Two sets of verification semantics
                 # is how the boolean survived into the candidate path, letting
                 # ATLAS generate alternatives it could not rank.
-                c["evidence"] = _evaluate_candidate(
-                    file_path, c["code"], passed, _has_oracle, emit, sandbox)
-                c["evidence_strength"] = c["evidence"]["strength"]
-                c["behavior"] = c["evidence"]["behavior"]
-                c["behavior_score"] = c["evidence"]["behavior_score"]
-                c["missing_required"] = c["evidence"]["missing_required"]
+                c["contract_record"] = _evaluate_candidate(
+                    file_path, c["code"], passed, _has_oracle, emit, sandbox,
+                    task=_task)
                 if passed:
                     passing.append(c)
                     emit("sandbox_pass", f"Candidate {c['index']} passed",
@@ -1603,31 +1650,72 @@ class V3PipelineService:
                 # would have chosen and changes nothing, so uplift can be shown
                 # across task families before it touches a live decision.
                 # ATLAS_EVIDENCE_SELECTION=1 promotes it to the real selector.
-                shadow_pick = None
-                if passing:
-                    shadow_pick = max(passing, key=evidence.rank_key)
+                # Evidence-based selection. SHADOW BY DEFAULT: it records what
+                # it would have chosen and changes nothing, so uplift can be
+                # shown across task families before it touches a live decision.
+                # The choice is contract.select over the candidates' own
+                # records, under the rubric the BASELINE was measured with --
+                # records that disagree about contract, artifact or context are
+                # incomparable rather than silently ranked, so a foreign
+                # majority cannot outvote one matching record.
+                pool = [c for c in passing if c.get("contract_record")]
+                expected = result.get("evidence_record") or (
+                    pool[0]["contract_record"] if pool else None)
+                contract_pick = None
+                if pool and expected:
+                    try:
+                        picked = contract.select(
+                            [c["contract_record"] for c in pool], expected)
+                    except contract.ContractError as exc:
+                        picked = {"best_record": None, "verified_winner": None,
+                                  "tied": [], "incomparable": [], "ineligible": [],
+                                  "selection_reason": f"identity error: {exc}"}
+                    by_record = {id(c["contract_record"]): c for c in pool}
+                    best = by_record.get(id(picked.get("best_record")))
+                    verified = by_record.get(id(picked.get("verified_winner")))
+                    # A record must describe the bytes it is attached to before
+                    # it may win anything.
+                    if verified and not _record_closes(
+                            verified["contract_record"], verified["code"]):
+                        verified = None
+                    contract_pick = verified or best
+                    status = contract.selection_status(picked)
+                    result["contract_selection"] = picked
                     result["evidence_selection"] = {
                         "lens_index": getattr(selected, "index", None),
-                        "evidence_index": shadow_pick.get("index"),
-                        "agree": getattr(selected, "index", None) == shadow_pick.get("index"),
+                        "evidence_index": (contract_pick or {}).get("index"),
+                        "verified_index": (verified or {}).get("index"),
+                        "agree": getattr(selected, "index", None)
+                                 == (contract_pick or {}).get("index"),
+                        "status": status,
+                        "reason": picked.get("selection_reason", ""),
+                        "tied": len(picked.get("tied") or []),
+                        "incomparable": len(picked.get("incomparable") or []),
+                        "ineligible": len(picked.get("ineligible") or []),
                         "candidates": [
                             {"index": c.get("index"),
-                             "strength": c.get("evidence_strength"),
-                             "adapter": (c.get("evidence") or {}).get("adapter"),
-                             "supported": (c.get("evidence") or {}).get("supported"),
-                             "behavior_score": c.get("behavior_score", 0.0),
-                             "missing_required": c.get("missing_required") or [],
+                             "strength": c["contract_record"]["evidence_strength"],
+                             "adapter": c["contract_record"]["adapter_id"],
+                             "supported": c["contract_record"]["supported"],
+                             "closure_eligible": c["contract_record"]["closure_eligible"],
+                             "quality": c["contract_record"]["overall_quality_score"],
+                             "missing_required": c["contract_record"]["missing_required"],
                              "energy": c.get("energy")}
-                            for c in passing],
+                            for c in pool],
                     }
                     emit("evidence_shadow",
                          f"lens picked {getattr(selected, 'index', None)}, "
-                         f"evidence would pick {shadow_pick.get('index')} "
-                         f"(behaviour {shadow_pick.get('behavior_score', 0.0):.2f})",
-                         **result["evidence_selection"])
-                    if evidence.selection_enabled(evidence.selection_mode()):
-                        selected = CandidateInfo(shadow_pick["index"], shadow_pick["code"],
-                                                 shadow_pick.get("energy", 0.0), True)
+                         f"contract would pick {(contract_pick or {}).get('index')} "
+                         f"({status})",
+                         **{k: v for k, v in result["evidence_selection"].items()
+                            if k != "candidates"})
+                    # Only a VERIFIED winner may replace the lens choice. A best
+                    # record that is not closure-eligible is diagnostic: turning
+                    # it into the delivered artifact is exactly how a partial
+                    # result becomes a success claim.
+                    if evidence.selection_enabled(evidence.selection_mode()) and verified:
+                        selected = CandidateInfo(verified["index"], verified["code"],
+                                                 verified.get("energy", 0.0), True)
 
                 if selected:
                     emit("selected", f"Lens selected candidate {selected.index}",
@@ -1639,7 +1727,8 @@ class V3PipelineService:
                     winner = _candidate_by_index(passing, selected.index)
                     result["verification_evidence"] = (winner or {}).get("verification_evidence", [])
                     result["winning_score"] = (winner or {}).get("energy_norm", 0.0)
-                    result["evidence"] = (winner or {}).get("evidence") or result.get("evidence")
+                    result["evidence_record"] = ((winner or {}).get("contract_record")
+                                                 or result.get("evidence_record"))
                     result["events"] = events
                     return result
 

@@ -650,12 +650,38 @@ _DECLARES_BROWSER_CRITERIA = _BROWSER_ADAPTERS + (
 LIVE_ADAPTER_VERSION = "0.1.0-prototype"
 
 
+# Criterion ids this layer declares. Opaque above it: nothing interprets them,
+# and no task vocabulary appears here.
+CRITERION_ORACLE_CASES = "oracle_cases_pass"
+CRITERION_PARSES = "parses"
+
+# What each adapter can observe, and therefore what it may report on.
+_CAPABILITIES = {
+    ADAPTER_ALGORITHMIC_IO: [CRITERION_ORACLE_CASES],
+    ADAPTER_CSS_SYNTAX: [CRITERION_PARSES],
+}
+
+# The strength a TASK on this artifact class must reach before it may close.
+# Declared per adapter, never a universal floor: a stylesheet has no runtime
+# behaviour to demand, an I/O task is not closed by anything weaker than its
+# oracle, and code whose behaviour matters but cannot be observed here stays
+# open rather than closing on a compile.
+_CLOSURE_FLOOR = {
+    ADAPTER_ALGORITHMIC_IO: contract.ORACLE,
+    ADAPTER_CSS_SYNTAX: contract.SYNTAX,
+}
+
+
+def closure_floor(adapter):
+    return _CLOSURE_FLOOR.get(adapter, contract.BEHAVIORAL)
+
+
 def _capabilities(adapter):
     """What this adapter can observe. Everything else contract.build reports
     not_applicable, so "we could not look" stays distinct from "absent"."""
     if adapter in _BROWSER_ADAPTERS:
         return list(BROWSER_REQUIRED) + list(BROWSER_OPTIONAL)
-    return []
+    return list(_CAPABILITIES.get(adapter, []))
 
 
 def _requirements(adapter):
@@ -663,12 +689,10 @@ def _requirements(adapter):
         return ([contract.requirement(c) for c in BROWSER_REQUIRED]
                 + [contract.requirement(c, required=False)
                    for c in BROWSER_OPTIONAL])
-    # An adapter with no declared criteria says so plainly. That is not the
-    # same as an adapter whose criteria all passed.
-    return []
+    return [contract.requirement(c) for c in _CAPABILITIES.get(adapter, [])]
 
 
-def _observations(adapter, behavior):
+def _observations(adapter, accepted, probe):
     """One observation per criterion this adapter can measure.
 
     A criterion it can measure and did not see is UNOBSERVED, never REFUTED --
@@ -676,23 +700,38 @@ def _observations(adapter, behavior):
     absence is a real negative observation rather than a gap.
     """
     observations = {}
-    if adapter not in _BROWSER_ADAPTERS:
+    if adapter in _BROWSER_ADAPTERS:
+        behavior = probe or {}
+        for cid in BROWSER_REQUIRED:
+            observations[cid] = contract.observation(
+                contract.DEMONSTRATED if behavior.get(cid) else contract.UNOBSERVED)
+        for cid in BROWSER_OPTIONAL:
+            if behavior.get(cid):
+                status = contract.DEMONSTRATED
+            elif behavior:
+                status = contract.REFUTED
+            else:
+                status = contract.UNOBSERVED
+            observations[cid] = contract.observation(status)
         return observations
-    for cid in BROWSER_REQUIRED:
+    for cid in _CAPABILITIES.get(adapter, []):
         observations[cid] = contract.observation(
-            contract.DEMONSTRATED if behavior.get(cid) else contract.UNOBSERVED)
-    for cid in BROWSER_OPTIONAL:
-        if behavior.get(cid):
-            status = contract.DEMONSTRATED
-        elif behavior:
-            status = contract.REFUTED
-        else:
-            status = contract.UNOBSERVED
-        observations[cid] = contract.observation(status)
+            contract.DEMONSTRATED if accepted else contract.UNOBSERVED)
     return observations
 
 
-def _strength_and_execution(adapter, accepted, supported, behavior):
+def _supported(adapter, probe):
+    """Whether this adapter could measure this artifact at all. Unsupported is
+    unverified, never failed."""
+    if adapter in (ADAPTER_INTERACTIVE_PYTHON_UNSUPPORTED, ADAPTER_UNSUPPORTED):
+        return False
+    if adapter in _BROWSER_ADAPTERS:
+        # No probe trace means the behaviour question went unanswered.
+        return bool(probe) and bool(probe.get("supported", True))
+    return True
+
+
+def _strength_and_execution(adapter, accepted, supported, probe):
     """What this verifier demonstrated, and whether its run completed.
 
     Derived from the observations themselves. An oracle claim is made only
@@ -700,6 +739,7 @@ def _strength_and_execution(adapter, accepted, supported, behavior):
     behaviour demonstrated runtime, not behaviour; and an artifact the adapter
     cannot support is unverified, never failed.
     """
+    behavior = probe or {}
     if not accepted and not (adapter in _BROWSER_ADAPTERS and behavior):
         # The verifier demonstrated nothing at all. A browser probe that DID
         # produce a trace is the exception: its own observations stand even
@@ -718,48 +758,42 @@ def _strength_and_execution(adapter, accepted, supported, behavior):
     return contract.SYNTAX, contract.EXEC_OK, True
 
 
-def contract_record(live_record, *, contract_id, contract_version,
-                    artifact_scope, evaluation_context_hash,
-                    candidate_content_hash,
-                    minimum_closure_strength=contract.BEHAVIORAL):
-    """One finalized contract record, built here and derived by contract.py."""
-    adapter = live_record.get("adapter") or ADAPTER_UNSUPPORTED
-    behavior = live_record.get("behavior") or {}
-    accepted = bool(live_record.get("accepted", True))
-    supported = bool(live_record.get("supported", True))
-    if adapter in _BROWSER_ADAPTERS and behavior and not behavior.get("supported", True):
-        supported = False
+def contract_record(*, adapter, accepted, probe=None, contract_id,
+                    contract_version, artifact_scope, evaluation_context_hash,
+                    candidate_content_hash, minimum_closure_strength=None):
+    """One finalized contract record, built here and derived by contract.py.
 
+    The caller hands over raw observation inputs -- which verifier ran, whether
+    it accepted the artifact, and the probe trace if there was one. Everything
+    else is this layer's declaration or the contract's derivation; no grading
+    from elsewhere is translated.
+    """
+    supported = _supported(adapter, probe)
     strength, execution_status, supported = _strength_and_execution(
-        adapter, accepted, supported, behavior)
+        adapter, accepted, supported, probe)
+    floor = minimum_closure_strength or closure_floor(adapter)
 
     task = contract.task_contract(contract_id, contract_version,
                                   _requirements(adapter),
-                                  minimum_closure_strength=minimum_closure_strength)
+                                  minimum_closure_strength=floor)
     return contract.build(
-        task, adapter, LIVE_ADAPTER_VERSION, _observations(adapter, behavior),
-        _capabilities(adapter), strength, execution_status=execution_status,
-        supported=supported, artifact_scope=artifact_scope,
+        task, adapter, LIVE_ADAPTER_VERSION,
+        _observations(adapter, accepted, probe), _capabilities(adapter),
+        strength, execution_status=execution_status, supported=supported,
+        artifact_scope=artifact_scope,
         evaluation_context_hash=evaluation_context_hash,
         candidate_content_hash=candidate_content_hash)
 
 
-def evidence_envelope(result, *, contract_id, contract_version, artifact_scope,
-                      evaluation_context, delivered_code, selection=None):
+def evidence_envelope(result, *, delivered_code, selection=None):
     """The one entry point main.py calls. None means: no evidence to send.
 
     None is a positive statement -- nothing was measured -- and is distinct
     from a malformed envelope, which this never produces: a record that cannot
     be serialised raises instead.
     """
-    live_record = result.get("evidence")
-    if not live_record:
+    record = result.get("evidence_record")
+    if not record:
         return None
-    record = contract_record(
-        live_record,
-        contract_id=contract_id, contract_version=contract_version,
-        artifact_scope=artifact_scope,
-        evaluation_context_hash=contract.content_hash(evaluation_context),
-        candidate_content_hash=contract.content_hash(result.get("code") or ""))
-    return contract.envelope(record, selection,
+    return contract.envelope(record, selection or result.get("contract_selection"),
                              contract.content_hash(delivered_code))

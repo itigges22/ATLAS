@@ -375,9 +375,8 @@ def test_best_record_without_a_verified_winner_is_representable():
 def test_no_evidence_is_none_and_malformed_evidence_raises():
     """Two different facts, two different outcomes. A malformed record is never
     serialised into a half-valid envelope."""
-    assert A.evidence_envelope(
-        {"evidence": None, "code": CODE}, contract_id="c", contract_version="1",
-        artifact_scope="a.js", evaluation_context="ctx", delivered_code=CODE) is None
+    assert A.evidence_envelope({"evidence_record": None, "code": CODE},
+                               delivered_code=CODE) is None
 
     incomplete = _record(_demonstrated(C1), C.SYNTAX)
     incomplete["evaluation_context_hash"] = ""
@@ -421,10 +420,10 @@ def test_unmeasurable_is_distinct_from_missing():
 
 def test_live_unsupported_record_is_unverified_never_failed():
     import evidence as live
-    # A record production can actually emit: the probe could not run, so the
-    # artifact is unsupported while the smoke check itself passed.
+    # The probe could not run, so the artifact is unsupported while the smoke
+    # check itself passed.
     rec = A.contract_record(
-        live.result_from_adapter(live.BROWSER_CANVAS_JS, True, None),
+        adapter=A.ADAPTER_BROWSER_CANVAS_JS, accepted=True, probe=None,
         contract_id="generate:js", contract_version="1",
         artifact_scope="static/game.js",
         evaluation_context_hash=C.content_hash("ctx"),
@@ -440,14 +439,14 @@ def test_live_unsupported_record_is_unverified_never_failed():
 def test_oracle_strength_is_claimed_only_where_an_oracle_ran():
     import evidence as live
     io_rec = A.contract_record(
-        live.result_from_adapter(live.ALGORITHMIC_IO, True),
+        adapter=A.ADAPTER_ALGORITHMIC_IO, accepted=True,
         contract_id="c", contract_version="1", artifact_scope="s.py",
         evaluation_context_hash=C.content_hash("ctx"),
         candidate_content_hash=C.content_hash(CODE))
     probe_rec = A.contract_record(
-        live.result(True, live.BEHAVIORAL_COMPLETE, live.BROWSER_CANVAS_JS,
-                    behavior={k: True for k in
-                              live.INTERACTIVE_REQUIRED + live.INTERACTIVE_OPTIONAL}),
+        adapter=A.ADAPTER_BROWSER_CANVAS_JS, accepted=True,
+        probe={"supported": True, "runtime_clean": True,
+               **{k: True for k in A.BROWSER_REQUIRED + A.BROWSER_OPTIONAL}},
         contract_id="c", contract_version="1", artifact_scope="s.js",
         evaluation_context_hash=C.content_hash("ctx"),
         candidate_content_hash=C.content_hash(CODE))
@@ -516,6 +515,56 @@ def test_evidence_py_importers_are_inventoried():
     assert importers == {"pipeline.py"}, (
         f"evidence.py importers changed: {sorted(importers)}. Update the "
         f"retirement inventory in docs/EVIDENCE_WIRE.md before adding one.")
+
+
+def test_pipeline_decisions_no_longer_read_the_retiring_policy():
+    """Retirement step 2. Early return and selection are contract decisions;
+    the prototype's early-return predicate, ranking and strength scale must not
+    appear in any pipeline decision."""
+    src = (V3DIR / "pipeline.py").read_text()
+    for banned in ("evidence.may_return_early", "evidence.rank_key",
+                   "evidence.at_least", "evidence.STRENGTH_ORDER",
+                   "evidence.BEHAVIORAL", "evidence.RUNTIME", "evidence.SYNTAX",
+                   "evidence.NONE", "evidence.result_from_adapter",
+                   "evidence.result("):
+        assert banned not in src, f"pipeline.py still reads retiring policy: {banned}"
+    # It decides with the contract instead.
+    assert "contract.select(" in src
+    assert "_record_closes(" in src
+
+
+def test_pipeline_uses_the_prototype_only_for_probe_mechanics():
+    """What is left of the import is step 3's work: adapter routing and the
+    browser probe's own machinery, plus the mode vocabulary."""
+    import re as _re
+    src = (V3DIR / "pipeline.py").read_text()
+    used = set(_re.findall(r"\bevidence\.(\w+)", src))
+    allowed = {"select_adapter", "probing_enabled", "selection_mode",
+               "selection_enabled", "extract_inline_script",
+               "js_probe_source_inline", "parse_probe_output", "combine_runs",
+               "js_is_instrumentable", "BROWSER_CANVAS_JS",
+               "BROWSER_INLINE_SCRIPT"}
+    assert used <= allowed, f"pipeline.py reaches beyond probe mechanics: {sorted(used - allowed)}"
+
+
+def test_selection_and_closure_live_only_in_the_contract():
+    modules = {p.name: p.read_text() for p in V3DIR.glob("*.py")}
+    for fn in ("\ndef select(", "\ndef _closure("):
+        owners = [n for n, s in modules.items() if fn in s]
+        assert owners == ["contract.py"], f"{fn.strip()} owners: {owners}"
+    # evidence.py keeps its own rank_key until its last test caller goes.
+    ranks = sorted(n for n, s in modules.items() if "\ndef rank_key(" in s)
+    assert ranks == ["contract.py", "evidence.py"], ranks
+
+
+def test_candidates_carry_one_canonical_record():
+    """No parallel authoritative fields beside the contract record."""
+    src = (V3DIR / "pipeline.py").read_text()
+    for banned in ('c["evidence_strength"]', 'c["behavior_score"]',
+                   'c["missing_required"]', 'c["evidence"]',
+                   '"evidence_strength": probe_result'):
+        assert banned not in src, f"parallel candidate field survives: {banned}"
+    assert 'c["contract_record"]' in src
 
 
 def test_no_new_behaviour_was_added_to_the_retiring_prototype():

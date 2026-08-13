@@ -110,16 +110,22 @@ importer set is `{pipeline.py}`.
 | `select_adapter`, `js_is_instrumentable`, `extract_inline_script`, `js_probe_source_inline`, `parse_probe_output`, `combine_runs` | adapter-specific probing, beside its adapter | Move with the browser probe adapter; no policy involved |
 | `result`, `result_from_adapter`, `grade_interactive` | adapter → contract record construction | **Done**: `adapters.contract_record` builds contract records directly from the reported observations. These remain only as `pipeline.py`'s producer and go with step 2 |
 | `INTERACTIVE_REQUIRED`, `INTERACTIVE_OPTIONAL` | the adapter's declared capabilities | **Done**: declared as `adapters.BROWSER_REQUIRED` / `BROWSER_OPTIONAL`; the copies here serve `pipeline.py` until step 2, and a test pins them equal |
-| `STRENGTH_ORDER`, `at_least`, `rank_key` | `contract.py` (already has `STRENGTH_ORDER`, `rank_key`, `select`) | Delete on cutover — duplicated policy, and the two scales differ (`behavioral_partial`/`behavioral_complete` vs `behavioral`/`oracle`) |
-| `may_return_early`, `may_return_early_result`, `selection_mode`, `selection_enabled`, `probing_enabled` | orchestration policy → `pipeline.py`, with the floor read from the contract | Requires the early-return decision to move onto contract records; **this is the first behaviour-changing slice and is out of scope here** |
+| `STRENGTH_ORDER`, `at_least`, `rank_key`, `may_return_early`, `may_return_early_result` | `contract.py` | **No production caller left.** Kept only because tests still exercise them directly; delete when those go |
+| `selection_mode`, `selection_enabled`, `probing_enabled` | the mode vocabulary, still read by `pipeline.py` | Keep: off/shadow/enforce is the agreed vocabulary and no second flag may replace it |
 
 Cutover order, each with its own evidence:
 
 1. ~~Adapters emit `contract.build` records directly.~~ **Done.**
    `adapters.py` declares its own adapter ids and capabilities and derives
    strength from the reported observations; `import evidence` is gone from it.
-2. Early-return and shadow-selection read contract records; `evidence.py`'s
-   ranking and strength scale are removed.
+2. ~~Early-return and shadow-selection read contract records.~~ **Done.**
+   Phase zero closes only when `contract.select` names the candidate's own
+   record the verified winner, on a record whose hash matches those exact
+   bytes; selection is `contract.select` under the baseline's rubric. Each
+   candidate carries ONE canonical `contract_record` and no parallel strength,
+   score or coverage field. The closure floor is declared per adapter
+   (`adapters.closure_floor`), so a contract that closes on syntax legitimately
+   may, and one that demands an oracle cannot close on a compile.
 3. Probing helpers move beside the browser adapter.
 4. `evidence.py` is deleted once the importer sentinel is empty of production
    modules.

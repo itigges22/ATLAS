@@ -127,10 +127,11 @@ _CTX = C.content_hash("build something")
 _CODE = C.content_hash("const a = 1;\n")
 
 
-def _record(live_record):
-    return A.contract_record(live_record, contract_id="generate:js",
-                             contract_version="1", artifact_scope=_SCOPE,
-                             evaluation_context_hash=_CTX,
+def _record(adapter, accepted, probe=None):
+    """The production path: raw observation inputs in, contract record out."""
+    return A.contract_record(adapter=adapter, accepted=accepted, probe=probe,
+                             contract_id="generate:js", contract_version="1",
+                             artifact_scope=_SCOPE, evaluation_context_hash=_CTX,
                              candidate_content_hash=_CODE)
 
 
@@ -164,17 +165,16 @@ def _probe(**flags):
 
 
 def _matrix():
-    """Every record shape result_from_adapter can actually emit."""
+    """Every observation shape the pipeline can hand this layer: (name,
+    adapter, smoke verdict, probe trace)."""
     cases = []
     for adapter in (E.ALGORITHMIC_IO, E.PYTHON_COMPILE, E.JAVASCRIPT_COMPILE,
                     E.CSS_SYNTAX, E.INTERACTIVE_PYTHON_UNSUPPORTED, E.UNSUPPORTED):
         for smoke in (True, False):
-            cases.append((f"{adapter}:smoke={smoke}",
-                          E.result_from_adapter(adapter, smoke)))
+            cases.append((f"{adapter}:smoke={smoke}", adapter, smoke, None))
     for adapter in (E.BROWSER_CANVAS_JS, E.BROWSER_INLINE_SCRIPT):
         for smoke in (True, False):
-            cases.append((f"{adapter}:no-probe:smoke={smoke}",
-                          E.result_from_adapter(adapter, smoke)))
+            cases.append((f"{adapter}:no-probe:smoke={smoke}", adapter, smoke, None))
             for label, ev in (
                     ("all", _probe(temporal_progress=True, input_causality=True,
                                    collision_transition=True,
@@ -184,18 +184,18 @@ def _matrix():
                     ("partial-required", _probe(temporal_progress=True)),
                     ("dirty-runtime", _probe(runtime_clean=False)),
                     ("unsupported-probe", _probe(supported=False))):
-                cases.append((f"{adapter}:{label}:smoke={smoke}",
-                              E.result_from_adapter(adapter, smoke, ev)))
+                cases.append((f"{adapter}:{label}:smoke={smoke}", adapter, smoke, ev))
     return cases
 
 
 def test_direct_production_matches_the_retiring_implementation():
     """Adapter routing, supported/unsupported, execution status and evidence
     strength are preserved for every shape the pipeline can produce."""
-    for name, live_record in _matrix():
-        rec = _record(live_record)
-        want_strength, want_exec, want_supported = _retiring_expectation(live_record)
-        assert rec["adapter_id"] == live_record["adapter"], name
+    for name, adapter, smoke, probe in _matrix():
+        rec = _record(adapter, smoke, probe)
+        want_strength, want_exec, want_supported = _retiring_expectation(
+            E.result_from_adapter(adapter, smoke, probe))
+        assert rec["adapter_id"] == adapter, name
         assert rec["evidence_strength"] == want_strength, name
         assert rec["execution_status"] == want_exec, name
         assert rec["supported"] is want_supported, name
@@ -204,9 +204,8 @@ def test_direct_production_matches_the_retiring_implementation():
 def test_direct_production_preserves_coverage_and_closure():
     """Criterion observations, required/missing/unmeasurable coverage, quality
     and closure eligibility follow from what the adapter reported."""
-    for name, live_record in _matrix():
-        rec = _record(live_record)
-        adapter = live_record["adapter"]
+    for name, adapter, smoke, probe in _matrix():
+        rec = _record(adapter, smoke, probe)
         caps = set(A._capabilities(adapter))
         obs = rec["observations"]
 
@@ -220,7 +219,7 @@ def test_direct_production_preserves_coverage_and_closure():
                 assert obs[r["id"]]["status"] == C.NOT_APPLICABLE, name
                 assert r["id"] in rec["missing_required"], name
 
-        behavior = live_record.get("behavior") or {}
+        behavior = probe or {}
         for cid in A.BROWSER_REQUIRED:
             if cid in caps:
                 demonstrated = obs[cid]["status"] == C.DEMONSTRATED
@@ -231,14 +230,14 @@ def test_direct_production_preserves_coverage_and_closure():
             rec["requirements_complete"] and rec["supported"]
             and rec["execution_status"] == C.EXEC_OK
             and C.STRENGTH_ORDER.index(rec["evidence_strength"])
-            >= C.STRENGTH_ORDER.index(C.BEHAVIORAL)
+            >= C.STRENGTH_ORDER.index(A.closure_floor(adapter))
             and rec["overall_quality_score"] >= 1.0), name
         assert 0.0 <= rec["overall_quality_score"] <= 1.0, name
 
 
 def test_direct_production_carries_identity_and_hashes():
-    for name, live_record in _matrix():
-        rec = _record(live_record)
+    for name, adapter, smoke, probe in _matrix():
+        rec = _record(adapter, smoke, probe)
         C.require_identity(rec, name)
         assert rec["contract_id"] == "generate:js"
         assert rec["contract_version"] == "1"

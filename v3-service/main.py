@@ -240,12 +240,7 @@ class V3Handler(BaseHTTPRequestHandler):
         evidence_envelope, evidence_unavailable = None, ""
         try:
             evidence_envelope = adapters.evidence_envelope(
-                result,
-                contract_id=f"generate:{Path(file_path).suffix.lstrip('.') or 'unknown'}",
-                contract_version="1",
-                artifact_scope=file_path,
-                evaluation_context=problem,
-                delivered_code=result.get("code", ""))
+                result, delivered_code=result.get("code", ""))
         except contract.ContractError as e:
             evidence_unavailable = str(e)
             print(f"[generate] evidence not serialisable: {e}", flush=True)
