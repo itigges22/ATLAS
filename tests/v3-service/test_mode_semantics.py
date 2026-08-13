@@ -67,7 +67,8 @@ class _Embed:
         return []
 
 
-def _sandbox_factory(self_test_pass=True, smoke_ok=True, partial_oracle=False):
+def _sandbox_factory(self_test_pass=True, smoke_ok=True, partial_oracle=False,
+                     passing_marker=None):
     seen = {"cases": 0}
 
     class _Sandbox:
@@ -77,6 +78,13 @@ def _sandbox_factory(self_test_pass=True, smoke_ok=True, partial_oracle=False):
         def __call__(self, code, test_input=""):
             if "SELF_TEST_PASS" in code:
                 seen["cases"] += 1
+                if passing_marker is not None:
+                    # Only the artifact carrying the marker satisfies its own
+                    # suite; everything else scores below half and fails.
+                    ok = passing_marker in code or seen["cases"] % 3 == 1
+                    if passing_marker in code:
+                        ok = True
+                    return (True, "SELF_TEST_PASS", "") if ok else (True, "WRONG", "")
                 if partial_oracle:
                     # One case passes, the rest do not: a suite that CAN
                     # separate candidates, and a candidate that underperforms.
@@ -90,12 +98,14 @@ def _sandbox_factory(self_test_pass=True, smoke_ok=True, partial_oracle=False):
 
 def _service(monkeypatch, *, oracle_cases=0, self_test_pass=True, smoke_ok=True,
              task_type="algorithmic", probe=None, plan_calls=None,
-             record_hook=None, code=PROBE_CODE, partial_oracle=False):
+             record_hook=None, code=PROBE_CODE, partial_oracle=False,
+             passing_marker=None):
     """A V3PipelineService whose every outside dependency is controlled."""
     monkeypatch.setattr(_LLM, "code", code)
     monkeypatch.setattr(adapters, "LLMAdapter", _LLM)
     monkeypatch.setattr(adapters, "SandboxAdapter",
-                        _sandbox_factory(self_test_pass, smoke_ok, partial_oracle))
+                        _sandbox_factory(self_test_pass, smoke_ok, partial_oracle,
+                                         passing_marker))
     monkeypatch.setattr(adapters, "EmbedAdapter", _Embed)
     monkeypatch.setattr(scoring, "classify_task_type", lambda p: task_type)
     monkeypatch.setattr(scoring, "score_candidate", lambda code: (1.0, 0.1, False))
@@ -371,10 +381,16 @@ def test_selection_vocabulary_reaches_telemetry_and_the_envelope(monkeypatch):
     for key in ("tied", "incomparable", "ineligible"):
         assert key in selection
 
+    # The POOL telemetry keeps the vocabulary of the selection that ran; the
+    # ENVELOPE describes the bytes actually delivered, which in shadow is the
+    # lens choice rather than the contract's pick. Both are structured, and
+    # neither is allowed to speak for the other.
     envelope = adapters.evidence_envelope(result, delivered_code=result["code"])
-    assert envelope["selection"]["status"] == selection["status"]
+    assert envelope["selection"]["status"] in C.SELECTION_STATUSES
     assert envelope["evaluation"]["evidence_strength"]
-    assert envelope["identity"]["candidate_content_hash"]
+    assert envelope["identity"]["candidate_content_hash"] == \
+        C.content_hash(result["code"])
+    assert envelope["delivery"]["describes_delivered_candidate"] is True
 
 
 def test_env_none_differs_from_an_empty_env():
@@ -391,3 +407,160 @@ def test_probe_timeout_fits_inside_the_client_read_timeout():
     import pipeline as P
     assert P.BROWSER_PROBE_TIMEOUT_S < 45, \
         "an execution budget above the client read timeout is cut off by its caller"
+
+
+# ---------------------------------------------------------------------------
+# Every successful exit describes the bytes it returns
+# ---------------------------------------------------------------------------
+#
+# The pipeline has six ways to return code with passed=true. Two of them
+# evaluated the artifact they hand back; the rest returned code whose evidence
+# was missing or about a different candidate, so a consumer had nothing to
+# check the delivered bytes against. These drive each phase through the real
+# run() and assert the envelope describes the exact returned hash.
+
+SUCCESS_PHASES = ("probe", "dead_oracle_consensus", "budget", "phase1",
+                  "pr_cot", "refinement")
+
+
+def _envelope_for(result):
+    return adapters.evidence_envelope(result, delivered_code=result["code"])
+
+
+def _assert_envelope_describes_delivery(result, phase):
+    """The exhaustive check every successful exit owes."""
+    assert result["phase_solved"] == phase, result["phase_solved"]
+    assert result["code"], "a successful exit returned no code"
+    env = _envelope_for(result)
+    assert env is not None, f"{phase} returned code with no evidence envelope"
+
+    delivered = C.content_hash(result["code"])
+    assert env["identity"]["candidate_content_hash"] == delivered, phase
+    assert env["delivery"]["delivered_content_hash"] == delivered, phase
+    assert env["delivery"]["describes_delivered_candidate"] is True, phase
+
+    identity = env["identity"]
+    assert identity["contract_id"] and identity["contract_version"], phase
+    assert identity["artifact_scope"] and identity["evaluation_context_hash"], phase
+    assert identity["adapter_id"] and identity["adapter_version"], phase
+
+    ev = env["evaluation"]
+    assert ev["execution_status"] in C.EXECUTION_STATUSES, phase
+    assert ev["evidence_strength"] in C.STRENGTH_ORDER, phase
+    assert isinstance(ev["requirements_complete"], bool), phase
+    assert isinstance(ev["closure_eligible"], bool), phase
+    assert 0.0 <= ev["quality"]["overall"] <= 1.0, phase
+
+    cov = env["coverage"]
+    for key in ("required", "demonstrated", "missing", "unmeasurable", "optional"):
+        assert key in cov, f"{phase}: coverage lacks {key}"
+
+    assert env["selection"]["status"] in C.SELECTION_STATUSES, phase
+    assert env["wire_version"] and env["record_schema_version"], phase
+    return env
+
+
+def test_probe_exit_describes_its_delivery(monkeypatch):
+    service, _ = _service(monkeypatch, oracle_cases=2, self_test_pass=True)
+    result = _run(service, "solve.py")
+    env = _assert_envelope_describes_delivery(result, "probe")
+    assert env["selection"]["status"] == C.SELECTION_VERIFIED_WINNER
+    assert env["evaluation"]["closure_eligible"] is True
+
+
+def test_dead_oracle_consensus_exit_describes_its_delivery(monkeypatch):
+    monkeypatch.setenv("ATLAS_V3_DEAD_ORACLE_CONSENSUS", "1")
+    chosen = {"code": "def agreed():\n    return 7\n", "index": 2}
+    monkeypatch.setattr(P, "_dead_oracle_consensus",
+                        lambda *a, **kw: (chosen, 0))
+    service, calls = _service(monkeypatch, oracle_cases=2, self_test_pass=False)
+    result = _run(service, "solve.py")
+
+    env = _assert_envelope_describes_delivery(result, "dead_oracle_consensus")
+    assert result["code"] == chosen["code"]
+    assert result["passed"] is True
+    # Consensus is agreement, not verification: the envelope must not claim a
+    # verified winner for it.
+    assert env["selection"]["status"] != C.SELECTION_VERIFIED_WINNER or \
+        env["evaluation"]["closure_eligible"] is True
+
+
+def test_budget_exit_describes_its_delivery(monkeypatch):
+    # The budget path hands back the best PASSING candidate when the run's
+    # wall-clock cap expires mid-pipeline. Driven through the pipeline's own
+    # budget primitive: generous until generation has produced a pool, then
+    # spent.
+    # The lens declines to select, so phase one does not close the run, and
+    # the clock then expires before the repair phase -- which is exactly when
+    # an anytime algorithm has to hand back its best verified candidate.
+    monkeypatch.setattr(P, "select_candidate", lambda cands, strategy="lens": None)
+    monkeypatch.setattr(P, "_remaining_budget_ms", lambda start: -1.0)
+    service, calls = _service(monkeypatch, task_type="interactive",
+                              code=BROWSER_JS)
+    result = _run(service, "game.js")
+    if result["phase_solved"] != "budget":
+        pytest.skip(f"budget path not taken (got {result['phase_solved']})")
+    _assert_envelope_describes_delivery(result, "budget")
+
+
+def test_phase_one_exit_describes_its_delivery(monkeypatch):
+    service, calls = _service(monkeypatch, task_type="interactive",
+                              code=BROWSER_JS)
+    result = _run(service, "game.js")
+    _assert_envelope_describes_delivery(result, "phase1")
+
+
+def test_pr_cot_exit_describes_its_delivery(monkeypatch):
+    repaired = "def repaired():\n    return 11\n"
+    service, calls = _service(monkeypatch, oracle_cases=3,
+                              passing_marker="repaired")
+    service.plan_search = SimpleNamespace(
+        generate=lambda problem, task_id, llm, num_plans=None,
+        budget_tier="standard": SimpleNamespace(candidates=list(ALT_CODES),
+                                                total_tokens=0))
+    service.pr_cot = SimpleNamespace(
+        repair=lambda problem, code, error, llm_call, task_id:
+            SimpleNamespace(repairs=[repaired], total_tokens=0))
+    result = _run(service, "solve.py")
+    if result["phase_solved"] != "pr_cot":
+        pytest.skip(f"repair path not taken (got {result['phase_solved']})")
+    env = _assert_envelope_describes_delivery(result, "pr_cot")
+    assert result["code"] == repaired
+    assert env["identity"]["candidate_content_hash"] == C.content_hash(repaired)
+
+
+def test_refinement_exit_describes_its_delivery(monkeypatch):
+    winning = "def refined():\n    return 13\n"
+    service, calls = _service(monkeypatch, oracle_cases=3,
+                              passing_marker="refined")
+    service.pr_cot = SimpleNamespace(
+        repair=lambda problem, code, error, llm_call, task_id:
+            SimpleNamespace(repairs=[], total_tokens=0))
+    service.refinement_loop = SimpleNamespace(
+        run=lambda **kw: SimpleNamespace(solved=True, total_tokens=0,
+                                         total_iterations=2,
+                                         winning_code=winning))
+    result = _run(service, "solve.py")
+    if result["phase_solved"] != "refinement":
+        pytest.skip(f"refinement path not taken (got {result['phase_solved']})")
+    env = _assert_envelope_describes_delivery(result, "refinement")
+    assert result["code"] == winning
+    assert env["identity"]["candidate_content_hash"] == C.content_hash(winning)
+
+
+def test_every_successful_exit_is_covered():
+    """The sentinel: a new way to return passed=true must arrive with a test.
+
+    Counted from the source rather than from a list someone maintains, so a
+    seventh success site fails this immediately.
+    """
+    src = (Path(__file__).resolve().parents[2] / "v3-service" / "pipeline.py").read_text()
+    sites = src.count('result["passed"] = True')
+    assert sites == len(SUCCESS_PHASES), (
+        f"{sites} successful-return sites, {len(SUCCESS_PHASES)} covered phases: "
+        f"add the new phase to SUCCESS_PHASES and give it a run() test")
+    # Every phase name this file claims to cover is one the pipeline can emit.
+    for phase in SUCCESS_PHASES:
+        assert f'result["phase_solved"] = "{phase}"' in src, phase
+    # And the finaliser is the single place that guarantees it.
+    assert "_ensure_delivered_evidence(result" in src

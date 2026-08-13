@@ -437,6 +437,63 @@ def _evaluate_candidate(file_path, code, smoke_passed, has_oracle, emit,
         candidate_content_hash=contract.content_hash(code))
 
 
+
+def _ensure_delivered_evidence(result, *, file_path, problem):
+    """Every successful exit describes THE BYTES IT RETURNS.
+
+    The pipeline has six ways to return code, and only two of them ran the
+    structured evaluation on the artifact they hand back: the probe's early
+    return and phase-one selection. Repair, refinement, the dead-oracle
+    consensus and the budget fallback returned code with no record of it at
+    all, or with the record of a different candidate, so the envelope either
+    went missing or described bytes the caller never received.
+
+    This evaluates the delivered bytes through the SAME canonical
+    adapter->contract path every other candidate goes through. No probe is
+    dispatched here -- an artifact whose behaviour was never observed reports
+    exactly that -- and the verifier's own accept/reject is the observation
+    input, never a claim of complete evidence: `accepted` on an interactive
+    artifact still yields syntax-level, unsupported evidence, and only the
+    oracle adapter, which exists only where an oracle ran, reaches oracle
+    strength.
+
+    It changes no path's `passed`, selection or return value. Where a legacy
+    `passed=true` sits on evidence that is not closure-eligible, the envelope
+    says so plainly rather than hiding the contradiction.
+    """
+    if not result:
+        return
+    code = result.get("code") or ""
+    if not code:
+        return
+    task = _task_identity(file_path, problem)
+    record = result.get("evidence_record")
+    if not record or record.get("candidate_content_hash") != contract.content_hash(code):
+        record = adapters.contract_record(
+            adapter=adapters.select_adapter(
+                file_path, code, bool(result.get("has_oracle"))),
+            accepted=bool(result.get("passed")),
+            probe=None,
+            contract_id=task["contract_id"],
+            contract_version=task["contract_version"],
+            artifact_scope=task["artifact_scope"],
+            evaluation_context_hash=task["evaluation_context_hash"],
+            candidate_content_hash=contract.content_hash(code))
+        result["evidence_record"] = record
+        # The selection that produced the old record described a different
+        # pool; re-state it over the record actually delivered.
+        result["contract_selection"] = None
+    selection = result.get("contract_selection")
+    if not selection or selection.get("best_record") is not record:
+        try:
+            result["contract_selection"] = contract.select([record], record)
+        except contract.ContractError as exc:
+            result["contract_selection"] = {
+                "best_record": None, "verified_winner": None, "tied": [],
+                "incomparable": [], "ineligible": [],
+                "selection_reason": f"identity error: {exc}"}
+
+
 def _task_identity(file_path, problem):
     """What every record in this run is measured under.
 
@@ -710,6 +767,7 @@ class V3PipelineService:
                 problem, task_id=task_id, progress_callback=progress_callback,
                 files=files, file_path=file_path, build_command=build_command,
                 working_dir=working_dir)
+            _ensure_delivered_evidence(result, file_path=file_path, problem=problem)
             return result
         except Exception as e:
             error = f"{type(e).__name__}: {e}"
@@ -1066,6 +1124,9 @@ class V3PipelineService:
         # nothing more, and would have closed the pipeline claiming behaviour
         # nobody demonstrated.
         _has_oracle = bool(self_tests and getattr(self_tests, "test_cases", None))
+        # Recorded for the finaliser: which verifier the artifact was eligible
+        # for is a fact of the run, not something to re-derive afterwards.
+        result["has_oracle"] = _has_oracle
         _task = _task_identity(file_path, problem)
         probe_result = _evaluate_candidate(
             file_path, probe_code, probe_passed, _has_oracle, emit, sandbox,
