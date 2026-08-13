@@ -1832,6 +1832,15 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	if v3Result != nil {
 		v3StagePayload["evidence"] = evidenceTelemetry(
 			v3Result.Evidence, v3Result.EvidenceUnavailableReason)
+		// The authorization decision and its reason, recorded where a durable
+		// record belongs. It is deliberately not put on the ToolResult, which
+		// is projected to the model and to the guarded tool-result SSE.
+		authorized, why := v3DeliveryAuthorized(v3Result, v3Result.Code)
+		auth := map[string]interface{}{"authorized": authorized}
+		if why != "" {
+			auth["reason"] = why
+		}
+		v3StagePayload["authorization"] = auth
 	}
 	Emit(Envelope{
 		EventID:    NewEventID(),
@@ -1937,6 +1946,19 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	if cleaned, sanitized := sanitizeFileContent(path, code); sanitized {
 		log.Printf("[write_file] sanitised V3 output for %s", path)
 		code = cleaned
+	}
+
+	// Authorization is re-asked of the FINAL bytes. Sanitisation rewrites the
+	// candidate after the service earned its evidence, so evidence that
+	// described the pre-sanitisation text describes nothing that is about to be
+	// written. Rather than claim it does, the delivery falls back to the
+	// caller's own content and the provenance goes with it.
+	if authorizedV3 {
+		if ok, why := v3DeliveryAuthorized(v3Result, code); !ok {
+			log.Printf("[write_file] evidence no longer authorizes the bytes for %s (%s)",
+				logPath(path), why)
+			code, authorizedV3, fellBack = revokeV3(baselineContent, why, path)
+		}
 	}
 
 	// FINAL-BYTE OBSERVATION. The bytes are now chosen, and every artifact this
@@ -3003,14 +3025,19 @@ func revokeV3(baseline, reason, path string) (string, bool, bool) {
 }
 
 func authorizedV3Replacement(result *V3GenerateResponse, baseline string) (string, bool) {
-	if result == nil || !result.Passed || result.Code == "" {
-		if result != nil && result.Code != "" {
-			log.Printf("[v3] returned %d bytes without passing — keeping the caller's content",
-				len(result.Code))
+	code := ""
+	if result != nil {
+		code = result.Code
+	}
+	authorized, reason := v3DeliveryAuthorized(result, code)
+	if !authorized {
+		if code != "" {
+			log.Printf("[v3] returned %d bytes the evidence does not authorize (%s) — keeping the caller's content",
+				len(code), reason)
 		}
 		return baseline, false
 	}
-	return result.Code, true
+	return code, true
 }
 
 func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3EditMetadata, error) {

@@ -1701,10 +1701,14 @@ func v3AndStructuralServer(t *testing.T, winnerCode, flagName string) *httptest.
 		case "/v3/generate":
 			w.Header().Set("Content-Type", "text/event-stream")
 			fl, _ := w.(http.Flusher)
+			// A service that verified this winner says so in the envelope.
+			// Without one nothing is authorized -- `passed` alone no longer
+			// replaces the caller's content.
 			payload, _ := json.Marshal(map[string]interface{}{
 				"code": winnerCode, "passed": true,
 				"phase_solved": "phase1", "candidates_tested": 3,
 				"winning_score": 0.9,
+				"evidence":      envelopeFor(t, winnerCode, nil),
 			})
 			for _, line := range []string{"event: result", "data: " + string(payload), "", "data: [DONE]", ""} {
 				fmt.Fprint(w, line+"\n")

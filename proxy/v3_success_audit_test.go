@@ -61,6 +61,27 @@ func (s *auditStub) snapshot() []auditCheck {
 	return append([]auditCheck(nil), s.checks...)
 }
 
+// verifiedEnvelopeFor re-stamps the golden verified-winner envelope onto other
+// bytes. The shape stays the one the real Python serialiser produced -- the
+// golden document is still the only description of the wire -- while the
+// hashes name the candidate this fixture is about.
+func verifiedEnvelopeFor(t *testing.T, code string) map[string]interface{} {
+	t.Helper()
+	var payload struct {
+		Evidence map[string]interface{} `json:"evidence"`
+	}
+	if err := json.Unmarshal(readFixture(t, "01_verified_winner"), &payload); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte(code))
+	h := hex.EncodeToString(sum[:])
+	payload.Evidence["identity"].(map[string]interface{})["candidate_content_hash"] = h
+	delivery := payload.Evidence["delivery"].(map[string]interface{})
+	delivery["delivered_content_hash"] = h
+	delivery["describes_delivered_candidate"] = true
+	return payload.Evidence
+}
+
 type auditCase struct {
 	name      string
 	rel       string
@@ -81,6 +102,9 @@ type auditCase struct {
 	syntaxBadFor       func(src string, call int) bool // /syntax-check verdict
 	cancelOnStructural bool
 	readOnlyDir        bool
+	// noEvidence sends the legacy response shape: passed=true with no
+	// envelope, which authorizes nothing.
+	noEvidence bool
 }
 
 type auditResult struct {
@@ -106,14 +130,21 @@ func runAudit(t *testing.T, c auditCase) auditResult {
 			st.mu.Unlock()
 			w.Header().Set("Content-Type", "text/event-stream")
 			fl, _ := w.(http.Flusher)
-			payload, _ := json.Marshal(map[string]interface{}{
+			body := map[string]interface{}{
 				"code": c.candidate, "passed": c.passed,
 				"phase_solved": "phase1", "candidates_tested": 3,
 				"winning_score": 0.87,
 				"verification_evidence": []map[string]interface{}{
 					{"verifier": "sandbox", "status": "passed"},
 				},
-			})
+			}
+			// A service that verified this candidate says so in the envelope.
+			// Without one nothing is authorized, which several cases below
+			// exercise deliberately.
+			if c.passed && !c.noEvidence {
+				body["evidence"] = verifiedEnvelopeFor(t, c.candidate)
+			}
+			payload, _ := json.Marshal(body)
 			for _, line := range []string{"event: result", "data: " + string(payload), "", "data: [DONE]", ""} {
 				fmt.Fprint(w, line+"\n")
 				if fl != nil {
@@ -604,12 +635,13 @@ func TestUnauthorizedCandidateNeverInfluencesAnything(t *testing.T) {
 	}
 }
 
-// Q4/Q5, answered by the invariant: sanitization still rewrites the bytes
-// AFTER V3 earned its evidence on them, but the result is no longer delivered
-// unexamined. The checker sees the SANITIZED hash and never the pre-sanitized
-// candidate V3 actually verified -- which is the whole point of placing the
-// final-byte check after sanitization.
-func TestSanitizedCandidateIsCheckedAsDelivered(t *testing.T) {
+// Q4/Q5, now answered by authorization: sanitisation rewrites the bytes AFTER
+// the service earned its evidence, so that evidence describes text that will
+// never exist on disk. Rather than claim it covers the sanitised result, the
+// delivery falls back to the caller's own content and the provenance goes with
+// it. A sanitised candidate becomes deliverable again only when the service
+// hashes what it actually returns.
+func TestSanitizedCandidateLosesItsAuthorization(t *testing.T) {
 	fenced := "```python\n" + auCandidatePy + "```\n"
 	got := runAudit(t, auditCase{
 		rel: "solve.py", baseline: auBaselinePy, candidate: fenced, passed: true})
@@ -618,31 +650,16 @@ func TestSanitizedCandidateIsCheckedAsDelivered(t *testing.T) {
 	if !changed {
 		t.Fatal("fixture did not exercise sanitization")
 	}
-	if got.disk != sanitized {
-		t.Fatalf("delivered bytes are not the sanitized candidate: %q", got.disk)
+	if got.disk != auBaselinePy {
+		t.Fatalf("delivered bytes are not the baseline: %q", got.disk)
 	}
-	var sawSanitized bool
-	for _, ch := range got.checks {
-		if ch.kind != "syntax" {
-			continue
-		}
-		if ch.hash == shortHash(sanitized) {
-			sawSanitized = true
-		}
-		if ch.hash == shortHash(fenced) {
-			t.Error("a syntax check examined the PRE-sanitized candidate; the " +
-				"observation must describe the bytes that land")
-		}
+	if got.disk == sanitized || got.disk == fenced {
+		t.Fatal("unauthorized candidate bytes reached disk")
 	}
-	if !sawSanitized {
-		t.Fatal("the delivered bytes were never syntax-checked")
+	if got.res.V3Used {
+		t.Error("provenance survived a revoked authorization")
 	}
-	if !got.res.V3Used {
-		t.Fatal("fixture did not reach the authorized-delivery path")
-	}
-	// Local syntax evidence only. V3's own verdict is not borrowed to make a
-	// stronger claim: `passed` covers compile smoke, a partial oracle score and
-	// a complete one indistinguishably, and no strength field crosses the wire.
+	// The baseline that IS delivered still gets its own observation.
 	if got.res.ValidationKind != ValidationKindSyntax ||
 		got.res.ValidationStatus != ValidationPassed {
 		t.Errorf("validation = %q/%q, want syntax/passed",
@@ -749,14 +766,15 @@ func TestFinalByteInvariantTransitions(t *testing.T) {
 			kind: ValidationKindSyntax, status: ValidationPassed,
 			v3Used: true, sse: []string{"v3_progress", "v3_progress"}},
 
-		// Sanitised candidate: the checker sees SANI, never the pre-sanitised
-		// CAND that V3 actually verified.
+		// Sanitised candidate: the evidence described the PRE-sanitised bytes,
+		// so it describes nothing that would be written. Authorization is
+		// withdrawn and the caller's own content is delivered instead.
 		{name: "04_sanitization_rewrites_candidate",
-			checks:  []string{"syntax:BASE", "syntax:SANI", "structural:SANI"},
-			disk:    "SANI",
+			checks:  []string{"syntax:BASE", "syntax:BASE", "structural:BASE"},
+			disk:    "BASE",
 			success: true, mutation: MutationApplied,
 			kind: ValidationKindSyntax, status: ValidationPassed,
-			v3Used: true, sse: []string{"v3_progress", "v3_progress"}},
+			sse: []string{"v3_progress"}},
 
 		// Candidate fails its own final-byte check: the baseline is checked
 		// before it is restored, and it is delivered without provenance.

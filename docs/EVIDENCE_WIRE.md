@@ -7,10 +7,19 @@ the proxy had no way to tell them apart. The envelope carries the evidence
 itself, versioned, so a consumer can read what happened instead of guessing
 from a boolean.
 
-This phase is **transport only**. No decision changed: candidate selection,
-delivery authorization, `passed`, early return and every gate behave exactly as
-before. The proxy decodes, validates and records the envelope; nothing reads it
-to authorize anything yet.
+The envelope is now **authoritative for delivery**. A generated candidate may
+replace the caller's content, and carry V3 provenance, only when the envelope
+is available and self-consistent, its selection concluded a `verified_winner`,
+its record is closure-eligible, and its hash names the exact bytes Go would
+write. `passed`, `phase_solved`, `winning_score` and the verification-evidence
+strings authorize nothing; `passed` stays on the wire as a compatibility and
+telemetry field.
+
+Because sanitisation rewrites a candidate after the service earned its
+evidence, authorization is re-asked of the final bytes: a hash that no longer
+matches revokes to the caller's baseline and withdraws provenance, and the
+revocation continues through the same final-byte validation the other gates
+use.
 
 ## Ownership
 
@@ -77,11 +86,22 @@ include three damaged envelopes so that path is exercised.
 
 ## Hashes before provenance
 
-`EvidenceSupportsProvenanceFor` is the rule a later slice will use: the
-envelope must be available **and** its `candidate_content_hash` must equal the
-sha256 of the exact bytes about to be written. The producer's own
-`describes_delivered_candidate` flag is never trusted on its own — the consumer
-hashes what it is delivering.
+`EvidenceSupportsProvenanceFor` is the rule, and `v3DeliveryAuthorized` is the
+only place it is applied:
+
+| Condition | Why |
+| --- | --- |
+| non-empty candidate code | nothing to deliver otherwise |
+| availability `available` | present, same-major, self-consistent |
+| `selection.status == verified_winner` | a winner, not merely a best record |
+| `evaluation.closure_eligible` | that winner met its own contract's floor |
+| `candidate_content_hash` equals sha256 of the final bytes | the evidence is about what will be written |
+
+The producer's own `describes_delivered_candidate` flag is never trusted — the
+consumer hashes what it is delivering. Every other outcome (best-not-eligible,
+tied, incomparable, ineligible, no winner, hash mismatch, absent, unknown
+version, malformed, contradictory) delivers the caller's baseline with no
+provenance.
 
 ## Golden fixtures
 

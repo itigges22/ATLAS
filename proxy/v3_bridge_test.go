@@ -457,9 +457,10 @@ func TestLatestUserMessageFallbackSkipsSyntheticNotes(t *testing.T) {
 	}
 }
 
-// Authorization to replace the caller's content is `passed`, never the mere
-// presence of `code`. The evidence work introduces a "best_record" that is
-// the strongest available candidate while deliberately NOT closure-eligible.
+// Authorization to replace the caller's content is the ENVELOPE, never
+// `passed` and never the mere presence of `code`. `passed` collapses a compile
+// smoke, a partial oracle score and a complete one into one boolean, so it can
+// no longer stand for any of them.
 //
 // The previous version of this test reimplemented the condition inline, so
 // it tested the intended expression rather than production code — and stayed
@@ -475,8 +476,8 @@ func TestAuthorizedV3ReplacementIsTheOnlyGate(t *testing.T) {
 		want       string
 		authorized bool
 	}{
-		{"passing candidate is delivered",
-			&V3GenerateResponse{Passed: true, Code: alternative}, alternative, true},
+		{"passing without evidence is refused",
+			&V3GenerateResponse{Passed: true, Code: alternative}, baseline, false},
 		{"unverified candidate is refused",
 			&V3GenerateResponse{Passed: false, Code: alternative}, baseline, false},
 		{"passing but empty falls back",
