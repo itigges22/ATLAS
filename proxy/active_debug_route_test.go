@@ -117,16 +117,24 @@ def perimeter(radius):
 `
 
 type debugRouteStub struct {
-	mu         sync.Mutex
-	syntaxCode []string
-	v3Calls    int
-	unexpected []string
+	mu             sync.Mutex
+	syntaxCode     []string
+	embeddedCalls  int
+	structuralCode []string
+	v3Calls        int
+	unexpected     []string
 }
 
 func (s *debugRouteStub) syntaxCalls() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.syntaxCode)
+}
+
+func (s *debugRouteStub) checkerCalls() (syntax, embedded, structural int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.syntaxCode), s.embeddedCalls, len(s.structuralCode)
 }
 
 type debugRouteOpts struct {
@@ -158,10 +166,21 @@ func runDebugRoute(t *testing.T, o debugRouteOpts) (*ToolResult, string, *debugR
 		case r.URL.Path == "/internal/cyclomatic_complexity":
 			// A legitimate call on this path: tier refinement, not a gate.
 			json.NewEncoder(w).Encode(map[string]interface{}{"functions": []interface{}{}})
+		case r.URL.Path == "/internal/embedded_script_check":
+			// Counted, not rejected: reaching it is a real answer about
+			// applicability, and a fixture that asserts zero must be able to
+			// say so rather than die on an unexpected-endpoint fatal.
+			st.mu.Lock()
+			st.embeddedCalls++
+			st.mu.Unlock()
+			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "findings": []interface{}{}})
 		case r.URL.Path == "/internal/structural_check":
 			var body map[string]interface{}
 			json.NewDecoder(r.Body).Decode(&body)
 			src, _ := body["source"].(string)
+			st.mu.Lock()
+			st.structuralCode = append(st.structuralCode, src)
+			st.mu.Unlock()
 			out := map[string]interface{}{"ok": true, "unresolved": []string{}}
 			if o.introduces != "" && strings.Contains(src, o.introduces+"(") {
 				out["unresolved"] = []string{o.introduces}
@@ -540,7 +559,98 @@ func TestActiveDebugRefusesWhenNoBaselineCanBeRead(t *testing.T) {
 	}
 }
 
-// 10. The policy itself: only a DEMONSTRATED baseline failure unlocks a failed
+// 10. Neither check applies. Rust is the fixture because the applicability
+// question has to be answered by the CONTENT TYPE, not by a small file or an
+// absent service: .rs is in neither syntaxGateLanguages (no sandbox checker)
+// nor embeddedScriptExts (it cannot carry a <script> block), while a real
+// module of it classifies Tier2+ on its own logic. The routing premise is
+// therefore intact -- Tier2+, V3 configured, predicate true -- and the answer
+// is not_applicable rather than not_run: nothing here was checkable, which is
+// a different fact from "a checker was unavailable" (case 2).
+const debugRustBaseline = `pub fn area(radius: f64) -> f64 {
+    if radius < 0.0 {
+        panic!("negative radius");
+    }
+    std::f64::consts::PI * radius * radius
+}
+
+pub fn total(radii: &[f64]) -> f64 {
+    let mut sum = 0.0;
+    for r in radii {
+        sum += area(*r);
+    }
+    sum
+}
+`
+
+const debugRustProposal = `pub fn area(radius: f64) -> f64 {
+    if radius < 0.0 {
+        panic!("negative radius");
+    }
+    std::f64::consts::PI * radius * radius
+}
+
+pub fn total(radii: &[f64]) -> f64 {
+    let mut sum = 0.0;
+    for r in radii {
+        sum += area(*r);
+    }
+    sum
+}
+
+pub fn describe(radius: f64) -> String {
+    match radius {
+        r if r < 0.0 => String::from("invalid"),
+        _ => format!("area {}", area(radius)),
+    }
+}
+`
+
+func TestActiveDebugNoCheckApplies(t *testing.T) {
+	if tier := classifyFileTier("engine.rs", debugRustProposal); tier < Tier2Medium {
+		t.Fatalf("the fixture must classify Tier2+ on its own content, got %v -- "+
+			"a sub-Tier2 file would prove nothing about this route", tier)
+	}
+	if _, gated := syntaxGateLanguages[".rs"]; gated {
+		t.Fatal(".rs gained a sandbox checker; pick a type neither check applies to")
+	}
+	if embeddedScriptExts[".rs"] {
+		t.Fatal(".rs gained an embedded-script check; pick a type neither check applies to")
+	}
+
+	res, disk, st := runDebugRoute(t, debugRouteOpts{
+		rel: "engine.rs", baseline: debugRustBaseline, proposal: debugRustProposal})
+
+	if !res.Success {
+		t.Fatalf("the write did not land: %q", res.Error)
+	}
+	if disk != debugRustProposal {
+		t.Fatalf("bytes on disk are not the proposal: %q", disk)
+	}
+	if res.MutationStatus != MutationApplied ||
+		res.ValidationKind != ValidationKindNone ||
+		res.ValidationStatus != ValidationNotApplicable {
+		t.Errorf("got %q/%q/%q, want applied/none/not_applicable",
+			res.MutationStatus, res.ValidationKind, res.ValidationStatus)
+	}
+	if res.ValidationStatus.Passed() {
+		t.Error("nothing was checked, so nothing may read as passed")
+	}
+	if !res.Classified() {
+		t.Error("result not fully classified")
+	}
+	syntax, embedded, structural := st.checkerCalls()
+	if syntax != 0 || embedded != 0 {
+		t.Errorf("checker calls = %d syntax / %d embedded, want 0/0 -- "+
+			"applicability is decided locally, before any service question",
+			syntax, embedded)
+	}
+	if structural != 0 {
+		t.Errorf("structural_check calls = %d, want 0 (the gate is .py-scoped)", structural)
+	}
+}
+
+// 11. The policy itself: only a DEMONSTRATED baseline failure unlocks a failed
 // proposal. Passed, not_run, not_applicable and Unknown all refuse -- absence
 // of evidence is not evidence that the file was already broken.
 func TestBaselineAllowsRepairOnlyOnDemonstratedFailure(t *testing.T) {
