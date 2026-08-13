@@ -805,6 +805,57 @@ func TestFinalByteInvariantTransitions(t *testing.T) {
 			kind: ValidationKindSyntax, status: ValidationPassed,
 			sse: []string{"v3_progress", "v3_progress"}},
 
+		// Row 5b: the revocation's baseline check decides, and it is a SYNTAX
+		// refusal -- pinned here, unchanged by this slice.
+		{name: "05b_structural_revocation_blocked_by_broken_baseline",
+			checks: []string{"syntax:BASE", "syntax:CAND", "structural:CAND",
+				"structural:EMPTY", "syntax:BASE"},
+			disk:    "",
+			success: false, mutation: MutationRefused,
+			kind: ValidationKindSyntax, status: ValidationFailed,
+			sse: []string{"v3_progress"}},
+
+		// Row 6: neither the candidate nor the baseline resolves its calls.
+		// Syntax passed on both; the structural failure is the decisive one.
+		{name: "06_structural_refuses_both",
+			checks: []string{"syntax:BASE", "syntax:CAND", "structural:CAND", "structural:EMPTY",
+				"syntax:BASE", "structural:BASE", "structural:EMPTY"},
+			disk:    "",
+			success: false, mutation: MutationRefused,
+			kind: ValidationKindStructural, status: ValidationFailed,
+			sse: []string{"v3_progress"}},
+
+		// Row 8: the comparative embedded gate condemns both. The finding is
+		// previous-dependent -- a before/after regression, not a standalone
+		// parse failure, which the final-byte check already owns -- so it is
+		// classified structural rather than syntax.
+		{name: "08_embedded_refuses_both",
+			checks: []string{"syntax:BASE", "embedded:BASE", "syntax:CAND", "embedded:CAND",
+				"embedded:CAND", "embedded:PRIOR", "embedded:BASE", "embedded:PRIOR"},
+			disk:    "",
+			success: false, mutation: MutationRefused,
+			kind: ValidationKindStructural, status: ValidationFailed,
+			sse: []string{"v3_progress"}},
+
+		// Row 9: the entrypoint guard. Structural in the same sense: the file
+		// parses and its module-level structure is wrong.
+		{name: "09_duplicate_main_refused",
+			checks:  []string{"syntax:BASE", "syntax:CAND", "structural:CAND"},
+			disk:    "",
+			success: false, mutation: MutationRefused,
+			kind: ValidationKindStructural, status: ValidationFailed,
+			sse: []string{"v3_progress"}},
+
+		// Row 10: cancelled after the final-byte observation and before any
+		// mutation began. No attempt was made, so MutationNone -- and the
+		// observation earned on those exact bytes is still true.
+		{name: "10_cancelled_during_gates",
+			checks:  []string{"syntax:BASE", "syntax:CAND", "structural:CAND"},
+			disk:    "",
+			success: false, mutation: MutationNone,
+			kind: ValidationKindSyntax, status: ValidationPassed,
+			sse: []string{"v3_progress"}},
+
 		// Baseline fallback that fails to land: same, for the model's bytes.
 		{name: "12_baseline_write_fails",
 			checks:  []string{"syntax:BASE", "syntax:BASE", "structural:BASE"},

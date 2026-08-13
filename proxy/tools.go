@@ -2018,7 +2018,17 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 			}
 			if !fellBack {
 				log.Printf("[write_file] V3 result introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(path))
-				return &ToolResult{Success: false, Error: structuralWriteRejection(path, introduced)}, nil
+				// Syntax already passed on these exact bytes at the final-byte
+				// check; the structural failure is what refused them, so it is
+				// the decisive outcome. The earlier pass is not carried here --
+				// it would describe a check that did not make this decision.
+				rejection := structuralWriteRejection(path, introduced)
+				return &ToolResult{Success: false,
+					Error:            rejection,
+					MutationStatus:   MutationRefused,
+					ValidationKind:   ValidationKindStructural,
+					ValidationStatus: ValidationFailed,
+					ValidationDetail: rejection}, nil
 			}
 		}
 	}
@@ -2050,7 +2060,18 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 				deliveredCheck, checkedFor = baseCheck, code
 			} else {
 				log.Printf("[write_file] embedded-script gate rejected content for %s", logPath(path))
-				return &ToolResult{Success: false, Error: msg}, nil
+				// Structural, not syntax. A standalone embedded parse failure
+				// is already owned by the final-byte check, which asks without
+				// a `previous` and would have refused before this gate ran.
+				// What survives to here is what only a before/after comparison
+				// can see -- a render loop the change stopped driving -- which
+				// is a structural regression in code that parses.
+				return &ToolResult{Success: false,
+					Error:            msg,
+					MutationStatus:   MutationRefused,
+					ValidationKind:   ValidationKindStructural,
+					ValidationStatus: ValidationFailed,
+					ValidationDetail: msg}, nil
 			}
 		}
 	}
@@ -2061,7 +2082,14 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	if original, origOK := readOriginalForGate(path); origOK {
 		if msg := duplicateMainGuard(path, original, code); msg != "" {
 			log.Printf("[write_file] write duplicates the module entrypoint in %s — rejecting", logPath(path))
-			return &ToolResult{Success: false, Error: msg}, nil
+			// The file parses; what is wrong is its module-level structure, so
+			// this is a structural refusal like the two above.
+			return &ToolResult{Success: false,
+				Error:            msg,
+				MutationStatus:   MutationRefused,
+				ValidationKind:   ValidationKindStructural,
+				ValidationStatus: ValidationFailed,
+				ValidationDetail: msg}, nil
 		}
 	}
 
@@ -2069,10 +2097,20 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// must not land content on disk, mirroring the main call's abort path above.
 	if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
 		log.Printf("[write_file] cancelled during structural gate — not writing %s", path)
-		return &ToolResult{
-			Success: false,
-			Error:   "write_file cancelled — no content was written",
-		}, nil
+		// MutationNone, not Refused: no gate declined anything and no write was
+		// attempted -- the turn ended. The observation earned on the current
+		// bytes is still true and is carried, but nothing new is evaluated
+		// here: cancellation is exactly the point at which no further work may
+		// be done. It is overlaid only while it still describes those bytes.
+		cancelled := &ToolResult{
+			Success:        false,
+			Error:          "write_file cancelled — no content was written",
+			MutationStatus: MutationNone,
+		}
+		if checkedFor == code {
+			overlayValidation(cancelled, deliveredCheck)
+		}
+		return cancelled, nil
 	}
 
 	// A gate fallback wrote the model's own baseline, which was NOT
