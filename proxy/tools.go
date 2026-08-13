@@ -1172,11 +1172,16 @@ func writeFileTool() *ToolDef {
 			switch {
 			case isNew:
 				res, err = applyRouteObservation(res, err, newFileCheck)
-			case iterating:
-				// The active-debug branch evaluated these exact bytes on the
-				// way here. The other existing-file routes still leave
-				// writeFileDirect's conservative default; each is its own
-				// change with its own evidence.
+			case proposalCheck.Status != ValidationUnknown:
+				// Every remaining route through this write -- the active-debug
+				// fast path and the ordinary direct write over an existing
+				// file -- already holds an observation of these exact bytes.
+				// The shared regression gate makes it whenever the destination
+				// exists, and the active-debug branch fills it in for the one
+				// case where the destination is gone, so non-Unknown IS the
+				// ownership test. Restating it with a second checker call
+				// would spend a round trip to risk a different answer about
+				// bytes that have not changed since.
 				res, err = applyRouteObservation(res, err, proposalCheck)
 			}
 			return res, err
