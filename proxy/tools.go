@@ -1846,10 +1846,23 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		// call writing a SyntaxError to disk with success=true is how the
 		// mini-bench got its two broken files (t06/t09).
 		log.Printf("[write_file] V3 failed: %s — falling back to direct write", err)
-		if synErr, ok := checkFallbackSyntax(ctx, path, baselineContent); !ok {
+		// A FRESH check, deliberately, even though the preflight already
+		// examined these bytes: generation can run for minutes, and this
+		// revalidates the exact content about to be written immediately
+		// before writing it. The observation therefore describes the bytes
+		// that land, with no window between the two.
+		fallbackCheck := fallbackSyntaxOutcomeFor(ctx, path, baselineContent).aggregate()
+		if fallbackCheck.Status == ValidationFailed {
+			synErr := fallbackCheck.Detail
 			log.Printf("[write_file] fallback content for %s failed syntax gate: %s", path, truncateStr(synErr, 120))
+			// Refused before any byte reached disk, on exactly the content
+			// that would have been written.
 			return &ToolResult{Success: false,
-				Error: fallbackSyntaxRejection(path, baselineContent, synErr)}, nil
+				Error:            fallbackSyntaxRejection(path, baselineContent, synErr),
+				MutationStatus:   MutationRefused,
+				ValidationKind:   ValidationKindSyntax,
+				ValidationStatus: ValidationFailed,
+				ValidationDetail: synErr}, nil
 		}
 		// #147: structural gate on the fallback too. It matters on the
 		// DeadlineExceeded case — /generate timed out but the service is
@@ -1858,7 +1871,15 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		if original, ok := readOriginalForGate(path); ok {
 			if introduced := editIntroducesUnresolved(ctx, path, original, baselineContent); len(introduced) > 0 {
 				log.Printf("[write_file] fallback content introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(path))
-				return &ToolResult{Success: false, Error: structuralWriteRejection(path, introduced)}, nil
+				// Syntax ran first and did not fail on these exact bytes, so
+				// the structural failure is the decisive one. Recording it as
+				// syntax/failed would assert the opposite of what happened.
+				rejection := structuralWriteRejection(path, introduced)
+				return &ToolResult{Success: false, Error: rejection,
+					MutationStatus:   MutationRefused,
+					ValidationKind:   ValidationKindStructural,
+					ValidationStatus: ValidationFailed,
+					ValidationDetail: rejection}, nil
 			}
 		}
 		msg := "  \u2514\u2500 V3 unavailable, writing directly"
@@ -1866,7 +1887,11 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 			msg = fmt.Sprintf("  \u2514\u2500 V3 exceeded %s cap, writing your version", v3CallTimeout())
 		}
 		ctx.Stream("text", map[string]string{"content": msg})
-		return writeFileRecorded(path, baselineContent, ctx)
+		// The model's own bytes, unchanged: no V3 provenance is attached
+		// because nothing here was generated, verified or scored. Only the
+		// validation observation is overlaid onto what the writer reported.
+		fbRes, fbErr := writeFileRecorded(path, baselineContent, ctx)
+		return applyRouteObservation(fbRes, fbErr, fallbackCheck)
 	}
 
 	// Write the winning candidate (or baseline if V3 didn't improve).

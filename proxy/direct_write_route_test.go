@@ -592,7 +592,7 @@ def perimeter(radius):
 	}
 }
 
-// Structural pin on the producers themselves. Seven structured evaluations
+// Structural pin on the producers themselves. Eight structured evaluations
 // exist in tools.go, and every one of them is a case some other gate did not
 // already answer:
 //
@@ -600,8 +600,10 @@ def perimeter(radius):
 //	V3 preflight        proposal + baseline   new destination / unread baseline
 //	active-debug branch proposal + baseline   destination gone since the write
 //	new-file gate       proposal              sub-Tier2 or unconfigured V3
+//	V3 service fallback baseline              after generation failed, deliberately
+//	                                          fresh: minutes may have passed
 //
-// None is in the final direct-write block. An eighth would mean a route
+// None is in the final direct-write block. A ninth would mean a route
 // recomputed an observation it already held.
 func TestWriteRoutesDoNotRecomputeTheirObservation(t *testing.T) {
 	fset := token.NewFileSet()
@@ -627,15 +629,15 @@ func TestWriteRoutesDoNotRecomputeTheirObservation(t *testing.T) {
 		}
 		return true
 	})
-	if structured != 7 {
-		t.Errorf("fallbackSyntaxOutcomeFor call sites = %d, want 7; a new one on a "+
+	if structured != 8 {
+		t.Errorf("fallbackSyntaxOutcomeFor call sites = %d, want 8; a new one on a "+
 			"route that already holds an observation is a recomputation", structured)
 	}
-	// The fallback write inside writeFileWithV3, edit_file, insert_after and
-	// replace_lines still use the legacy wrapper, two calls each. Those are
-	// the unmigrated routes; nothing outside a migrated one was removed.
-	if legacy != 8 {
-		t.Errorf("checkFallbackSyntax call sites = %d, want 8 -- the four "+
-			"unmigrated routes, two calls each", legacy)
+	// Still on the legacy wrapper: the baseline check inside candidate
+	// revocation (1), and edit_file, insert_after and replace_lines (2 each).
+	// Nothing outside a migrated route was removed.
+	if legacy != 7 {
+		t.Errorf("checkFallbackSyntax call sites = %d, want 7 -- candidate "+
+			"revocation plus the three edit tools", legacy)
 	}
 }
