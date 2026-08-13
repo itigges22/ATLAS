@@ -85,6 +85,7 @@ type directWriteOpts struct {
 	unavailableFor string       // content carrying this gets a non-200 from /syntax-check
 	introduces     string       // structural_check reports this symbol as newly unresolved
 	lastTool       AgentMessage // most recent tool message; zero value means a read_file
+	bypassV3       bool         // demo baseline pane: V3 held off by the flag, not the tier
 	before         func(t *testing.T, dir string)
 }
 
@@ -158,7 +159,7 @@ func runDirectWrite(t *testing.T, o directWriteOpts) (*ToolResult, string, *dire
 	ctx := NewAgentContext(dir, Tier2Medium)
 	ctx.PermissionMode = PermissionYolo
 	ctx.StreamFn = func(event string, _ interface{}) { events = append(events, event) }
-	ctx.BypassV3 = false
+	ctx.BypassV3 = o.bypassV3
 	ctx.V3URL = srv.URL
 	ctx.SandboxURL = srv.URL
 	// Session-owned: the model may rewrite its own draft.
@@ -184,10 +185,17 @@ func runDirectWrite(t *testing.T, o directWriteOpts) (*ToolResult, string, *dire
 	if isActiveDebugIteration(ctx, o.rel) {
 		t.Fatal("the active-debug predicate must be FALSE on this route")
 	}
-	if ctx.BypassV3 {
-		t.Fatal("BypassV3 must be false")
+	if ctx.BypassV3 != o.bypassV3 {
+		t.Fatalf("BypassV3 = %v, want %v", ctx.BypassV3, o.bypassV3)
 	}
-	if tier := classifyFileTier(o.rel, o.proposal); tier >= Tier2Medium {
+	// What holds V3 off has to be exactly one thing, and the fixture says
+	// which: Tier1 content on the ordinary route, the flag on the bypass one.
+	tier := classifyFileTier(o.rel, o.proposal)
+	if o.bypassV3 && tier < Tier2Medium {
+		t.Fatalf("the bypass fixture must be Tier2+, so BypassV3 is the ONLY "+
+			"thing holding V3 off, got %v", tier)
+	}
+	if !o.bypassV3 && tier >= Tier2Medium {
 		t.Fatalf("fixture must be Tier1 so the ordinary direct route is selected "+
 			"with V3 configured, got %v", tier)
 	}
@@ -490,6 +498,97 @@ func TestDirectWriteActiveDebugNearMiss(t *testing.T) {
 	}
 	if syntax, _, _ := st.counts(); syntax != 1 {
 		t.Errorf("syntax-check calls = %d, want exactly 1", syntax)
+	}
+}
+
+// BypassV3 is the demo baseline pane: it exists to show the raw model, so it
+// holds off candidate generation AND the structural veto. What it does not do
+// is make the harness lie about what it checked. The bytes are the model's own
+// and land unchanged, no V3 provenance is attached, no SSE is projected -- and
+// the syntax observation the shared regression gate made on those exact bytes
+// is still reported, because bypassing generation is not the same as bypassing
+// the truth about validation.
+func TestBypassV3KeepsValidationEvidence(t *testing.T) {
+	res, disk, st, events := runDirectWrite(t, directWriteOpts{
+		rel: "engine.rs", baseline: debugRustBaseline, proposal: debugRustProposal,
+		bypassV3: true})
+
+	if !res.Success {
+		t.Fatalf("the bypass write did not land: %q", res.Error)
+	}
+	if disk != debugRustProposal {
+		t.Fatalf("bypass must write the model's own bytes unchanged, got %q", disk)
+	}
+	// No V3 provenance: nothing generated, nothing verified, nothing scored.
+	if res.V3Used || res.CandidatesTested != 0 || res.WinningScore != 0 ||
+		res.PhaseSolved != "" || len(res.VerificationEvidence) != 0 {
+		t.Errorf("V3 metadata attached to a bypassed write: %+v", res)
+	}
+	if len(events) != 0 {
+		t.Errorf("bypass must project no SSE of its own, got %v", events)
+	}
+	// The observation is real: .rs is checkable by neither gate, so the honest
+	// answer is not_applicable, and it is the one reported.
+	if res.MutationStatus != MutationApplied ||
+		res.ValidationKind != ValidationKindNone ||
+		res.ValidationStatus != ValidationNotApplicable {
+		t.Errorf("got %q/%q/%q, want applied/none/not_applicable",
+			res.MutationStatus, res.ValidationKind, res.ValidationStatus)
+	}
+	if !res.Classified() {
+		t.Error("a bypassed write is still a classified write")
+	}
+	// The structural veto is bypassed by design; the checkers were simply not
+	// applicable to this content. Both are asserted so a future change that
+	// starts calling one under bypass shows up here.
+	syntax, embedded, structural := st.counts()
+	if syntax != 0 || embedded != 0 || structural != 0 {
+		t.Errorf("checker calls = %d syntax / %d embedded / %d structural, want 0/0/0",
+			syntax, embedded, structural)
+	}
+}
+
+// The same bypass over CHECKABLE content: the gate runs, the observation is
+// real, and it reaches the result. This is the half that proves the case above
+// is about applicability rather than about bypass suppressing evidence.
+func TestBypassV3ReportsARealSyntaxObservation(t *testing.T) {
+	const tier2Python = `import math
+
+
+def area(radius):
+    if radius < 0:
+        raise ValueError("negative radius")
+    return math.pi * radius * radius
+
+
+def perimeter(radius):
+    for _ in range(1):
+        pass
+    return 2 * math.pi * radius
+`
+	res, disk, st, events := runDirectWrite(t, directWriteOpts{
+		rel: "geom.py", baseline: directBaselineHealthy, proposal: tier2Python,
+		bypassV3: true})
+
+	if !res.Success || disk != tier2Python {
+		t.Fatalf("the bypass write did not land: success=%v", res.Success)
+	}
+	if res.V3Used || res.CandidatesTested != 0 || len(events) != 0 {
+		t.Errorf("V3 provenance or SSE leaked into a bypassed write: %+v %v", res, events)
+	}
+	if res.MutationStatus != MutationApplied ||
+		res.ValidationKind != ValidationKindSyntax ||
+		res.ValidationStatus != ValidationPassed {
+		t.Errorf("got %q/%q/%q, want applied/syntax/passed",
+			res.MutationStatus, res.ValidationKind, res.ValidationStatus)
+	}
+	syntax, _, structural := st.counts()
+	if syntax != 1 {
+		t.Errorf("syntax-check calls = %d, want exactly 1", syntax)
+	}
+	if structural != 0 {
+		t.Errorf("structural_check calls = %d, want 0 -- the veto is bypassed "+
+			"by design so the demo pane shows the raw model", structural)
 	}
 }
 
