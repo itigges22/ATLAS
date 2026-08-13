@@ -13,7 +13,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
-import evidence as E  # noqa: E402
+import adapters as A  # noqa: E402
+import pipeline as P  # noqa: E402
 import pipeline as P  # noqa: E402
 
 CANVAS = """
@@ -36,7 +37,7 @@ def test_probe_never_spawns_a_process_from_the_service():
 
 
 def test_inline_harness_has_no_filesystem_or_argv_access():
-    src = E.js_probe_source_inline()
+    src = A.js_probe_source_inline()
     assert "process.argv" not in src
     assert "require('fs')" not in src
     assert "__ARTIFACT__" in src

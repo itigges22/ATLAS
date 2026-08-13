@@ -16,7 +16,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
 import adapters  # noqa: E402
-import evidence as E  # noqa: E402
+import adapters as A  # noqa: E402
+import pipeline as P  # noqa: E402
 import pipeline as P  # noqa: E402
 
 
@@ -80,18 +81,18 @@ def test_sandbox_failure_with_parseable_stdout_is_still_inconclusive():
 # ---- modes ---------------------------------------------------------------
 
 def test_the_three_modes_have_exactly_the_intended_behaviour():
-    assert (E.probing_enabled(E.OFF), E.selection_enabled(E.OFF)) == (False, False)
-    assert (E.probing_enabled(E.SHADOW), E.selection_enabled(E.SHADOW)) == (True, False)
-    assert (E.probing_enabled(E.ENFORCE), E.selection_enabled(E.ENFORCE)) == (True, True)
+    assert (P._probing_enabled(P.MODE_OFF), P._selection_enabled(P.MODE_OFF)) == (False, False)
+    assert (P._probing_enabled(P.MODE_SHADOW), P._selection_enabled(P.MODE_SHADOW)) == (True, False)
+    assert (P._probing_enabled(P.MODE_ENFORCE), P._selection_enabled(P.MODE_ENFORCE)) == (True, True)
 
 
 def test_enforcement_without_probing_is_unrepresentable():
-    for mode in (E.OFF, E.SHADOW, E.ENFORCE, "nonsense", ""):
-        m = mode if mode in (E.OFF, E.SHADOW, E.ENFORCE) else E.OFF
-        assert not (E.selection_enabled(m) and not E.probing_enabled(m))
+    for mode in (P.MODE_OFF, P.MODE_SHADOW, P.MODE_ENFORCE, "nonsense", ""):
+        m = mode if mode in (P.MODE_OFF, P.MODE_SHADOW, P.MODE_ENFORCE) else P.MODE_OFF
+        assert not (P._selection_enabled(m) and not P._probing_enabled(m))
 
 
 def test_unknown_mode_falls_back_to_off():
-    assert E.selection_mode({"ATLAS_EVIDENCE_MODE": "wat"}) == E.OFF
-    assert E.selection_mode({}) == E.OFF
-    assert E.selection_mode({"ATLAS_EVIDENCE_MODE": "ENFORCE"}) == E.ENFORCE
+    assert P._selection_mode({"ATLAS_EVIDENCE_MODE": "wat"}) == P.MODE_OFF
+    assert P._selection_mode({}) == P.MODE_OFF
+    assert P._selection_mode({"ATLAS_EVIDENCE_MODE": "ENFORCE"}) == P.MODE_ENFORCE

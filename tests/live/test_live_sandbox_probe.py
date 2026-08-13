@@ -25,7 +25,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
 import adapters  # noqa: E402
-import evidence  # noqa: E402
+import adapters  # noqa: E402
+import contract as _contract  # noqa: E402
 import pipeline as P  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
@@ -88,7 +89,7 @@ def test_six_fixtures_against_the_live_sandbox(live_sandbox):
         if ev is None:
             report[name] = {"status": "inconclusive", "ms": ms}
             continue
-        strength, missing, score = evidence.grade_interactive(ev)
+        strength, missing, score = adapters.grade_interactive(ev)
         report[name] = {"status": "graded", "strength": strength, "score": score,
                         "missing_required": missing, "ms": ms,
                         "behavior": {k: v for k, v in ev.items() if k != "error"}}
@@ -109,7 +110,7 @@ def test_six_fixtures_against_the_live_sandbox(live_sandbox):
     assert report["inert"]["missing_required"]
 
     assert report["throws"]["behavior"]["runtime_clean"] is False
-    assert report["throws"]["strength"] == evidence.SYNTAX, \
+    assert report["throws"]["strength"] == adapters.SYNTAX, \
         "a runtime exception must never yield behavioural evidence"
 
     assert report["node_module"]["status"] == "inconclusive", \
@@ -124,5 +125,5 @@ def test_six_fixtures_against_the_live_sandbox(live_sandbox):
         r = report[name]
         if r["status"] != "graded":
             continue
-        res = evidence.result_from_adapter(evidence.BROWSER_CANVAS_JS, True, r["behavior"])
-        assert not evidence.may_return_early_result(res), name
+        res = adapters.result_from_adapter(adapters.ADAPTER_BROWSER_CANVAS_JS, True, r["behavior"])
+        assert not adapters.may_return_early_result(res), name

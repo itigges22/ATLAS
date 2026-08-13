@@ -27,7 +27,6 @@ from stages.candidate_selection import CandidateInfo, select_candidate
 
 import adapters
 import contract
-import evidence
 import scoring
 import symbols
 
@@ -308,6 +307,33 @@ def _task_input_file(project_files) -> str:
     return ""
 
 
+# ------------------------------------------------------------------ mode ---
+# One valid mode, because two independent flags allowed an invalid one:
+# selection enabled with probing disabled turned on the evidence ranker while
+# collecting no evidence for it to rank.
+MODE_OFF = "off"          # no probing, legacy selection
+MODE_SHADOW = "shadow"    # probing + telemetry, legacy selection
+MODE_ENFORCE = "enforce"  # probing + telemetry + evidence selection
+
+
+def _selection_mode(env: Optional[Dict[str, str]] = None) -> str:
+    # `env is None` means "read the process environment"; an explicitly
+    # supplied empty dict means "this environment has nothing set", and the
+    # two must not collapse via truthiness.
+    import os as _os
+    source = _os.environ if env is None else env
+    raw = str(source.get("ATLAS_EVIDENCE_MODE", MODE_OFF)).strip().lower()
+    return raw if raw in (MODE_OFF, MODE_SHADOW, MODE_ENFORCE) else MODE_OFF
+
+
+def _probing_enabled(mode: str) -> bool:
+    return mode in (MODE_SHADOW, MODE_ENFORCE)
+
+
+def _selection_enabled(mode: str) -> bool:
+    return mode == MODE_ENFORCE
+
+
 def _make_self_test(code: str, tc, task_input_file: str = "") -> str:
     """Build executable assertion code for a single test case.
 
@@ -386,17 +412,17 @@ def _evaluate_candidate(file_path, code, smoke_passed, has_oracle, emit,
     score or coverage field is kept beside it: a second authoritative copy is
     how two answers about one candidate start to disagree.
     """
-    adapter = evidence.select_adapter(file_path, code, has_oracle)
+    adapter = adapters.select_adapter(file_path, code, has_oracle)
     probe_ev = None
     # Behavioural probing costs real budget, so it is opt-in. Leaving it on
     # while only the DECISION was shadowed changed latency and could consume
     # enough budget to alter later pipeline behaviour -- that is
     # decision-shadowing, not passive shadowing.
-    if evidence.probing_enabled(evidence.selection_mode()) and \
-            adapter in (evidence.BROWSER_CANVAS_JS, evidence.BROWSER_INLINE_SCRIPT):
+    if _probing_enabled(_selection_mode()) and \
+            adapter in (adapters.ADAPTER_BROWSER_CANVAS_JS, adapters.ADAPTER_BROWSER_INLINE_SCRIPT):
         target = code
-        if adapter == evidence.BROWSER_INLINE_SCRIPT:
-            target = evidence.extract_inline_script(code)
+        if adapter == adapters.ADAPTER_BROWSER_INLINE_SCRIPT:
+            target = adapters.extract_inline_script(code)
         try:
             probe_ev = run_browser_probe(target, sandbox)
         except Exception as exc:                      # noqa: BLE001
@@ -463,7 +489,7 @@ def run_browser_probe(code: str, sandbox=None, timeout_s: int = BROWSER_PROBE_TI
     the sandbox is unavailable, times out, or the artifact is not
     instrumentable.
     """
-    if sandbox is None or not evidence.js_is_instrumentable(code):
+    if sandbox is None or not adapters.js_is_instrumentable(code):
         return None
     runs = {}
     for mode in ("baseline", "input"):
@@ -472,7 +498,7 @@ def run_browser_probe(code: str, sandbox=None, timeout_s: int = BROWSER_PROBE_TI
         blob = (
             "const __MODE__ = " + json.dumps(mode) + ";\n"
             "const __ARTIFACT__ = " + json.dumps(code) + ";\n"
-            + evidence.js_probe_source_inline()
+            + adapters.js_probe_source_inline()
         )
         try:
             ok, stdout, _stderr = sandbox(blob, language="javascript",
@@ -486,8 +512,8 @@ def run_browser_probe(code: str, sandbox=None, timeout_s: int = BROWSER_PROBE_TI
             # parseable stdout; trusting it would let a crash produce
             # behavioural evidence.
             return None
-        runs[mode] = evidence.parse_probe_output(stdout)
-    return evidence.combine_runs(runs.get("baseline"), runs.get("input"))
+        runs[mode] = adapters.parse_probe_output(stdout)
+    return adapters.combine_runs(runs.get("baseline"), runs.get("input"))
 
 
 def _make_output_probe(code: str, tc, task_input_file: str = "") -> str:
@@ -1065,7 +1091,7 @@ class V3PipelineService:
         # strength floor comes from the contract, so an artifact class whose
         # contract closes on syntax legitimately may, and one that demands an
         # oracle still cannot close on a compile.
-        _mode = evidence.selection_mode()
+        _mode = _selection_mode()
         _probe_free = adapters.contract_record(
             adapter=probe_result["adapter_id"], accepted=bool(probe_passed),
             probe=None, contract_id=_task["contract_id"],
@@ -1088,7 +1114,7 @@ class V3PipelineService:
         emit("evidence_early_return", f"mode={_mode} probe_free={probe_free_early} "
              f"evidence={evidence_early}", **result["evidence_early_return"])
 
-        if evidence.selection_enabled(_mode):
+        if _selection_enabled(_mode):
             _take_early = evidence_early
         else:
             _take_early = probe_free_early
@@ -1713,7 +1739,7 @@ class V3PipelineService:
                     # record that is not closure-eligible is diagnostic: turning
                     # it into the delivered artifact is exactly how a partial
                     # result becomes a success claim.
-                    if evidence.selection_enabled(evidence.selection_mode()) and verified:
+                    if _selection_enabled(_selection_mode()) and verified:
                         selected = CandidateInfo(verified["index"], verified["code"],
                                                  verified.get("energy", 0.0), True)
 

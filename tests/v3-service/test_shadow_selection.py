@@ -12,51 +12,77 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
-import evidence as E  # noqa: E402
+import adapters as A  # noqa: E402
+import contract as C  # noqa: E402
+import pipeline as P  # noqa: E402
 
 
-def _cand(index, score, missing, strength, energy, runtime_clean=True):
-    return {"index": index, "code": f"// {index}", "energy": energy,
-            "behavior_score": score, "missing_required": missing,
-            "evidence_strength": strength,
-            "behavior": {"runtime_clean": runtime_clean}}
+def _record(probe, code, accepted=True):
+    return A.contract_record(
+        adapter=A.ADAPTER_BROWSER_CANVAS_JS, accepted=accepted, probe=probe,
+        contract_id="selection", contract_version="1", artifact_scope="a.js",
+        evaluation_context_hash=C.content_hash("ctx"),
+        candidate_content_hash=C.content_hash(code))
+
+
+def _trace(**flags):
+    ev = {"supported": True, "runtime_clean": True, "temporal_progress": False,
+          "input_causality": False, "collision_transition": False,
+          "food_or_score_transition": False}
+    ev.update(flags)
+    return ev
+
+
+COMPLETE = _trace(temporal_progress=True, input_causality=True,
+                  collision_transition=True, food_or_score_transition=True)
+PARTIAL = _trace(temporal_progress=True, input_causality=True,
+                 collision_transition=True)
+MISSING_REQUIRED = _trace(temporal_progress=True)
 
 
 def test_behaviour_beats_a_prettier_lens_score():
-    behavioural = _cand(1, 0.75, [], E.BEHAVIORAL_PARTIAL, energy=9.0)
-    pretty = _cand(2, 0.25, ["input_causality"], E.RUNTIME, energy=0.01)
-    assert max([behavioural, pretty], key=E.rank_key) is behavioural
+    """Selection ranks demonstrated coverage, and knows nothing about energy."""
+    behavioural = _record(PARTIAL, "a")
+    pretty = _record(MISSING_REQUIRED, "b")
+    assert C.select([pretty, behavioural], behavioural)["best_record"] is behavioural
 
 
 def test_complete_beats_partial():
-    partial = _cand(1, 0.75, [], E.BEHAVIORAL_PARTIAL, energy=0.1)
-    complete = _cand(2, 1.0, [], E.BEHAVIORAL_COMPLETE, energy=5.0)
-    assert max([partial, complete], key=E.rank_key) is complete
+    partial = _record(PARTIAL, "a")
+    complete = _record(COMPLETE, "b")
+    picked = C.select([partial, complete], complete)
+    assert picked["best_record"] is complete
+    assert picked["verified_winner"] is complete
+    assert C.selection_status(picked) == C.SELECTION_VERIFIED_WINNER
 
 
 def test_candidate_zero_is_preserved_and_can_win():
     """ATLAS must be able to decline to replace a better baseline."""
-    baseline = _cand(0, 1.0, [], E.BEHAVIORAL_COMPLETE, energy=3.0)
-    alt = _cand(1, 0.5, ["input_causality"], E.RUNTIME, energy=0.001)
-    assert max([baseline, alt], key=E.rank_key) is baseline
+    baseline = _record(COMPLETE, "zero")
+    alt = _record(MISSING_REQUIRED, "one")
+    assert C.select([baseline, alt], baseline)["best_record"] is baseline
 
 
 def test_unsupported_candidate_is_a_fallback_not_a_verified_winner():
-    unsupported = E.result_from_adapter(E.BROWSER_CANVAS_JS, True, probe_evidence=None)
-    assert unsupported["accepted"] is True      # usable as a fallback
-    assert unsupported["supported"] is False    # but never "verified"
-    assert not E.may_return_early_result(unsupported)
+    unsupported = _record(None, "a")             # probe could not run
+    assert unsupported["execution_status"] == C.EXEC_SKIPPED  # usable, unverified
+    assert unsupported["supported"] is False     # but never "verified"
+    assert unsupported["closure_eligible"] is False
+    picked = C.select([unsupported], unsupported)
+    assert picked["verified_winner"] is None
+    assert C.selection_status(picked) == C.SELECTION_INELIGIBLE
 
 
-def test_runtime_health_breaks_ties_before_the_lens():
-    clean = _cand(1, 0.5, [], E.RUNTIME, energy=9.0, runtime_clean=True)
-    dirty = _cand(2, 0.5, [], E.RUNTIME, energy=0.01, runtime_clean=False)
-    assert max([clean, dirty], key=E.rank_key) is clean
+def test_runtime_health_decides_before_any_lens_score():
+    clean = _record(PARTIAL, "a")
+    dirty = _record(_trace(temporal_progress=True, input_causality=True,
+                           collision_transition=True, runtime_clean=False), "b")
+    assert C.select([dirty, clean], clean)["best_record"] is clean
 
 
 def test_the_mode_defaults_to_off():
     """The old test asserted ATLAS_EVIDENCE_SELECTION, a flag the code no
     longer reads — it could stay green while testing nothing."""
-    assert E.selection_mode({}) == E.OFF
-    assert not E.selection_enabled(E.selection_mode({}))
-    assert not E.probing_enabled(E.selection_mode({}))
+    assert P._selection_mode({}) == P.MODE_OFF
+    assert not P._selection_enabled(P._selection_mode({}))
+    assert not P._probing_enabled(P._selection_mode({}))

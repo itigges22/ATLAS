@@ -22,7 +22,8 @@ sys.path.insert(0, str(PROJECT_ROOT / "v3-service"))
 import adapters  # noqa: E402
 import symbols  # noqa: E402
 import contract as C  # noqa: E402
-import evidence as E  # noqa: E402
+import adapters as A  # noqa: E402
+import pipeline as P  # noqa: E402
 import pipeline as P  # noqa: E402
 import scoring  # noqa: E402
 
@@ -380,8 +381,8 @@ def test_env_none_differs_from_an_empty_env():
     import os
     os.environ["ATLAS_EVIDENCE_MODE"] = "enforce"
     try:
-        assert E.selection_mode() == E.ENFORCE       # reads the process env
-        assert E.selection_mode({}) == E.OFF         # explicitly empty
+        assert P._selection_mode() == P.MODE_ENFORCE       # reads the process env
+        assert P._selection_mode({}) == P.MODE_OFF         # explicitly empty
     finally:
         del os.environ["ATLAS_EVIDENCE_MODE"]
 

@@ -17,7 +17,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
 import adapters as A  # noqa: E402
 import contract as C  # noqa: E402
-import evidence as LIVE  # noqa: E402
 
 CAPS = ["alpha", "beta", "gamma"]
 CTX = "ctx-abc123"
@@ -419,7 +418,6 @@ def test_unmeasurable_is_distinct_from_missing():
 # --- live record bridging --------------------------------------------------
 
 def test_live_unsupported_record_is_unverified_never_failed():
-    import evidence as live
     # The probe could not run, so the artifact is unsupported while the smoke
     # check itself passed.
     rec = A.contract_record(
@@ -437,7 +435,6 @@ def test_live_unsupported_record_is_unverified_never_failed():
 
 
 def test_oracle_strength_is_claimed_only_where_an_oracle_ran():
-    import evidence as live
     io_rec = A.contract_record(
         adapter=A.ADAPTER_ALGORITHMIC_IO, accepted=True,
         contract_id="c", contract_version="1", artifact_scope="s.py",
@@ -493,58 +490,61 @@ def test_one_canonical_contract_one_serialiser_no_duplicate_policy():
 
     # evidence.py still carries the prototype's own ranking; nothing else may.
     ranks = sorted(n for n, s in modules.items() if "\ndef rank_key(" in s)
-    assert ranks == ["contract.py", "evidence.py"], ranks
+    assert ranks == ["contract.py"], ranks
 
     # Exactly one bridge from the prototype record to a contract record.
     bridges = [n for n, s in modules.items() if "\ndef contract_record(" in s]
     assert bridges == ["adapters.py"], bridges
 
 
-def test_evidence_py_importers_are_inventoried():
-    """evidence.py is the prototype being retired. Its live importers are
-    listed here so a new one cannot appear unnoticed; deletion waits until this
-    set is empty of production modules."""
-    importers = set()
-    for path in V3DIR.glob("*.py"):
-        if path.name == "evidence.py":
-            continue
+def test_the_retiring_prototype_is_gone():
+    """Retirement complete. evidence.py held the prototype's strength scale,
+    early-return predicate, ranking and adapter mechanics; each moved to the
+    layer that owns it, and the file itself is deleted. No compatibility
+    module, alias or shim replaced it."""
+    assert not (V3DIR / "evidence.py").exists(), "evidence.py is still present"
+    for path in list(V3DIR.rglob("*.py")) + list(
+            (V3DIR.parent / "tests").rglob("*.py")):
         text = path.read_text()
-        if "import evidence\n" in text or "import evidence as" in text \
-                or "from evidence import" in text:
-            importers.add(path.name)
-    assert importers == {"pipeline.py"}, (
-        f"evidence.py importers changed: {sorted(importers)}. Update the "
-        f"retirement inventory in docs/EVIDENCE_WIRE.md before adding one.")
+        for banned in ("import evidence\n", "import evidence as ",
+                       "from evidence import"):
+            # This sentinel names the strings it forbids; skip its own source.
+            if path.name == Path(__file__).name:
+                continue
+            assert banned not in text, f"{path.name} still imports evidence"
 
 
-def test_pipeline_decisions_no_longer_read_the_retiring_policy():
-    """Retirement step 2. Early return and selection are contract decisions;
-    the prototype's early-return predicate, ranking and strength scale must not
-    appear in any pipeline decision."""
-    src = (V3DIR / "pipeline.py").read_text()
-    for banned in ("evidence.may_return_early", "evidence.rank_key",
-                   "evidence.at_least", "evidence.STRENGTH_ORDER",
-                   "evidence.BEHAVIORAL", "evidence.RUNTIME", "evidence.SYNTAX",
-                   "evidence.NONE", "evidence.result_from_adapter",
-                   "evidence.result("):
-        assert banned not in src, f"pipeline.py still reads retiring policy: {banned}"
-    # It decides with the contract instead.
-    assert "contract.select(" in src
-    assert "_record_closes(" in src
+def test_no_compatibility_aliases_or_duplicate_implementations_remain():
+    modules = {p.name: p.read_text() for p in V3DIR.glob("*.py")}
+    # Each moved symbol has exactly one definition, in its new owner.
+    for fn, owner in (("def select_adapter(", "adapters.py"),
+                      ("def js_is_instrumentable(", "adapters.py"),
+                      ("def extract_inline_script(", "adapters.py"),
+                      ("def js_probe_source_inline(", "adapters.py"),
+                      ("def parse_probe_output(", "adapters.py"),
+                      ("def combine_runs(", "adapters.py"),
+                      ("def contract_record(", "adapters.py"),
+                      ("def _selection_mode(", "pipeline.py"),
+                      ("def _probing_enabled(", "pipeline.py"),
+                      ("def _selection_enabled(", "pipeline.py"),
+                      ("def envelope(", "contract.py"),
+                      ("def select(", "contract.py"),
+                      ("def _closure(", "contract.py"),
+                      ("def rank_key(", "contract.py")):
+        owners = sorted(n for n, s in modules.items() if fn in s)
+        assert owners == [owner], f"{fn.strip()} owners: {owners}"
+    # And the superseded policy has no definition anywhere.
+    for dead in ("def may_return_early(", "def may_return_early_result(",
+                 "def at_least(", "def grade_interactive(",
+                 "def result_from_adapter(", "STRENGTH_ORDER = [NONE"):
+        owners = sorted(n for n, s in modules.items() if dead in s)
+        assert owners == [], f"superseded {dead.strip()} survives in {owners}"
 
 
-def test_pipeline_uses_the_prototype_only_for_probe_mechanics():
-    """What is left of the import is step 3's work: adapter routing and the
-    browser probe's own machinery, plus the mode vocabulary."""
-    import re as _re
-    src = (V3DIR / "pipeline.py").read_text()
-    used = set(_re.findall(r"\bevidence\.(\w+)", src))
-    allowed = {"select_adapter", "probing_enabled", "selection_mode",
-               "selection_enabled", "extract_inline_script",
-               "js_probe_source_inline", "parse_probe_output", "combine_runs",
-               "js_is_instrumentable", "BROWSER_CANVAS_JS",
-               "BROWSER_INLINE_SCRIPT"}
-    assert used <= allowed, f"pipeline.py reaches beyond probe mechanics: {sorted(used - allowed)}"
+def test_mode_parsing_lives_only_in_the_pipeline():
+    modules = {p.name: p.read_text() for p in V3DIR.glob("*.py")}
+    owners = sorted(n for n, s in modules.items() if "ATLAS_EVIDENCE_MODE" in s)
+    assert owners == ["pipeline.py"], owners
 
 
 def test_selection_and_closure_live_only_in_the_contract():
@@ -552,9 +552,8 @@ def test_selection_and_closure_live_only_in_the_contract():
     for fn in ("\ndef select(", "\ndef _closure("):
         owners = [n for n, s in modules.items() if fn in s]
         assert owners == ["contract.py"], f"{fn.strip()} owners: {owners}"
-    # evidence.py keeps its own rank_key until its last test caller goes.
     ranks = sorted(n for n, s in modules.items() if "\ndef rank_key(" in s)
-    assert ranks == ["contract.py", "evidence.py"], ranks
+    assert ranks == ["contract.py"], ranks
 
 
 def test_candidates_carry_one_canonical_record():
@@ -565,16 +564,6 @@ def test_candidates_carry_one_canonical_record():
                    '"evidence_strength": probe_result'):
         assert banned not in src, f"parallel candidate field survives: {banned}"
     assert 'c["contract_record"]' in src
-
-
-def test_no_new_behaviour_was_added_to_the_retiring_prototype():
-    """evidence.py is compatibility only. The bridge reads its vocabulary; it
-    must not have grown wire, contract or envelope logic of its own."""
-    src = (V3DIR / "evidence.py").read_text()
-    # Its own retirement note names contract.py, so match code, not prose.
-    for banned in ("import contract", "contract.build(", "def envelope(",
-                   "wire_version", "closure_eligible"):
-        assert banned not in src, f"new behaviour added to evidence.py: {banned}"
 
 
 # --- golden fixtures -------------------------------------------------------

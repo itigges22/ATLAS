@@ -20,10 +20,10 @@ COPY v3-service/scoring.py /app/scoring.py
 COPY v3-service/symbols.py /app/symbols.py
 COPY v3-service/planning.py /app/planning.py
 COPY v3-service/pipeline.py /app/pipeline.py
-# evidence.py and contract.py were added and the image kept building
-# without them: this COPY list enumerates modules, so a new one is
-# silently excluded and the service dies at import with 448 tests green.
-COPY v3-service/evidence.py /app/evidence.py
+# contract.py was added and the image kept building without it: this COPY
+# list enumerates modules, so a new one is silently excluded and the service
+# dies at import with the whole suite green. A DELETED one breaks the build
+# instead, which is how evidence.py's retirement surfaced here.
 COPY v3-service/contract.py /app/contract.py
 COPY v3-service/private_values.py /app/private_values.py
 COPY v3-service/structured_log.py /app/structured_log.py

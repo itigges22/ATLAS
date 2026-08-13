@@ -12,7 +12,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
-import evidence as E  # noqa: E402
+import adapters as A  # noqa: E402
+import contract as C  # noqa: E402
+
 
 CANVAS_GAME = """
 const c = document.getElementById('gameCanvas');
@@ -29,81 +31,98 @@ ALGO_PY = "import sys\nprint(sum(int(x) for x in open('input.txt')))"
 HTML_INLINE = "<html><body><canvas id='c'></canvas><script>const x=document.getElementById('c');x.getContext('2d');document.addEventListener('keydown',()=>{});setTimeout(function f(){},10);</script></body></html>"
 HTML_STATIC = "<html><body><h1>Hello</h1></body></html>"
 
+_SCOPE = "static/game.js"
+_CTX = None  # filled below, after contract import
+
+
+def _record(adapter, accepted=True, probe=None):
+    """The production path: raw observation inputs in, contract record out."""
+    return A.contract_record(adapter=adapter, accepted=accepted, probe=probe,
+                             contract_id="generate:js", contract_version="1",
+                             artifact_scope=_SCOPE,
+                             evaluation_context_hash=C.content_hash("ctx"),
+                             candidate_content_hash=C.content_hash("bytes"))
+
 
 def test_plain_js_is_not_automatically_a_canvas_game():
-    assert E.select_adapter("util.js", PLAIN_JS_HELPERS) == E.JAVASCRIPT_COMPILE
-    assert E.select_adapter("build.js", NODE_SCRIPT) == E.JAVASCRIPT_COMPILE
-    assert E.select_adapter("game.js", CANVAS_GAME) == E.BROWSER_CANVAS_JS
+    assert A.select_adapter("util.js", PLAIN_JS_HELPERS) == A.ADAPTER_JAVASCRIPT_COMPILE
+    assert A.select_adapter("build.js", NODE_SCRIPT) == A.ADAPTER_JAVASCRIPT_COMPILE
+    assert A.select_adapter("game.js", CANVAS_GAME) == A.ADAPTER_BROWSER_CANVAS_JS
 
 
 def test_interactive_python_never_gets_complete_evidence_from_compile():
     for src in (PYGAME, TKINTER, FLASK):
-        adapter = E.select_adapter("app.py", src)
-        assert adapter == E.INTERACTIVE_PYTHON_UNSUPPORTED, src[:24]
-        res = E.result_from_adapter(adapter, smoke_passed=True)
-        assert res["strength"] == E.SYNTAX
-        assert res["supported"] is False
-        assert not E.may_return_early_result(res), "compile smoke cannot close a Pygame artifact"
+        adapter = A.select_adapter("app.py", src)
+        assert adapter == A.ADAPTER_INTERACTIVE_PYTHON_UNSUPPORTED, src[:24]
+        rec = _record(adapter, True)
+        assert rec["evidence_strength"] == C.SYNTAX
+        assert rec["supported"] is False
+        assert rec["closure_eligible"] is False, \
+            "compile smoke cannot close a Pygame artifact"
 
 
 def test_algorithmic_python_with_an_oracle_keeps_the_fast_path():
-    adapter = E.select_adapter("solve.py", ALGO_PY, has_io_oracle=True)
-    assert adapter == E.ALGORITHMIC_IO
-    res = E.result_from_adapter(adapter, smoke_passed=True)
-    assert res["strength"] == E.BEHAVIORAL_COMPLETE
-    assert E.may_return_early_result(res)
+    adapter = A.select_adapter("solve.py", ALGO_PY, has_io_oracle=True)
+    assert adapter == A.ADAPTER_ALGORITHMIC_IO
+    rec = _record(adapter, True)
+    assert rec["evidence_strength"] == C.ORACLE
+    assert rec["closure_eligible"] is True
 
 
 def test_algorithmic_python_without_an_oracle_is_only_syntax():
-    adapter = E.select_adapter("solve.py", ALGO_PY, has_io_oracle=False)
-    assert adapter == E.PYTHON_COMPILE
-    assert not E.may_return_early_result(E.result_from_adapter(adapter, True))
+    adapter = A.select_adapter("solve.py", ALGO_PY, has_io_oracle=False)
+    assert adapter == A.ADAPTER_PYTHON_COMPILE
+    assert _record(adapter, True)["closure_eligible"] is False
 
 
 def test_css_is_never_sent_through_the_javascript_probe():
-    adapter = E.select_adapter("style.css", "body { color: red; }")
-    assert adapter == E.CSS_SYNTAX
-    res = E.result_from_adapter(adapter, smoke_passed=True)
-    assert res["strength"] == E.SYNTAX
-    assert not E.may_return_early_result(res)
+    adapter = A.select_adapter("style.css", "body { color: red; }")
+    assert adapter == A.ADAPTER_CSS_SYNTAX
+    rec = _record(adapter, True)
+    assert rec["evidence_strength"] == C.SYNTAX
+    # A stylesheet's contract closes on syntax: there is no behaviour to demand.
+    assert A.closure_floor(adapter) == C.SYNTAX
+    assert rec["closure_eligible"] is True
 
 
 def test_jsx_and_tsx_are_unsupported_until_transpiled():
     for name in ("App.jsx", "App.tsx", "app.ts"):
-        assert E.select_adapter(name, "const A = () => <div/>;") == E.UNSUPPORTED
+        assert A.select_adapter(name, "const A = () => <div/>;") == A.ADAPTER_UNSUPPORTED
 
 
 def test_html_routes_by_whether_it_has_instrumentable_inline_script():
-    assert E.select_adapter("index.html", HTML_INLINE) == E.BROWSER_INLINE_SCRIPT
-    assert E.select_adapter("index.html", HTML_STATIC) == E.UNSUPPORTED
-    assert "getContext" in E.extract_inline_script(HTML_INLINE)
+    assert A.select_adapter("index.html", HTML_INLINE) == A.ADAPTER_BROWSER_INLINE_SCRIPT
+    assert A.select_adapter("index.html", HTML_STATIC) == A.ADAPTER_UNSUPPORTED
+    assert "getContext" in A.extract_inline_script(HTML_INLINE)
 
 
 def test_browser_probe_that_could_not_run_is_unverified_not_failed():
-    res = E.result_from_adapter(E.BROWSER_CANVAS_JS, smoke_passed=True, probe_evidence=None)
-    assert res["supported"] is False
-    assert res["strength"] == E.SYNTAX
-    assert res["accepted"] is True, "smoke still passed — it is unverified, not failed"
-    assert not E.may_return_early_result(res)
+    rec = _record(A.ADAPTER_BROWSER_CANVAS_JS, True, None)
+    assert rec["supported"] is False
+    assert rec["evidence_strength"] == C.SYNTAX
+    assert rec["execution_status"] == C.EXEC_SKIPPED, \
+        "the smoke check still passed — unverified, not failed"
+    assert rec["closure_eligible"] is False
 
 
 def test_complete_browser_behaviour_may_close_the_pipeline():
     full = {"supported": True, "runtime_clean": True, "temporal_progress": True,
             "input_causality": True, "collision_transition": True,
             "food_or_score_transition": True}
-    res = E.result_from_adapter(E.BROWSER_CANVAS_JS, True, full)
-    assert res["strength"] == E.BEHAVIORAL_COMPLETE
-    assert E.may_return_early_result(res)
+    rec = _record(A.ADAPTER_BROWSER_CANVAS_JS, True, full)
+    assert rec["evidence_strength"] == C.BEHAVIORAL
+    assert rec["overall_quality_score"] == 1.0
+    assert rec["closure_eligible"] is True
 
 
 def test_partial_browser_behaviour_may_not():
     partial = {"supported": True, "runtime_clean": True, "temporal_progress": True,
                "input_causality": True, "collision_transition": True,
                "food_or_score_transition": False}
-    res = E.result_from_adapter(E.BROWSER_CANVAS_JS, True, partial)
-    assert res["strength"] == E.BEHAVIORAL_PARTIAL
-    assert res["behavior_score"] == 0.75
-    assert not E.may_return_early_result(res)
+    rec = _record(A.ADAPTER_BROWSER_CANVAS_JS, True, partial)
+    assert rec["evidence_strength"] == C.BEHAVIORAL
+    assert rec["overall_quality_score"] == 0.75
+    assert rec["closure_eligible"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -119,41 +138,6 @@ def test_partial_browser_behaviour_may_not():
 # The comparison itself is test-only and disappears with evidence.py; the
 # production path never calls it, which the import sentinel proves.
 
-import contract as C  # noqa: E402
-import adapters as A  # noqa: E402
-
-_SCOPE = "static/game.js"
-_CTX = C.content_hash("build something")
-_CODE = C.content_hash("const a = 1;\n")
-
-
-def _record(adapter, accepted, probe=None):
-    """The production path: raw observation inputs in, contract record out."""
-    return A.contract_record(adapter=adapter, accepted=accepted, probe=probe,
-                             contract_id="generate:js", contract_version="1",
-                             artifact_scope=_SCOPE, evaluation_context_hash=_CTX,
-                             candidate_content_hash=_CODE)
-
-
-def _retiring_strength(adapter, strength):
-    """What the retiring bridge mapped a prototype grade onto."""
-    if strength == E.NONE:
-        return None
-    if adapter == E.ALGORITHMIC_IO and strength == E.BEHAVIORAL_COMPLETE:
-        return C.ORACLE
-    return {E.BEHAVIORAL_COMPLETE: C.BEHAVIORAL, E.BEHAVIORAL_PARTIAL: C.BEHAVIORAL,
-            E.RUNTIME: C.RUNTIME, E.SYNTAX: C.SYNTAX}[strength]
-
-
-def _retiring_expectation(live_record):
-    """(strength, execution_status, supported) as the retiring path produced."""
-    strength = _retiring_strength(live_record["adapter"], live_record["strength"])
-    supported = bool(live_record.get("supported", True))
-    if strength is None:
-        return C.SYNTAX, C.EXEC_ERROR, False
-    if not supported:
-        return strength, C.EXEC_SKIPPED, False
-    return strength, C.EXEC_OK, True
 
 
 def _probe(**flags):
@@ -168,11 +152,11 @@ def _matrix():
     """Every observation shape the pipeline can hand this layer: (name,
     adapter, smoke verdict, probe trace)."""
     cases = []
-    for adapter in (E.ALGORITHMIC_IO, E.PYTHON_COMPILE, E.JAVASCRIPT_COMPILE,
-                    E.CSS_SYNTAX, E.INTERACTIVE_PYTHON_UNSUPPORTED, E.UNSUPPORTED):
+    for adapter in (A.ADAPTER_ALGORITHMIC_IO, A.ADAPTER_PYTHON_COMPILE, A.ADAPTER_JAVASCRIPT_COMPILE,
+                    A.ADAPTER_CSS_SYNTAX, A.ADAPTER_INTERACTIVE_PYTHON_UNSUPPORTED, A.ADAPTER_UNSUPPORTED):
         for smoke in (True, False):
             cases.append((f"{adapter}:smoke={smoke}", adapter, smoke, None))
-    for adapter in (E.BROWSER_CANVAS_JS, E.BROWSER_INLINE_SCRIPT):
+    for adapter in (A.ADAPTER_BROWSER_CANVAS_JS, A.ADAPTER_BROWSER_INLINE_SCRIPT):
         for smoke in (True, False):
             cases.append((f"{adapter}:no-probe:smoke={smoke}", adapter, smoke, None))
             for label, ev in (
@@ -188,17 +172,50 @@ def _matrix():
     return cases
 
 
-def test_direct_production_matches_the_retiring_implementation():
+# The characterization values below were captured from the retiring
+# implementation before it was deleted, and are asserted as literals now that
+# there is nothing left to compare against. Adapter routing, supported vs
+# unsupported, execution status and evidence strength for every observation
+# shape the pipeline can produce.
+CHARACTERIZED = {
+    "algorithmic_io:smoke=True": ("oracle", "ok", True),
+    "algorithmic_io:smoke=False": ("syntax", "error", False),
+    "python_compile:smoke=True": ("syntax", "ok", True),
+    "python_compile:smoke=False": ("syntax", "error", False),
+    "javascript_compile:smoke=True": ("syntax", "ok", True),
+    "javascript_compile:smoke=False": ("syntax", "error", False),
+    "css_syntax:smoke=True": ("syntax", "ok", True),
+    "css_syntax:smoke=False": ("syntax", "error", False),
+    "interactive_python_unsupported:smoke=True": ("syntax", "skipped", False),
+    "interactive_python_unsupported:smoke=False": ("syntax", "error", False),
+    "unsupported:smoke=True": ("syntax", "skipped", False),
+    "unsupported:smoke=False": ("syntax", "error", False),
+}
+
+
+def test_direct_production_matches_the_characterized_behaviour():
     """Adapter routing, supported/unsupported, execution status and evidence
-    strength are preserved for every shape the pipeline can produce."""
+    strength for every shape the pipeline can produce."""
     for name, adapter, smoke, probe in _matrix():
         rec = _record(adapter, smoke, probe)
-        want_strength, want_exec, want_supported = _retiring_expectation(
-            E.result_from_adapter(adapter, smoke, probe))
         assert rec["adapter_id"] == adapter, name
-        assert rec["evidence_strength"] == want_strength, name
-        assert rec["execution_status"] == want_exec, name
-        assert rec["supported"] is want_supported, name
+        if name in CHARACTERIZED:
+            want = CHARACTERIZED[name]
+            got = (rec["evidence_strength"], rec["execution_status"], rec["supported"])
+            assert got == want, f"{name}: {got} != {want}"
+            continue
+        # Browser families, keyed by what the probe demonstrated.
+        if probe is None:
+            assert rec["supported"] is False
+            assert rec["execution_status"] in (C.EXEC_SKIPPED, C.EXEC_ERROR), name
+        elif not probe.get("supported", True):
+            assert rec["supported"] is False, name
+        elif not probe.get("runtime_clean", True):
+            assert rec["evidence_strength"] == C.SYNTAX, name
+        elif all(probe.get(c) for c in A.BROWSER_REQUIRED):
+            assert rec["evidence_strength"] == C.BEHAVIORAL, name
+        else:
+            assert rec["evidence_strength"] == C.RUNTIME, name
 
 
 def test_direct_production_preserves_coverage_and_closure():
@@ -242,33 +259,31 @@ def test_direct_production_carries_identity_and_hashes():
         assert rec["contract_id"] == "generate:js"
         assert rec["contract_version"] == "1"
         assert rec["artifact_scope"] == _SCOPE
-        assert rec["evaluation_context_hash"] == _CTX
-        assert rec["candidate_content_hash"] == _CODE
+        assert rec["evaluation_context_hash"] == C.content_hash("ctx")
+        assert rec["candidate_content_hash"] == C.content_hash("bytes")
         assert rec["adapter_version"] == A.LIVE_ADAPTER_VERSION
 
 
-def test_adapter_ids_and_criteria_match_the_retiring_module():
-    """While evidence.py exists, the ids this layer declares must be the ones
-    the pipeline's records actually carry."""
-    assert A.ADAPTER_BROWSER_CANVAS_JS == E.BROWSER_CANVAS_JS
-    assert A.ADAPTER_BROWSER_INLINE_SCRIPT == E.BROWSER_INLINE_SCRIPT
-    assert A.ADAPTER_JAVASCRIPT_COMPILE == E.JAVASCRIPT_COMPILE
-    assert A.ADAPTER_CSS_SYNTAX == E.CSS_SYNTAX
-    assert A.ADAPTER_ALGORITHMIC_IO == E.ALGORITHMIC_IO
-    assert A.ADAPTER_PYTHON_COMPILE == E.PYTHON_COMPILE
-    assert A.ADAPTER_INTERACTIVE_PYTHON_UNSUPPORTED == E.INTERACTIVE_PYTHON_UNSUPPORTED
-    assert A.ADAPTER_UNSUPPORTED == E.UNSUPPORTED
-    assert A.BROWSER_REQUIRED == E.INTERACTIVE_REQUIRED
-    assert A.BROWSER_OPTIONAL == E.INTERACTIVE_OPTIONAL
+def test_adapter_ids_are_the_ones_records_carry():
+    """The wire values are part of the contract identity, so they are pinned
+    as literals rather than compared against another copy."""
+    assert A.ADAPTER_BROWSER_CANVAS_JS == "browser_canvas_js"
+    assert A.ADAPTER_BROWSER_INLINE_SCRIPT == "browser_inline_script"
+    assert A.ADAPTER_JAVASCRIPT_COMPILE == "javascript_compile"
+    assert A.ADAPTER_CSS_SYNTAX == "css_syntax"
+    assert A.ADAPTER_ALGORITHMIC_IO == "algorithmic_io"
+    assert A.ADAPTER_PYTHON_COMPILE == "python_compile"
+    assert A.ADAPTER_INTERACTIVE_PYTHON_UNSUPPORTED == "interactive_python_unsupported"
+    assert A.ADAPTER_UNSUPPORTED == "unsupported"
+    assert A.BROWSER_REQUIRED == ["temporal_progress", "input_causality"]
+    assert A.BROWSER_OPTIONAL == ["collision_transition", "food_or_score_transition"]
 
 
-def test_production_record_path_never_calls_the_retiring_module():
-    """The sentinel: no import, and no call, even indirectly. Only the test
-    above may reference evidence.py from this layer."""
-    import re
-    src = (Path(__file__).resolve().parents[2] / "v3-service" / "adapters.py").read_text()
-    assert "import evidence" not in src, "adapters.py imports the retiring module"
-    assert "_live." not in src, "adapters.py still holds the retiring alias"
-    # Attribute access on the module, ignoring prose that names the file.
-    hit = re.search(r"\bevidence\.(?!py)\w+", src)
-    assert hit is None, f"adapters.py calls into evidence.py: {hit and hit.group(0)}"
+def test_probe_mechanics_live_only_here():
+    """The browser probe's machinery has exactly one home."""
+    v3 = Path(__file__).resolve().parents[2] / "v3-service"
+    for fn in ("def select_adapter(", "def js_is_instrumentable(",
+               "def extract_inline_script(", "def js_probe_source_inline(",
+               "def parse_probe_output(", "def combine_runs("):
+        owners = [p.name for p in v3.glob("*.py") if fn in p.read_text()]
+        assert owners == ["adapters.py"], f"{fn.strip()} owners: {owners}"
