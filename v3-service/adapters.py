@@ -601,3 +601,138 @@ class EmbedAdapter:
                 return data.get("data", [{}])[0].get("embedding", [])
         except Exception:
             return []
+
+
+# ---------------------------------------------------------------------------
+# Live evidence record -> contract record
+# ---------------------------------------------------------------------------
+#
+# ADAPTER KNOWLEDGE, which is why it lives here: which criteria an adapter can
+# observe at all, and what its own grading scale means in contract terms.
+# contract.py must not learn either -- it stays prompt-agnostic and generic.
+#
+# evidence.py is the prototype this bridges FROM. When each adapter emits
+# contract records directly (step 1 of the retirement plan in
+# docs/EVIDENCE_WIRE.md), this section and that import disappear together. No
+# new behaviour is added to evidence.py to support it.
+
+import contract
+import evidence as _live
+
+# Identity of the grading that produced today's live records. Not a version of
+# this file: it identifies evidence.py's prototype grading and must change
+# whenever that grading changes, or two incomparable measurements compare equal.
+LIVE_ADAPTER_VERSION = "0.1.0-prototype"
+
+# Strength mapping, conservative in one direction: an oracle claim is made only
+# where an oracle actually ran, and a partial behavioural grade does not become
+# a complete one by crossing a wire.
+_STRENGTH_BY_ADAPTER = {
+    _live.ALGORITHMIC_IO: {
+        _live.BEHAVIORAL_COMPLETE: contract.ORACLE,
+        _live.BEHAVIORAL_PARTIAL: contract.BEHAVIORAL,
+        _live.RUNTIME: contract.RUNTIME,
+        _live.SYNTAX: contract.SYNTAX,
+    },
+}
+_STRENGTH_DEFAULT = {
+    _live.BEHAVIORAL_COMPLETE: contract.BEHAVIORAL,
+    _live.BEHAVIORAL_PARTIAL: contract.BEHAVIORAL,
+    _live.RUNTIME: contract.RUNTIME,
+    _live.SYNTAX: contract.SYNTAX,
+}
+
+
+def _strength(adapter, strength):
+    """None means the live record carries no evidence at all (live NONE)."""
+    return _STRENGTH_BY_ADAPTER.get(adapter, _STRENGTH_DEFAULT).get(strength)
+
+
+def _capabilities(adapter):
+    """What this adapter can observe. Anything else is reported not_applicable
+    by contract.build, so "we did not look" stays distinct from "absent"."""
+    if adapter in (_live.BROWSER_CANVAS_JS, _live.BROWSER_INLINE_SCRIPT):
+        return list(_live.INTERACTIVE_REQUIRED) + list(_live.INTERACTIVE_OPTIONAL)
+    return []
+
+
+def _requirements(adapter):
+    if adapter in (_live.BROWSER_CANVAS_JS, _live.BROWSER_INLINE_SCRIPT,
+                   _live.JAVASCRIPT_COMPILE, _live.PYTHON_COMPILE,
+                   _live.INTERACTIVE_PYTHON_UNSUPPORTED, _live.UNSUPPORTED):
+        return ([contract.requirement(c) for c in _live.INTERACTIVE_REQUIRED]
+                + [contract.requirement(c, required=False)
+                   for c in _live.INTERACTIVE_OPTIONAL])
+    # An adapter with no declared criteria says so plainly. That is not the
+    # same as an adapter whose criteria all passed.
+    return []
+
+
+def contract_record(live_record, *, contract_id, contract_version,
+                    artifact_scope, evaluation_context_hash,
+                    candidate_content_hash,
+                    minimum_closure_strength=contract.BEHAVIORAL):
+    """One contract record built from one live evidence record."""
+    adapter = live_record.get("adapter") or _live.UNSUPPORTED
+    behavior = live_record.get("behavior") or {}
+    missing = set(live_record.get("missing_required") or [])
+    caps = _capabilities(adapter)
+    reqs = _requirements(adapter)
+
+    observations = {}
+    for r in reqs:
+        cid = r["id"]
+        if cid not in caps:
+            continue  # contract.build materialises this as not_applicable
+        if behavior.get(cid):
+            observations[cid] = contract.observation(contract.DEMONSTRATED)
+        elif cid in missing or not behavior:
+            observations[cid] = contract.observation(contract.UNOBSERVED)
+        else:
+            observations[cid] = contract.observation(contract.REFUTED)
+
+    strength = _strength(adapter, live_record.get("strength", _live.NONE))
+    supported = bool(live_record.get("supported", True))
+    if strength is None:
+        # The verifier ran and demonstrated nothing. Report the weakest
+        # strength with the execution marked errored rather than inventing a
+        # level the contract scale does not have.
+        strength, execution_status = contract.SYNTAX, contract.EXEC_ERROR
+        supported = False
+    else:
+        execution_status = contract.EXEC_OK
+    if not supported:
+        # Unsupported is unverified, never failed. contract._validate rejects a
+        # skipped execution that claims support.
+        execution_status = (contract.EXEC_SKIPPED
+                            if execution_status == contract.EXEC_OK else execution_status)
+
+    task = contract.task_contract(contract_id, contract_version, reqs,
+                                  minimum_closure_strength=minimum_closure_strength)
+    return contract.build(
+        task, adapter, LIVE_ADAPTER_VERSION, observations, caps,
+        strength, execution_status=execution_status, supported=supported,
+        artifact_scope=artifact_scope,
+        evaluation_context_hash=evaluation_context_hash,
+        candidate_content_hash=candidate_content_hash)
+
+
+def evidence_envelope(result, *, contract_id, contract_version, artifact_scope,
+                      evaluation_context, delivered_code, selection=None):
+    """The one entry point main.py calls. None means: no evidence to send.
+
+    None is a positive statement -- nothing was measured -- and is distinct
+    from a malformed envelope, which this never produces: a record that cannot
+    be serialised raises instead.
+    """
+    live_record = result.get("evidence")
+    if not live_record:
+        return None
+    record = contract_record(
+        live_record,
+        contract_id=contract_id, contract_version=contract_version,
+        artifact_scope=artifact_scope,
+        evaluation_context_hash=contract.content_hash(evaluation_context),
+        candidate_content_hash=contract.content_hash(result.get("code") or ""))
+    return contract.envelope(record, selection,
+                             contract.content_hash(delivered_code))

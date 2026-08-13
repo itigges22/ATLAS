@@ -14,6 +14,7 @@ REQUIRED. Criterion ids are opaque strings to everything here.
 
 from __future__ import annotations
 
+import hashlib
 import math
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -294,4 +295,136 @@ def select(records: Sequence[Dict], expected: Dict,
         "ineligible": ineligible,
         "tied": tied,
         "selection_reason": reason,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Wire envelope
+# ---------------------------------------------------------------------------
+#
+# The serialised form of a record plus the selection it took part in. It lives
+# here, with the domain, because the vocabulary it renders IS the domain: a
+# second module deciding what "verified" means on the wire is exactly the
+# duplicate policy this contract exists to prevent. main.py writes it; the Go
+# side validates and carries it; neither interprets it.
+#
+# Candidate evidence (evaluation, coverage) and selection evidence (selection)
+# stay separate objects, because collapsing them is how "the best of a bad
+# pool" becomes "verified".
+#
+# Criterion ids are opaque here as everywhere else.
+
+# Bumped when the WIRE shape changes. SCHEMA_VERSION travels beside it and
+# versions the record semantics independently, so a consumer can tell a
+# transport change from a domain change.
+WIRE_VERSION = "1.0.0"
+
+# What the selection concluded, as a closed vocabulary -- never a bare boolean,
+# because "a best record exists" and "a winner is verified" are different facts.
+SELECTION_VERIFIED_WINNER = "verified_winner"
+SELECTION_BEST_NOT_ELIGIBLE = "best_not_closure_eligible"
+SELECTION_TIED = "tied"
+SELECTION_INCOMPARABLE = "incomparable"
+SELECTION_INELIGIBLE = "ineligible"
+SELECTION_NO_VERIFIED_WINNER = "no_verified_winner"
+SELECTION_STATUSES = {
+    SELECTION_VERIFIED_WINNER, SELECTION_BEST_NOT_ELIGIBLE, SELECTION_TIED,
+    SELECTION_INCOMPARABLE, SELECTION_INELIGIBLE, SELECTION_NO_VERIFIED_WINNER,
+}
+
+
+def content_hash(text: str) -> str:
+    """The one hash function both sides use to name bytes."""
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+
+
+def selection_status(selection: Optional[Dict]) -> str:
+    """The closed-vocabulary reading of a select() result."""
+    if not selection or selection.get("best_record") is None:
+        if selection and selection.get("ineligible"):
+            return SELECTION_INELIGIBLE
+        if selection and selection.get("incomparable"):
+            return SELECTION_INCOMPARABLE
+        return SELECTION_NO_VERIFIED_WINNER
+    if selection.get("verified_winner") is not None:
+        if len(selection.get("tied") or []) > 1:
+            return SELECTION_TIED
+        return SELECTION_VERIFIED_WINNER
+    return SELECTION_BEST_NOT_ELIGIBLE
+
+
+def _coverage(record: Dict) -> Dict:
+    required, demonstrated, missing, unmeasurable = [], [], [], []
+    optional = []
+    obs = record.get("observations") or {}
+    for r in record.get("requirements") or []:
+        cid = r["id"]
+        status = (obs.get(cid) or {}).get("status", UNOBSERVED)
+        if r.get("required"):
+            required.append(cid)
+            if status == DEMONSTRATED:
+                demonstrated.append(cid)
+            elif status == NOT_APPLICABLE:
+                unmeasurable.append(cid)
+            else:
+                missing.append(cid)
+        else:
+            optional.append({"id": cid, "status": status})
+    return {"required": required, "demonstrated": demonstrated,
+            "missing": missing, "unmeasurable": unmeasurable,
+            "optional": optional}
+
+
+def envelope(record: Optional[Dict], selection: Optional[Dict],
+             delivered_content_hash: str) -> Dict:
+    """Render the versioned envelope. Raises ContractError on a bad record."""
+    if record is None:
+        raise ContractError("no record to serialise")
+    require_identity(record, "record")
+
+    status = selection_status(selection)
+    if status not in SELECTION_STATUSES:
+        raise ContractError(f"unknown selection status {status!r}")
+
+    return {
+        "wire_version": WIRE_VERSION,
+        "record_schema_version": record.get("schema_version", SCHEMA_VERSION),
+        "identity": {
+            "contract_id": record["contract_id"],
+            "contract_version": record["contract_version"],
+            "adapter_id": record.get("adapter_id", ""),
+            "adapter_version": record.get("adapter_version", ""),
+            "calibration_id": record.get("calibration_id", ""),
+            "artifact_scope": record["artifact_scope"],
+            "evaluation_context_hash": record["evaluation_context_hash"],
+            "candidate_content_hash": record.get("candidate_content_hash", ""),
+        },
+        "evaluation": {
+            "execution_status": record["execution_status"],
+            "supported": bool(record["supported"]),
+            "evidence_strength": record["evidence_strength"],
+            "requirements_complete": bool(record["requirements_complete"]),
+            "closure_eligible": bool(record["closure_eligible"]),
+            "quality": {
+                "required_coverage": record["required_coverage_score"],
+                "optional_quality": record["optional_quality_score"],
+                "overall": record["overall_quality_score"],
+            },
+        },
+        "coverage": _coverage(record),
+        "selection": {
+            "status": status,
+            "reason": (selection or {}).get("selection_reason", ""),
+            "tied_count": len((selection or {}).get("tied") or []),
+            "incomparable_count": len((selection or {}).get("incomparable") or []),
+            "ineligible_count": len((selection or {}).get("ineligible") or []),
+        },
+        "delivery": {
+            "delivered_content_hash": delivered_content_hash,
+            # A convenience for readers; the consumer still recomputes the hash
+            # of what it is about to deliver rather than trusting this flag.
+            "describes_delivered_candidate":
+                bool(delivered_content_hash)
+                and record.get("candidate_content_hash") == delivered_content_hash,
+        },
     }

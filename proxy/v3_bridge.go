@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -267,4 +269,133 @@ func callV3PlanStreaming(reqCtx context.Context, v3URL string, req V3PlanRequest
 	}
 
 	return plan, nil
+}
+
+// ---------------------------------------------------------------------------
+// Evidence envelope validation
+// ---------------------------------------------------------------------------
+//
+// The response boundary owns this: the same file that decodes /v3/generate
+// decides whether what arrived may be read. There is no separate evidence
+// service or helper layer -- one wire representation in types.go, one place
+// that validates it here.
+
+// Closed vocabularies. An unknown value is not a new case to guess at — it
+// means this build and that producer disagree about what the field can say.
+var (
+	evidenceStrengths = map[string]bool{
+		"syntax": true, "runtime": true, "behavioral": true, "oracle": true,
+	}
+	evidenceExecutionStatuses = map[string]bool{
+		"ok": true, "timeout": true, "error": true, "crash": true, "skipped": true,
+	}
+	evidenceSelectionStatuses = map[string]bool{
+		"verified_winner": true, "best_not_closure_eligible": true, "tied": true,
+		"incomparable": true, "ineligible": true, "no_verified_winner": true,
+	}
+)
+
+// Validate reports whether the envelope may be read, and why not when it may
+// not. It is strict on purpose: every rejection here is a case where reading
+// on would mean asserting something the producer did not establish.
+func (e *V3EvidenceEnvelope) Validate() (EvidenceAvailability, string) {
+	if e == nil {
+		return EvidenceAbsent, "no evidence envelope"
+	}
+	if e.WireVersion == "" {
+		return EvidenceUnavailable, "envelope carries no wire version"
+	}
+	if major := strings.SplitN(e.WireVersion, ".", 2)[0]; major != evidenceWireMajor {
+		return EvidenceUnavailable, "unsupported wire version " + e.WireVersion
+	}
+	// Identity must be COMPLETE, matching the producer's own rule: a partial
+	// identity is how unrelated measurements compare equal through blanks.
+	id := e.Identity
+	if id.ContractID == "" || id.ContractVersion == "" || id.ArtifactScope == "" ||
+		id.EvaluationContextHash == "" {
+		return EvidenceUnavailable, "identity incomplete"
+	}
+	if id.CalibrationID == "" && (id.AdapterID == "" || id.AdapterVersion == "") {
+		return EvidenceUnavailable, "identity incomplete: no calibration or adapter"
+	}
+	if !evidenceStrengths[e.Evaluation.EvidenceStrength] {
+		return EvidenceUnavailable, "unknown evidence strength " + e.Evaluation.EvidenceStrength
+	}
+	if !evidenceExecutionStatuses[e.Evaluation.ExecutionStatus] {
+		return EvidenceUnavailable, "unknown execution status " + e.Evaluation.ExecutionStatus
+	}
+	if !evidenceSelectionStatuses[e.Selection.Status] {
+		return EvidenceUnavailable, "unknown selection status " + e.Selection.Status
+	}
+	// Internal contradictions. A producer that claims closure over a run that
+	// did not complete, or over unmet requirements, is a producer whose other
+	// fields cannot be relied on either.
+	if e.Evaluation.ClosureEligible {
+		if e.Evaluation.ExecutionStatus != "ok" {
+			return EvidenceUnavailable, "closure claimed over execution status " +
+				e.Evaluation.ExecutionStatus
+		}
+		if !e.Evaluation.RequirementsComplete {
+			return EvidenceUnavailable, "closure claimed with incomplete requirements"
+		}
+		if !e.Evaluation.Supported {
+			return EvidenceUnavailable, "closure claimed for an unsupported artifact"
+		}
+	}
+	if e.Selection.Status == "verified_winner" && !e.Evaluation.ClosureEligible {
+		return EvidenceUnavailable, "verified winner without closure eligibility"
+	}
+	return EvidenceAvailable, ""
+}
+
+// Available is the single predicate a caller may use before reading fields.
+func (e *V3EvidenceEnvelope) Available() bool {
+	a, _ := e.Validate()
+	return a == EvidenceAvailable
+}
+
+// DescribesBytes reports whether this evidence is about exactly `code`. The
+// producer's own describes_delivered_candidate flag is not consulted: the
+// consumer knows which bytes it is about to write and hashes those.
+func (e *V3EvidenceEnvelope) DescribesBytes(code string) bool {
+	if e == nil || e.Identity.CandidateContentHash == "" {
+		return false
+	}
+	sum := sha256.Sum256([]byte(code))
+	return hex.EncodeToString(sum[:]) == e.Identity.CandidateContentHash
+}
+
+// EvidenceSupportsProvenanceFor is the gate a LATER slice will use before
+// attaching service provenance to delivered bytes: the envelope must be
+// readable AND about those exact bytes. Nothing calls it for a decision yet —
+// delivery authorization is unchanged in this phase — but the rule lives with
+// the type it constrains rather than being invented at the call site.
+func EvidenceSupportsProvenanceFor(e *V3EvidenceEnvelope, code string) (bool, string) {
+	availability, reason := e.Validate()
+	if availability != EvidenceAvailable {
+		return false, reason
+	}
+	if !e.DescribesBytes(code) {
+		return false, "evidence describes a different candidate"
+	}
+	return true, ""
+}
+
+// evidenceTelemetry renders the envelope for the telemetry envelope payload.
+// Returned as the decoded structure rather than a summary so nothing is lost
+// on the way to a subscriber; callers must not put it on a ToolResult, which
+// is projected to the model.
+func evidenceTelemetry(e *V3EvidenceEnvelope, unavailableReason string) map[string]interface{} {
+	availability, reason := e.Validate()
+	if reason == "" {
+		reason = unavailableReason
+	}
+	out := map[string]interface{}{"availability": string(availability)}
+	if reason != "" {
+		out["reason"] = reason
+	}
+	if e != nil {
+		out["envelope"] = e
+	}
+	return out
 }

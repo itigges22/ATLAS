@@ -1820,16 +1820,26 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 			Payload:   map[string]interface{}{"success": err == nil},
 		})
 	}
+	// The structured evidence rides the telemetry envelope, whole. It is
+	// deliberately NOT put on the ToolResult: that is projected to the model
+	// and to the guarded tool-result SSE, where an unconsumed research field
+	// would become an accidental interface. Telemetry is where a durable
+	// record belongs while nothing decides from it yet.
+	v3StagePayload := map[string]interface{}{
+		"success":           err == nil,
+		"candidates_tested": v3CandidatesTested(v3Result),
+	}
+	if v3Result != nil {
+		v3StagePayload["evidence"] = evidenceTelemetry(
+			v3Result.Evidence, v3Result.EvidenceUnavailableReason)
+	}
 	Emit(Envelope{
 		EventID:    NewEventID(),
 		Timestamp:  float64(time.Now().UnixNano()) / 1e9,
 		Type:       EvtStageEnd,
 		Stage:      "v3",
 		DurationMS: time.Since(v3Start).Milliseconds(),
-		Payload: map[string]interface{}{
-			"success":           err == nil,
-			"candidates_tested": v3CandidatesTested(v3Result),
-		},
+		Payload:    v3StagePayload,
 	})
 	if err != nil {
 		// User cancellation is not a fallback case — the turn was aborted,

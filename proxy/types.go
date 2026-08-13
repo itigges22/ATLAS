@@ -1105,6 +1105,20 @@ type V3GenerateResponse struct {
 	TotalTokens          int                      `json:"total_tokens"`
 	TotalTimeMs          float64                  `json:"total_time_ms"`
 	VerificationEvidence []V3VerificationEvidence `json:"verification_evidence,omitempty"`
+
+	// The versioned evidence envelope (evidence_wire.go). Declared explicitly
+	// because an undeclared field is silently discarded: the service began
+	// sending structured evidence and this type dropped every byte of it with
+	// no error anywhere. nil means the producer sent none — a legacy service,
+	// or a run that measured nothing — which is not the same as evidence that
+	// arrived and cannot be trusted. See EvidenceAvailability.
+	//
+	// Nothing in it is derived from Passed/PhaseSolved/WinningScore, and none
+	// of those may be derived from it.
+	Evidence *V3EvidenceEnvelope `json:"evidence,omitempty"`
+	// Why the producer sent no envelope, when it knows. Travels beside the
+	// absence so a gap is visible rather than silent.
+	EvidenceUnavailableReason string `json:"evidence_unavailable_reason,omitempty"`
 }
 
 // V3VerificationEvidence describes the concrete verifier that accepted or
@@ -1118,6 +1132,111 @@ type V3VerificationEvidence struct {
 	DurationMs int    `json:"duration_ms,omitempty"`
 	Stdout     string `json:"stdout,omitempty"`
 	Stderr     string `json:"stderr,omitempty"`
+}
+
+// The versioned evidence envelope, as the V3 service serialises it.
+//
+// This file is TRANSPORT AND VALIDATION ONLY. The domain lives in the
+// service's contract.py: what closure means, how coverage is computed, how
+// records compare. Nothing here re-derives any of it, and nothing here reads
+// `passed`, `phase_solved`, `winning_score` or the verification-evidence list
+// to guess a strength — those carry no strength, which is the whole reason
+// this envelope exists.
+//
+// It is also kept apart from the local ToolResult validation fields. Those say
+// what THIS process checked about the bytes it wrote (syntax, structural).
+// The envelope says what the SERVICE demonstrated about a candidate. Merging
+// them would let a local syntax pass read as behavioural evidence, which is
+// the conflation the whole workstream exists to remove.
+
+// evidenceWireMajor is the envelope contract this build understands. A
+// same-major envelope may add fields; a different major may have changed the
+// meaning of one, so it is not interpreted at all.
+const evidenceWireMajor = "1"
+
+// EvidenceAvailability is the only thing a consumer may branch on before
+// reading any field. Three states, never two: an envelope that was not sent
+// and one that cannot be trusted are different facts, and neither is a
+// failure of the candidate.
+type EvidenceAvailability string
+
+const (
+	// EvidenceAbsent: no envelope was sent. A legacy producer, or a run that
+	// measured nothing.
+	EvidenceAbsent EvidenceAvailability = "absent"
+	// EvidenceUnavailable: an envelope arrived and cannot be trusted —
+	// unknown version, incomplete identity, internally contradictory. NEVER
+	// "failed": nothing about the candidate was demonstrated either way.
+	EvidenceUnavailable EvidenceAvailability = "unavailable"
+	// EvidenceAvailable: structurally valid and internally consistent. Says
+	// nothing yet about whether it describes the bytes being delivered.
+	EvidenceAvailable EvidenceAvailability = "available"
+)
+
+type V3EvidenceIdentity struct {
+	ContractID            string `json:"contract_id"`
+	ContractVersion       string `json:"contract_version"`
+	AdapterID             string `json:"adapter_id"`
+	AdapterVersion        string `json:"adapter_version"`
+	CalibrationID         string `json:"calibration_id"`
+	ArtifactScope         string `json:"artifact_scope"`
+	EvaluationContextHash string `json:"evaluation_context_hash"`
+	CandidateContentHash  string `json:"candidate_content_hash"`
+}
+
+type V3EvidenceQuality struct {
+	RequiredCoverage float64 `json:"required_coverage"`
+	OptionalQuality  float64 `json:"optional_quality"`
+	Overall          float64 `json:"overall"`
+}
+
+type V3EvidenceEvaluation struct {
+	ExecutionStatus      string            `json:"execution_status"`
+	Supported            bool              `json:"supported"`
+	EvidenceStrength     string            `json:"evidence_strength"`
+	RequirementsComplete bool              `json:"requirements_complete"`
+	ClosureEligible      bool              `json:"closure_eligible"`
+	Quality              V3EvidenceQuality `json:"quality"`
+}
+
+// V3EvidenceOptional is one non-required criterion's observation. Ids are
+// opaque; this side never interprets them.
+type V3EvidenceOptional struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+}
+
+type V3EvidenceCoverage struct {
+	Required     []string             `json:"required"`
+	Demonstrated []string             `json:"demonstrated"`
+	Missing      []string             `json:"missing"`
+	Unmeasurable []string             `json:"unmeasurable"`
+	Optional     []V3EvidenceOptional `json:"optional"`
+}
+
+type V3EvidenceSelection struct {
+	Status            string `json:"status"`
+	Reason            string `json:"reason"`
+	TiedCount         int    `json:"tied_count"`
+	IncomparableCount int    `json:"incomparable_count"`
+	IneligibleCount   int    `json:"ineligible_count"`
+}
+
+type V3EvidenceDelivery struct {
+	DeliveredContentHash string `json:"delivered_content_hash"`
+	// The producer's own reading. Never trusted on its own: DescribesBytes
+	// recomputes the hash of what is actually about to be written.
+	DescribesDeliveredCandidate bool `json:"describes_delivered_candidate"`
+}
+
+type V3EvidenceEnvelope struct {
+	WireVersion         string               `json:"wire_version"`
+	RecordSchemaVersion string               `json:"record_schema_version"`
+	Identity            V3EvidenceIdentity   `json:"identity"`
+	Evaluation          V3EvidenceEvaluation `json:"evaluation"`
+	Coverage            V3EvidenceCoverage   `json:"coverage"`
+	Selection           V3EvidenceSelection  `json:"selection"`
+	Delivery            V3EvidenceDelivery   `json:"delivery"`
 }
 
 // V3PlanRequest is sent to the Python V3 service for plan generation.

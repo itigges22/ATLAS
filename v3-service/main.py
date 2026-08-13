@@ -26,6 +26,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 sys.stdout.reconfigure(line_buffering=True)
 
 import adapters
+import contract
 from pipeline import V3PipelineService, _build_problem_from_request
 from planning import generate_plan
 from symbols import (structural_edit, structural_score, build_project_symbols,
@@ -230,6 +231,25 @@ class V3Handler(BaseHTTPRequestHandler):
         # on baseline-only results when this fired earlier).
         adapters._post_pattern_outcome(problem, result)
 
+        # Structured evidence, serialised by evidence_wire. No policy is
+        # decided here: this handler neither ranks, nor closes, nor infers a
+        # strength -- it asks the serialiser for an envelope and writes it.
+        # A record that cannot be serialised is sent as no evidence at all
+        # rather than as a malformed envelope; the reason travels beside it so
+        # the gap is visible instead of silent.
+        evidence_envelope, evidence_unavailable = None, ""
+        try:
+            evidence_envelope = adapters.evidence_envelope(
+                result,
+                contract_id=f"generate:{Path(file_path).suffix.lstrip('.') or 'unknown'}",
+                contract_version="1",
+                artifact_scope=file_path,
+                evaluation_context=problem,
+                delivered_code=result.get("code", ""))
+        except contract.ContractError as e:
+            evidence_unavailable = str(e)
+            print(f"[generate] evidence not serialisable: {e}", flush=True)
+
         # Send final result
         response = {
             "code": result.get("code", ""),
@@ -240,6 +260,10 @@ class V3Handler(BaseHTTPRequestHandler):
             "total_tokens": result.get("total_tokens", 0),
             "total_time_ms": result.get("total_time_ms", 0.0),
             "verification_evidence": result.get("verification_evidence", []),
+            # Nested, versioned, and absent rather than empty when nothing was
+            # measured. A consumer that does not know the field ignores it.
+            "evidence": evidence_envelope,
+            "evidence_unavailable_reason": evidence_unavailable,
         }
 
         final = json.dumps(response)
