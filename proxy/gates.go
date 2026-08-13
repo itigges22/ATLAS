@@ -493,6 +493,21 @@ func (f fallbackSyntaxOutcome) aggregate() checkOutcome {
 	return checkOutcome{Status: ValidationNotApplicable}
 }
 
+// baselineAllowsRepair reports whether a DEMONSTRATED failure on the proposed
+// bytes may still land, given what is known about the baseline on disk. Only a
+// demonstrated baseline failure unlocks it: refusing an imperfect fix to an
+// already-broken file guarantees the broken version survives, which is the one
+// case the carveout exists for.
+//
+// Every other status refuses. passed is a working file to protect; not_run and
+// not_applicable are absences of evidence, not evidence that the file was
+// already broken; Unknown means no producer spoke at all. Treating any of them
+// as "already broken" would let an unverifiable baseline unlock a regression --
+// the exact direction this gate must not fail in.
+func baselineAllowsRepair(baseline checkOutcome) bool {
+	return baseline.Status == ValidationFailed
+}
+
 func checkFallbackSyntax(ctx *AgentContext, path, content string) (string, bool) {
 	agg := fallbackSyntaxOutcomeFor(ctx, path, content).aggregate()
 	return agg.Detail, agg.Status != ValidationFailed

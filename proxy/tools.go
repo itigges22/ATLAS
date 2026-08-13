@@ -920,13 +920,26 @@ func writeFileTool() *ToolDef {
 			// Scope is deliberately narrow, so the three intended policies
 			// survive: a NEW file still lands with a warning (nothing on
 			// disk to protect), an already-broken file still accepts a
-			// repair attempt (wasHealthy is false), and a non-gated language
-			// is unaffected (checkFallbackSyntax no-ops off
-			// syntaxGateLanguages).
+			// repair attempt (the baseline demonstrably fails), and a
+			// non-gated language is unaffected (the checker reports
+			// not_applicable off syntaxGateLanguages).
+			//
+			// The observations are KEPT rather than collapsed to a boolean.
+			// The active-debug branch below asks the same question of the same
+			// bytes, and re-asking the checker there costs the fast path a
+			// second sandbox round trip and loses the distinction between
+			// passed, not_run and not_applicable that a route needs in order to
+			// classify its own result. Each side is evaluated at most once per
+			// dispatch; ValidationUnknown means "not evaluated here".
+			proposalCheck := checkOutcome{Status: ValidationUnknown}
+			baselineCheck := checkOutcome{Status: ValidationUnknown}
 			if _, statErr := os.Stat(path); statErr == nil {
-				if synErr, ok := checkFallbackSyntax(ctx, input.Path, input.Content); !ok {
+				proposalCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
+				if proposalCheck.Status == ValidationFailed {
+					synErr := proposalCheck.Detail
 					if prior, priorOK := readOriginalForGate(path); priorOK {
-						if _, wasHealthy := checkFallbackSyntax(ctx, input.Path, prior); wasHealthy {
+						baselineCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, prior).aggregate()
+						if !baselineAllowsRepair(baselineCheck) {
 							log.Printf("[write_file] %s: refusing to regress valid content to invalid (%s)",
 								logPath(input.Path), truncateStr(synErr, 80))
 							// The check examined input.Content, which is exactly
@@ -1012,9 +1025,39 @@ func writeFileTool() *ToolDef {
 				// config being iterated), which is exactly why the T0/T1
 				// direct path below carries no syntax gate.
 				original, origOK := readOriginalForGate(path)
-				if synErr, ok := checkFallbackSyntax(ctx, input.Path, input.Content); !ok {
-					if _, wasHealthy := checkFallbackSyntax(ctx, input.Path, original); wasHealthy {
-						return &ToolResult{Success: false, Error: fallbackSyntaxRejection(input.Path, input.Content, synErr)}, nil
+				// The proposal was already evaluated above whenever the
+				// destination exists, which is the normal state of this route:
+				// it fires on a file the session wrote and just watched fail.
+				// Evaluate here only for the residual case where it was not --
+				// the file has been deleted since that write.
+				if proposalCheck.Status == ValidationUnknown {
+					proposalCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
+				}
+				if proposalCheck.Status == ValidationFailed {
+					// Reaching here with a demonstrably failing proposal means
+					// the gate above did not decide: either the baseline
+					// demonstrably failed (repair-in-progress), or there was
+					// no baseline to read -- the file is gone or unreadable.
+					// That second case is why this gate stays.
+					// readOriginalForGate yields "" for it, which the checker
+					// finds healthy, so the regression is still refused rather
+					// than landing unexamined.
+					if baselineCheck.Status == ValidationUnknown {
+						baselineCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, original).aggregate()
+					}
+					if !baselineAllowsRepair(baselineCheck) {
+						synErr := proposalCheck.Detail
+						// The check examined input.Content, the exact bytes
+						// that would have been written, and nothing has
+						// reached disk at this point.
+						return &ToolResult{
+							Success:          false,
+							Error:            fallbackSyntaxRejection(input.Path, input.Content, synErr),
+							MutationStatus:   MutationRefused,
+							ValidationKind:   ValidationKindSyntax,
+							ValidationStatus: ValidationFailed,
+							ValidationDetail: synErr,
+						}, nil
 					}
 					log.Printf("[write_file] %s still unparsable after fast-path write (was already broken) — allowing repair-in-progress", input.Path)
 				}
@@ -1123,14 +1166,18 @@ func writeFileTool() *ToolDef {
 			if err == nil && res != nil && res.Success {
 				ctx.SessionWrites[input.Path] = true
 			}
-			if isNew {
-				// Mutation facts stay as the writer reported them; only the
-				// validation observation is overlaid. Unknown is preserved.
-				if err != nil {
-					err = overlayValidationOnError(err, newFileCheck)
-				} else {
-					overlayValidation(res, newFileCheck)
-				}
+			// Mutation facts stay as the writer reported them; only the
+			// validation observation is overlaid, and only by a route that
+			// actually made one. Unknown is preserved.
+			switch {
+			case isNew:
+				res, err = applyRouteObservation(res, err, newFileCheck)
+			case iterating:
+				// The active-debug branch evaluated these exact bytes on the
+				// way here. The other existing-file routes still leave
+				// writeFileDirect's conservative default; each is its own
+				// change with its own evidence.
+				res, err = applyRouteObservation(res, err, proposalCheck)
 			}
 			return res, err
 		},
@@ -1440,6 +1487,19 @@ func overlayValidationOnError(err error, o checkOutcome) error {
 		ce.validationKind = ValidationKindSyntax
 	}
 	return err
+}
+
+// applyRouteObservation is how a route that owns an observation attaches it,
+// on both outcomes of the mutation attempt. Success and failure take the same
+// observation because they are orthogonal facts: checked bytes can still fail
+// to land, and bytes that landed can still be the ones that do not parse.
+// Keeping it in one place is what makes two routes provably identical here.
+func applyRouteObservation(res *ToolResult, err error, o checkOutcome) (*ToolResult, error) {
+	if err != nil {
+		return res, overlayValidationOnError(err, o)
+	}
+	overlayValidation(res, o)
+	return res, nil
 }
 
 func writeFileDirect(path, content string) (*ToolResult, error) {
