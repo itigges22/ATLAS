@@ -602,8 +602,16 @@ def perimeter(radius):
 //	new-file gate       proposal              sub-Tier2 or unconfigured V3
 //	V3 service fallback baseline              after generation failed, deliberately
 //	                                          fresh: minutes may have passed
+//	V3 delivery         final bytes           the artifact the pipeline delivers,
+//	                                          after sanitisation
+//	V3 delivery         baseline              the alternative, when the candidate
+//	                                          fails its own final-byte check
+//	V3 revocations      baseline              structural and embedded, before the
+//	                                          baseline they restore is written
+//	V3 terminal guard   final bytes           re-observes only if some branch
+//	                                          changed the bytes without saying so
 //
-// None is in the final direct-write block. A ninth would mean a route
+// None is in the final direct-write block. Growth beyond this means a route
 // recomputed an observation it already held.
 func TestWriteRoutesDoNotRecomputeTheirObservation(t *testing.T) {
 	fset := token.NewFileSet()
@@ -629,15 +637,14 @@ func TestWriteRoutesDoNotRecomputeTheirObservation(t *testing.T) {
 		}
 		return true
 	})
-	if structured != 8 {
-		t.Errorf("fallbackSyntaxOutcomeFor call sites = %d, want 8; a new one on a "+
+	if structured != 13 {
+		t.Errorf("fallbackSyntaxOutcomeFor call sites = %d, want 13; a new one on a "+
 			"route that already holds an observation is a recomputation", structured)
 	}
-	// Still on the legacy wrapper: the baseline check inside candidate
-	// revocation (1), and edit_file, insert_after and replace_lines (2 each).
-	// Nothing outside a migrated route was removed.
-	if legacy != 7 {
-		t.Errorf("checkFallbackSyntax call sites = %d, want 7 -- candidate "+
-			"revocation plus the three edit tools", legacy)
+	// Still on the legacy wrapper: edit_file, insert_after and replace_lines,
+	// two calls each. Every write_file route now uses the structured checker.
+	if legacy != 6 {
+		t.Errorf("checkFallbackSyntax call sites = %d, want 6 -- the three edit "+
+			"tools, two calls each", legacy)
 	}
 }

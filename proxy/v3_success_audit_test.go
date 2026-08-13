@@ -72,8 +72,12 @@ type auditCase struct {
 	// Verdicts take the request's ordinal as well as its body: several
 	// transitions ask the SAME bytes twice (the preflight before generation,
 	// a gate after it), and the second answer is the one under audit.
-	unresolvedFor      func(src string) []string       // structural_check verdict
-	embeddedBadFor     func(src string, call int) bool // embedded_script_check verdict
+	unresolvedFor func(src string) []string // structural_check verdict
+	// embeddedBadFor also receives `previous`, because the service reports a
+	// class of defect only a before/after comparison can see (a render loop the
+	// edit stopped driving). That class is exactly what the embedded GATE can
+	// still catch after the previous-less final-byte check has passed.
+	embeddedBadFor     func(src, previous string, call int) bool
 	syntaxBadFor       func(src string, call int) bool // /syntax-check verdict
 	cancelOnStructural bool
 	readOnlyDir        bool
@@ -137,10 +141,11 @@ func runAudit(t *testing.T, c auditCase) auditResult {
 			var body map[string]interface{}
 			json.NewDecoder(r.Body).Decode(&body)
 			src, _ := body["source"].(string)
+			prev, _ := body["previous"].(string)
 			st.add("embedded", src)
 			embeddedCalls++
 			out := map[string]interface{}{"ok": true, "findings": []interface{}{}}
-			if c.embeddedBadFor != nil && c.embeddedBadFor(src, embeddedCalls) {
+			if c.embeddedBadFor != nil && c.embeddedBadFor(src, prev, embeddedCalls) {
 				out["findings"] = []map[string]interface{}{{
 					"line": 4, "column": 1, "kind": "javascript",
 					"where": "the <script> block", "message": "unexpected `)`",
@@ -314,6 +319,22 @@ const auBaselineHTML = `<!doctype html>
 </html>
 `
 
+// What is already on disk: healthy, and not byte-identical to the model's
+// proposal (an echoed write is refused before the pipeline is ever entered).
+const auPriorHTML = `<!doctype html>
+<html>
+<head><title>Board</title></head>
+<body>
+  <div id="board"></div>
+  <script>
+    const cells = [];
+    for (let i = 0; i < 4; i++) { cells.push(i); }
+    document.getElementById('board').textContent = cells.join('-');
+  </script>
+</body>
+</html>
+`
+
 const auCandidateHTML = `<!doctype html>
 <html>
 <head><title>Board</title></head>
@@ -360,10 +381,10 @@ func TestV3SuccessStateMachineAudit(t *testing.T) {
 					return "CAND(" + h + ")"
 				case shortHash(sanitized):
 					return "SANI(" + h + ")"
-				case shortHash(c.prior):
-					return "PRIOR(" + h + ")"
 				case shortHash(""):
 					return "EMPTY"
+				case shortHash(c.prior):
+					return "PRIOR(" + h + ")"
 				}
 				return "OTHER(" + h + ")"
 			}
@@ -397,6 +418,33 @@ func TestV3SuccessStateMachineAudit(t *testing.T) {
 				got.res.V3Used, got.res.CandidatesTested, got.res.WinningScore,
 				got.res.PhaseSolved, len(got.res.VerificationEvidence),
 				got.events, truncateStr(got.res.Error, 90))
+
+			// THE INVARIANT: every artifact this state machine delivers carries
+			// a structured syntax observation of the exact bytes on disk. A
+			// syntax-gated file that landed without a check of its final hash
+			// means the delivered artifact was never examined.
+			// "Delivered" means this route wrote something, not that a file
+			// happens to exist: a refusal leaves the prior artifact in place.
+			if got.res.Success {
+				if _, gated := syntaxGateLanguages[strings.ToLower(filepath.Ext(c.rel))]; gated {
+					seen := false
+					for _, ch := range got.checks {
+						if ch.kind == "syntax" && ch.hash == shortHash(got.disk) {
+							seen = true
+						}
+					}
+					if !seen {
+						t.Errorf("delivered %s with no syntax check of those bytes; "+
+							"checks = %v", label(shortHash(got.disk)), checkLines)
+					}
+				}
+				if !got.res.ValidationStatus.Classified() {
+					t.Errorf("delivered bytes with an unclassified validation status")
+				}
+				if got.res.MutationStatus != MutationApplied {
+					t.Errorf("MutationStatus = %q, want applied", got.res.MutationStatus)
+				}
+			}
 
 			// The one invariant this audit exists to protect: provenance may
 			// only describe bytes V3 authored and this route delivered.
@@ -462,6 +510,17 @@ func auditCases() []auditCase {
 				return call > 1 && src == auBaselinePy
 			}},
 
+		// 4b. The sanitized candidate does not parse; the baseline does.
+		{name: "04b_sanitized_candidate_fails_baseline_clean",
+			rel: "solve.py", baseline: auBaselinePy, candidate: auCandidatePy, passed: true,
+			syntaxBadFor: func(src string, _ int) bool { return src == auCandidatePy }},
+
+		// 4c. Neither the sanitized candidate nor the baseline parses.
+		{name: "04c_sanitized_candidate_and_baseline_fail",
+			rel: "solve.py", baseline: auBaselinePy, candidate: auCandidatePy, passed: true,
+			// The preflight (call 1) passes the baseline; every later check fails.
+			syntaxBadFor: func(_ string, call int) bool { return call > 1 }},
+
 		// 6. Structural gate finds BOTH unacceptable.
 		{name: "06_structural_refuses_both",
 			rel: "solve.py", baseline: auBaselineUnresolved, candidate: auCandidateUnresolved,
@@ -476,18 +535,23 @@ func auditCases() []auditCase {
 			}},
 
 		// 7. Embedded-script gate revokes the candidate to the baseline.
+		// The finding is previous-dependent, which is what keeps this
+		// transition reachable: the final-byte check asks previous-less and
+		// sees nothing, and the gate's before/after comparison is what refuses.
 		{name: "07_embedded_revokes_to_baseline",
-			rel: "index.html", baseline: auBaselineHTML, candidate: auCandidateHTML, passed: true,
-			embeddedBadFor: func(src string, call int) bool {
-				return call > 1 && strings.Contains(src, "i < 16")
+			rel: "index.html", prior: auPriorHTML,
+			baseline: auBaselineHTML, candidate: auCandidateHTML, passed: true,
+			embeddedBadFor: func(src, previous string, _ int) bool {
+				return previous != "" && strings.Contains(src, "i < 16")
 			}},
 
 		// 8. Embedded-script gate refuses both.
 		{name: "08_embedded_refuses_both",
-			rel: "index.html", baseline: auBaselineHTML, candidate: auCandidateHTML, passed: true,
-			// Preflight (call 1) passes the baseline; afterwards the gate
+			rel: "index.html", prior: auPriorHTML,
+			baseline: auBaselineHTML, candidate: auCandidateHTML, passed: true,
+			// Previous-dependent again, and true for both sides: the gate
 			// condemns the candidate AND the baseline it would fall back to.
-			embeddedBadFor: func(_ string, call int) bool { return call > 1 }},
+			embeddedBadFor: func(_, previous string, _ int) bool { return previous != "" }},
 
 		// 9. Duplicate-main guard refuses whatever is about to land.
 		{name: "09_duplicate_main_refused",
@@ -540,12 +604,12 @@ func TestUnauthorizedCandidateNeverInfluencesAnything(t *testing.T) {
 	}
 }
 
-// Q4/Q5, isolated: sanitization rewrites the bytes AFTER V3 earned its
-// evidence on them, and nothing re-runs the syntax checker on the result. The
-// gates that do run afterwards are structural and embedded, never syntax --
-// so the delivered artifact carries provenance for bytes that no longer exist
-// in that form, and no local syntax evidence of its own.
-func TestSanitizedCandidateIsNotRevalidated(t *testing.T) {
+// Q4/Q5, answered by the invariant: sanitization still rewrites the bytes
+// AFTER V3 earned its evidence on them, but the result is no longer delivered
+// unexamined. The checker sees the SANITIZED hash and never the pre-sanitized
+// candidate V3 actually verified -- which is the whole point of placing the
+// final-byte check after sanitization.
+func TestSanitizedCandidateIsCheckedAsDelivered(t *testing.T) {
 	fenced := "```python\n" + auCandidatePy + "```\n"
 	got := runAudit(t, auditCase{
 		rel: "solve.py", baseline: auBaselinePy, candidate: fenced, passed: true})
@@ -557,26 +621,49 @@ func TestSanitizedCandidateIsNotRevalidated(t *testing.T) {
 	if got.disk != sanitized {
 		t.Fatalf("delivered bytes are not the sanitized candidate: %q", got.disk)
 	}
-	if got.disk == fenced {
-		t.Fatal("the fenced candidate reached disk unchanged")
-	}
+	var sawSanitized bool
 	for _, ch := range got.checks {
-		if ch.kind == "syntax" && ch.hash == shortHash(sanitized) {
-			t.Fatal("a syntax check DID examine the sanitized bytes; the audit " +
-				"note about unvalidated delivery would be wrong")
+		if ch.kind != "syntax" {
+			continue
 		}
+		if ch.hash == shortHash(sanitized) {
+			sawSanitized = true
+		}
+		if ch.hash == shortHash(fenced) {
+			t.Error("a syntax check examined the PRE-sanitized candidate; the " +
+				"observation must describe the bytes that land")
+		}
+	}
+	if !sawSanitized {
+		t.Fatal("the delivered bytes were never syntax-checked")
 	}
 	if !got.res.V3Used {
 		t.Fatal("fixture did not reach the authorized-delivery path")
 	}
+	// Local syntax evidence only. V3's own verdict is not borrowed to make a
+	// stronger claim: `passed` covers compile smoke, a partial oracle score and
+	// a complete one indistinguishably, and no strength field crosses the wire.
+	if got.res.ValidationKind != ValidationKindSyntax ||
+		got.res.ValidationStatus != ValidationPassed {
+		t.Errorf("validation = %q/%q, want syntax/passed",
+			got.res.ValidationKind, got.res.ValidationStatus)
+	}
 }
 
-// Q6, isolated: when a gate revokes the candidate, is the restored baseline
-// freshly checked? Only the structural route re-checks it (that is the last
-// remaining legacy checkFallbackSyntax call). The language-swap and
-// embedded-script revocations deliver the baseline with no fresh syntax check
-// of their own.
-func TestRevocationRoutesDifferInBaselineRechecking(t *testing.T) {
+// Q6, answered by the invariant: every revocation route now freshly checks the
+// baseline it restores. Before this slice only the structural one did, and it
+// discarded the verdict; the language-swap and embedded routes delivered the
+// baseline with no check of their own beyond the pre-generation preflight.
+func TestEveryRevocationRouteChecksTheBaselineItRestores(t *testing.T) {
+	countSyntaxOn := func(r auditResult, content string) int {
+		n := 0
+		for _, ch := range r.checks {
+			if ch.kind == "syntax" && ch.hash == shortHash(content) {
+				n++
+			}
+		}
+		return n
+	}
 	structural := runAudit(t, auditCase{
 		rel: "solve.py", baseline: auBaselinePy, candidate: auCandidateUnresolved, passed: true,
 		unresolvedFor: func(src string) []string {
@@ -588,29 +675,243 @@ func TestRevocationRoutesDifferInBaselineRechecking(t *testing.T) {
 	swap := runAudit(t, auditCase{
 		rel: "index.html", baseline: auBaselineHTML, candidate: auCandidateNotHTML, passed: true})
 
-	countSyntaxOn := func(r auditResult, content string) int {
-		n := 0
-		for _, ch := range r.checks {
-			if ch.kind == "syntax" && ch.hash == shortHash(content) {
-				n++
-			}
-		}
-		return n
-	}
-	// Preflight examined the baseline once before generation. The structural
-	// revocation examines it AGAIN on the way to delivering it.
+	// Structural: preflight, then the revocation's own check of the baseline.
 	if got := countSyntaxOn(structural, auBaselinePy); got != 2 {
-		t.Errorf("structural revocation: syntax checks on the baseline = %d, want 2 "+
-			"(preflight, then the revocation's own)", got)
+		t.Errorf("structural revocation: syntax checks on the baseline = %d, want 2", got)
 	}
-	if got := countSyntaxOn(swap, auBaselineHTML); got != 1 {
-		t.Errorf("language-swap revocation: syntax checks on the baseline = %d, want 1 "+
-			"(the preflight's only -- the revocation re-checks nothing)", got)
+	// Language swap selects the baseline BEFORE the common final-byte check,
+	// so that check is the one covering the delivery: preflight, then it.
+	if got := countSyntaxOn(swap, auBaselineHTML); got != 2 {
+		t.Errorf("language-swap revocation: syntax checks on the baseline = %d, "+
+			"want 2 (preflight, then the common final-byte check)", got)
 	}
-	if structural.disk != auBaselinePy || swap.disk != auBaselineHTML {
-		t.Fatal("both revocations must deliver the baseline")
+	for _, r := range []auditResult{structural, swap} {
+		if !r.res.Success {
+			t.Fatalf("both revocations must deliver the baseline: %q", r.res.Error)
+		}
+		if r.res.V3Used {
+			t.Error("a revoked delivery carries V3 provenance")
+		}
+		if r.res.ValidationStatus != ValidationPassed || r.res.ValidationKind != ValidationKindSyntax {
+			t.Errorf("revoked delivery validation = %q/%q, want syntax/passed",
+				r.res.ValidationKind, r.res.ValidationStatus)
+		}
 	}
-	if structural.res.V3Used || swap.res.V3Used {
-		t.Error("a revoked delivery carries V3 provenance")
+}
+
+// ---------------------------------------------------------------------------
+// The invariant, transition by transition
+// ---------------------------------------------------------------------------
+//
+// Every artifact this state machine delivers carries a structured syntax
+// observation of the exact bytes written. These expectations pin the whole
+// shape of each transition -- which bytes each check examined and in what
+// order, which bytes landed, whether V3 may be named as their author, the
+// classification, and the SSE -- so a change that keeps the classification
+// while quietly checking different bytes still fails.
+
+type transitionWant struct {
+	name     string
+	checks   []string // "kind:ROLE", in arrival order
+	disk     string   // role of the final on-disk bytes, "" = nothing written
+	success  bool
+	mutation MutationStatus
+	kind     ValidationKind
+	status   ValidationStatus
+	v3Used   bool
+	sse      []string
+}
+
+func TestFinalByteInvariantTransitions(t *testing.T) {
+	byName := map[string]auditCase{}
+	for _, c := range auditCases() {
+		byName[c.name] = c
+	}
+	for _, w := range []transitionWant{
+		// Unauthorized code: the baseline is the delivery, and the check that
+		// covers it is the preflight's -- the bytes never changed after it.
+		{name: "01_unauthorized_code_retained_baseline",
+			// Two syntax requests on the same bytes, deliberately: the preflight
+			// before generation, and the common final-byte check every delivery
+			// passes through -- including the ones that never used a candidate.
+			checks:  []string{"syntax:BASE", "syntax:BASE", "structural:BASE"},
+			disk:    "BASE",
+			success: true, mutation: MutationApplied,
+			kind: ValidationKindSyntax, status: ValidationPassed,
+			sse: []string{"v3_progress"}},
+
+		// Authorized candidate: checked once, after sanitisation, before any
+		// downstream gate.
+		{name: "02_authorized_candidate_delivered",
+			checks:  []string{"syntax:BASE", "syntax:CAND", "structural:CAND"},
+			disk:    "CAND",
+			success: true, mutation: MutationApplied,
+			kind: ValidationKindSyntax, status: ValidationPassed,
+			v3Used: true, sse: []string{"v3_progress", "v3_progress"}},
+
+		// Sanitised candidate: the checker sees SANI, never the pre-sanitised
+		// CAND that V3 actually verified.
+		{name: "04_sanitization_rewrites_candidate",
+			checks:  []string{"syntax:BASE", "syntax:SANI", "structural:SANI"},
+			disk:    "SANI",
+			success: true, mutation: MutationApplied,
+			kind: ValidationKindSyntax, status: ValidationPassed,
+			v3Used: true, sse: []string{"v3_progress", "v3_progress"}},
+
+		// Candidate fails its own final-byte check: the baseline is checked
+		// before it is restored, and it is delivered without provenance.
+		{name: "04b_sanitized_candidate_fails_baseline_clean",
+			checks:  []string{"syntax:BASE", "syntax:CAND", "syntax:BASE", "structural:BASE"},
+			disk:    "BASE",
+			success: true, mutation: MutationApplied,
+			kind: ValidationKindSyntax, status: ValidationPassed,
+			sse: []string{"v3_progress"}},
+
+		// Both fail: nothing is written, and the refusal names the baseline's
+		// failure -- the alternative that was considered and rejected.
+		{name: "04c_sanitized_candidate_and_baseline_fail",
+			checks:  []string{"syntax:BASE", "syntax:CAND", "syntax:BASE"},
+			disk:    "",
+			success: false, mutation: MutationRefused,
+			kind: ValidationKindSyntax, status: ValidationFailed,
+			sse: []string{"v3_progress"}},
+
+		// Structural revocation: the baseline's verdict is now retained rather
+		// than spent on the allow decision and discarded.
+		{name: "05_structural_revokes_to_clean_baseline",
+			checks: []string{"syntax:BASE", "syntax:CAND", "structural:CAND",
+				"structural:EMPTY", "syntax:BASE", "structural:BASE"},
+			disk:    "BASE",
+			success: true, mutation: MutationApplied,
+			kind: ValidationKindSyntax, status: ValidationPassed,
+			sse: []string{"v3_progress", "v3_progress"}},
+
+		// Embedded revocation: reachable only for a previous-dependent finding,
+		// and the baseline it restores is freshly checked first.
+		{name: "07_embedded_revokes_to_baseline",
+			checks: []string{"syntax:BASE", "embedded:BASE", "syntax:CAND", "embedded:CAND",
+				"embedded:CAND", "embedded:PRIOR", "embedded:BASE", "syntax:BASE", "embedded:BASE"},
+			disk:    "BASE",
+			success: true, mutation: MutationApplied,
+			kind: ValidationKindSyntax, status: ValidationPassed,
+			sse: []string{"v3_progress"}},
+
+		// The candidate never became an artifact: no provenance, and the
+		// observation of those exact bytes survives the failure.
+		{name: "11_candidate_write_fails",
+			checks:  []string{"syntax:BASE", "syntax:CAND", "structural:CAND"},
+			disk:    "",
+			success: false, mutation: MutationFailed,
+			kind: ValidationKindSyntax, status: ValidationPassed,
+			sse: []string{"v3_progress", "v3_progress"}},
+
+		// Baseline fallback that fails to land: same, for the model's bytes.
+		{name: "12_baseline_write_fails",
+			checks:  []string{"syntax:BASE", "syntax:BASE", "structural:BASE"},
+			disk:    "",
+			success: false, mutation: MutationFailed,
+			kind: ValidationKindSyntax, status: ValidationPassed,
+			sse: []string{"v3_progress"}},
+	} {
+		w := w
+		t.Run(w.name, func(t *testing.T) {
+			c, ok := byName[w.name]
+			if !ok {
+				t.Fatalf("no audit case named %s", w.name)
+			}
+			got := runAudit(t, c)
+			sanitized, _ := sanitizeFileContent(c.rel, c.candidate)
+			role := func(h string) string {
+				switch h {
+				case shortHash(c.baseline):
+					return "BASE"
+				case shortHash(c.candidate):
+					return "CAND"
+				case shortHash(sanitized):
+					return "SANI"
+				case shortHash(""):
+					return "EMPTY"
+				case shortHash(c.prior):
+					return "PRIOR"
+				}
+				return "OTHER"
+			}
+			var seq []string
+			for _, ch := range got.checks {
+				seq = append(seq, ch.kind+":"+role(ch.hash))
+			}
+			if fmt.Sprint(seq) != fmt.Sprint(w.checks) {
+				t.Errorf("checks = %v\n want %v", seq, w.checks)
+			}
+			wantDisk := ""
+			switch w.disk {
+			case "BASE":
+				wantDisk = c.baseline
+			case "CAND":
+				wantDisk = c.candidate
+			case "SANI":
+				wantDisk = sanitized
+			case "PRIOR":
+				wantDisk = c.prior
+			}
+			if w.disk == "" {
+				// Nothing delivered: the prior artifact, if any, is untouched.
+				if got.disk != c.prior {
+					t.Errorf("disk = %s, want the untouched prior %s",
+						role(shortHash(got.disk)), role(shortHash(c.prior)))
+				}
+			} else if got.disk != wantDisk {
+				t.Errorf("disk = %s, want %s", role(shortHash(got.disk)), w.disk)
+			}
+			if got.res.Success != w.success {
+				t.Errorf("Success = %v, want %v", got.res.Success, w.success)
+			}
+			if got.res.MutationStatus != w.mutation ||
+				got.res.ValidationKind != w.kind ||
+				got.res.ValidationStatus != w.status {
+				t.Errorf("got %q/%q/%q, want %q/%q/%q",
+					got.res.MutationStatus, got.res.ValidationKind, got.res.ValidationStatus,
+					w.mutation, w.kind, w.status)
+			}
+			if got.res.V3Used != w.v3Used {
+				t.Errorf("V3Used = %v, want %v", got.res.V3Used, w.v3Used)
+			}
+			if !w.v3Used && (got.res.CandidatesTested != 0 || got.res.PhaseSolved != "" ||
+				len(got.res.VerificationEvidence) != 0) {
+				t.Errorf("provenance leaked onto unauthorized bytes: %+v", got.res)
+			}
+			if fmt.Sprint(got.events) != fmt.Sprint(w.sse) {
+				t.Errorf("SSE = %v, want %v", got.events, w.sse)
+			}
+		})
+	}
+}
+
+// Cancellation is authoritative before the final write, and nothing runs a
+// checker after it: the last request in the run is the gate call during which
+// the user cancelled.
+func TestCancellationRunsNoCheckerAfterwards(t *testing.T) {
+	var cancelCase auditCase
+	for _, c := range auditCases() {
+		if strings.HasPrefix(c.name, "10_") {
+			cancelCase = c
+		}
+	}
+	got := runAudit(t, cancelCase)
+
+	if got.res.Success || got.disk != "" {
+		t.Fatalf("a cancelled write must land nothing: success=%v disk=%q",
+			got.res.Success, got.disk)
+	}
+	if !strings.Contains(got.res.Error, "cancelled") {
+		t.Fatalf("cancellation must say so: %q", got.res.Error)
+	}
+	last := got.checks[len(got.checks)-1]
+	if last.kind != "structural" || last.hash != shortHash(cancelCase.candidate) {
+		t.Errorf("last request = %s:%s, want the structural call during which "+
+			"the cancel arrived", last.kind, last.hash)
+	}
+	if got.res.V3Used {
+		t.Error("a cancelled write carries V3 provenance")
 	}
 }

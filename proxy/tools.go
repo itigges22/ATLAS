@@ -1929,6 +1929,53 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		code = cleaned
 	}
 
+	// FINAL-BYTE OBSERVATION. The bytes are now chosen, and every artifact this
+	// machine delivers must carry a structured observation of exactly the bytes
+	// that land. It sits here, after sanitisation, because sanitisation rewrites
+	// the candidate AFTER V3 earned its verdict, and because V3 verifies by
+	// RUNNING code -- a different question from whether these exact bytes parse,
+	// answered about text that no longer exists in that form.
+	//
+	// deliveredCheck is only ever assigned beside the bytes it describes, and
+	// checkedFor records which bytes those were, so the pairing is checkable
+	// rather than a discipline each branch below has to remember.
+	deliveredCheck := fallbackSyntaxOutcomeFor(ctx, path, code).aggregate()
+	checkedFor := code
+	if deliveredCheck.Status == ValidationFailed {
+		if !authorizedV3 {
+			// The caller's own content, and it does not parse. Nothing here
+			// authored it and there is no alternative to fall back to.
+			log.Printf("[write_file] fallback content for %s does not parse: %s",
+				logPath(path), truncateStr(deliveredCheck.Detail, 120))
+			return &ToolResult{Success: false,
+				Error:            fallbackSyntaxRejection(path, code, deliveredCheck.Detail),
+				MutationStatus:   MutationRefused,
+				ValidationKind:   ValidationKindSyntax,
+				ValidationStatus: ValidationFailed,
+				ValidationDetail: deliveredCheck.Detail}, nil
+		}
+		// A candidate that does not parse is not a candidate. The model's own
+		// content is the alternative, and it is checked before being restored:
+		// falling back to bytes nobody looked at is how the harness would
+		// replace one broken artifact with another.
+		baseCheck := fallbackSyntaxOutcomeFor(ctx, path, baselineContent).aggregate()
+		if baseCheck.Status == ValidationFailed {
+			log.Printf("[write_file] V3 winner and baseline both fail the syntax gate for %s",
+				logPath(path))
+			return &ToolResult{Success: false,
+				Error:            fallbackSyntaxRejection(path, baselineContent, baseCheck.Detail),
+				MutationStatus:   MutationRefused,
+				ValidationKind:   ValidationKindSyntax,
+				ValidationStatus: ValidationFailed,
+				ValidationDetail: baseCheck.Detail}, nil
+		}
+		log.Printf("[write_file] V3 winner for %s does not parse — writing your version instead (%s)",
+			logPath(path), truncateStr(deliveredCheck.Detail, 80))
+		code, authorizedV3, fellBack = revokeV3(
+			baselineContent, "the winner does not parse", path)
+		deliveredCheck, checkedFor = baseCheck, code
+	}
+
 	// #147: authoritative structural gate on whatever is about to land —
 	// the in-pipeline veto only prunes phase-1 sandbox-passing candidates,
 	// so probe/repair returns, the energy fallback, and the baseline
@@ -1943,9 +1990,17 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	if original, origOK := readOriginalForGate(path); origOK {
 		if introduced := editIntroducesUnresolved(ctx, path, original, code); len(introduced) > 0 {
 			if code != baselineContent {
-				if synErr, synOK := checkFallbackSyntax(ctx, path, baselineContent); !synOK {
+				// The baseline is about to become the delivered artifact, so it
+				// is observed before it is restored -- and the verdict is kept,
+				// not spent on the allow/refuse decision and discarded.
+				baseCheck := fallbackSyntaxOutcomeFor(ctx, path, baselineContent).aggregate()
+				if baseCheck.Status == ValidationFailed {
 					return &ToolResult{Success: false,
-						Error: fallbackSyntaxRejection(path, baselineContent, synErr)}, nil
+						Error:            fallbackSyntaxRejection(path, baselineContent, baseCheck.Detail),
+						MutationStatus:   MutationRefused,
+						ValidationKind:   ValidationKindSyntax,
+						ValidationStatus: ValidationFailed,
+						ValidationDetail: baseCheck.Detail}, nil
 				}
 				if intrBase := editIntroducesUnresolved(ctx, path, original, baselineContent); len(intrBase) == 0 {
 					log.Printf("[write_file] V3 winner introduces unresolved call(s) %v in %s — writing gate-passing baseline instead", logPaths(introduced), logPath(path))
@@ -1956,6 +2011,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 					}
 					code, authorizedV3, fellBack = revokeV3(
 						baselineContent, "winner failed the structural gate", path)
+					deliveredCheck, checkedFor = baseCheck, code
 				} else {
 					introduced = intrBase // name what the MODEL can act on
 				}
@@ -1976,9 +2032,22 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	if original, origOK := readOriginalForGate(path); origOK {
 		if msg := embeddedScriptGate(ctx, path, original, code); msg != "" {
 			if code != baselineContent && embeddedScriptGate(ctx, path, original, baselineContent) == "" {
+				// Same rule as the structural revocation: the baseline is
+				// observed before it is restored, and the verdict travels with
+				// it to the write.
+				baseCheck := fallbackSyntaxOutcomeFor(ctx, path, baselineContent).aggregate()
+				if baseCheck.Status == ValidationFailed {
+					return &ToolResult{Success: false,
+						Error:            fallbackSyntaxRejection(path, baselineContent, baseCheck.Detail),
+						MutationStatus:   MutationRefused,
+						ValidationKind:   ValidationKindSyntax,
+						ValidationStatus: ValidationFailed,
+						ValidationDetail: baseCheck.Detail}, nil
+				}
 				log.Printf("[write_file] V3 winner breaks an embedded script in %s — writing gate-passing baseline instead", logPath(path))
 				code, authorizedV3, fellBack = revokeV3(
 					baselineContent, "winner breaks an embedded script", path)
+				deliveredCheck, checkedFor = baseCheck, code
 			} else {
 				log.Printf("[write_file] embedded-script gate rejected content for %s", logPath(path))
 				return &ToolResult{Success: false, Error: msg}, nil
@@ -2012,12 +2081,25 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// reporting as the V3-unavailable fallback — so the vetoed winner's
 	// score/phase/evidence don't attach to unverified content and the
 	// "V3 verified this edit" completion nudge (agent.go) doesn't fire.
+	// The observation that travels to the write must describe the bytes being
+	// written. Every transition above re-observes what it changed, so this
+	// normally returns what it was handed; it re-evaluates only if a future
+	// branch alters the bytes without saying what it found about them, which is
+	// the one way this invariant could rot.
+	final := deliveredCheck
+	if checkedFor != code {
+		log.Printf("[write_file] final bytes for %s are not the observed ones — re-checking",
+			logPath(path))
+		final = fallbackSyntaxOutcomeFor(ctx, path, code).aggregate()
+	}
+
 	if fellBack || !authorizedV3 {
 		// Authorization governs METADATA as well as bytes: reporting
 		// V3Used/score/phase/evidence over content V3 did not author is the
 		// same false claim in a different field, and it fires the agent's
 		// "V3 verified this edit" completion nudge.
-		return writeFileRecorded(path, code, ctx)
+		fbRes, fbErr := writeFileRecorded(path, code, ctx)
+		return applyRouteObservation(fbRes, fbErr, final)
 	}
 
 	// Stream V3 completion summary — after the gate, so a rejected write
@@ -2030,8 +2112,16 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 
 	result, err := writeFileRecorded(path, code, ctx)
 	if err != nil {
-		return nil, err
+		// The candidate never became an artifact, so no provenance is attached
+		// -- but the observation made on those exact bytes still holds.
+		return nil, overlayValidationOnError(err, final)
 	}
+	// Local syntax evidence about the delivered bytes. It is deliberately not
+	// upgraded by V3's own verdict: `passed` covers compile smoke, a partial
+	// oracle score and a complete one indistinguishably, and the response
+	// carries no strength field to tell them apart. Provenance says V3 authored
+	// this; validation says only what was checked here.
+	overlayValidation(result, final)
 
 	// Enrich result with V3 metadata
 	out := WriteFileOutput{
