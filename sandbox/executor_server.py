@@ -1362,9 +1362,16 @@ def execute_python(code, test_code, workspace, timeout, requirements, stdin=None
         failed = int(m.group(1)) if (m := re.search(r"(\d+) failed", r["stdout"])) else 0
         total = passed + failed or 1
     else:
+        # cwd=workspace, like the pytest branch above. Without it the process
+        # ran from the image WORKDIR, which is read-only in a `read_only:
+        # true` container: a candidate told to read `input.txt` could not see
+        # the file this same request had just staged for it, and any relative
+        # write raised `[Errno 30] Read-only file system` before the candidate
+        # did anything. The workspace is the only directory this request may
+        # write to, and it is removed when the request is answered.
         r = _run_cmd(
             ["python", "-c", f"import sys; sys.path.insert(0,'{workspace}'); import solution"],
-            timeout, stdin=stdin
+            timeout, cwd=workspace, stdin=stdin
         )
         passed = 1 if r["success"] else 0
         total = 1
