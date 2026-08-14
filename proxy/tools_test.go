@@ -1799,6 +1799,10 @@ type editGateCase struct {
 	introduces string
 	// the destination directory is read-only, so the write fails
 	readOnlyDir bool
+	// non-default artifact: relative path plus the per-tool arguments that
+	// edit it. Used for the content types no checker applies to.
+	relPath string
+	argsFor func(tool string) []byte
 
 	wantSuccess    bool
 	wantMutation   MutationStatus
@@ -1909,7 +1913,11 @@ func runEditGate(t *testing.T, tool string, c editGateCase) (*ToolResult, string
 	}))
 	defer srv.Close()
 
-	path := filepath.Join(dir, "app.py")
+	rel := c.relPath
+	if rel == "" {
+		rel = "app.py"
+	}
+	path := filepath.Join(dir, rel)
 	if err := os.WriteFile(path, []byte(c.original), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1921,7 +1929,7 @@ func runEditGate(t *testing.T, tool string, c editGateCase) (*ToolResult, string
 	if !c.noSandbox {
 		ctx.SandboxURL = srv.URL
 	}
-	ctx.SessionWrites["app.py"] = true
+	ctx.SessionWrites[rel] = true
 	ctx.RecordFileRead(path, c.original)
 
 	if c.readOnlyDir {
@@ -1936,7 +1944,11 @@ func runEditGate(t *testing.T, tool string, c editGateCase) (*ToolResult, string
 		t.Cleanup(func() { os.Chmod(dir, 0o755); os.Chmod(path, 0o644) })
 	}
 
-	res := executeToolCall(tool, egArgs(tool), ctx)
+	args := egArgs(tool)
+	if c.argsFor != nil {
+		args = c.argsFor(tool)
+	}
+	res := executeToolCall(tool, args, ctx)
 	if len(st.unexpected) > 0 {
 		t.Fatalf("unexpected endpoints: %v", st.unexpected)
 	}
@@ -2201,5 +2213,95 @@ func TestLegacyCheckerWrapperInventory(t *testing.T) {
 	// And the shared edit gate exists exactly once.
 	if n := strings.Count(body, "func editSyntaxObservation("); n != 1 {
 		t.Errorf("editSyntaxObservation definitions = %d, want 1", n)
+	}
+}
+
+// Nothing applicable: an artifact type neither checker can speak about. The
+// observation is a real one -- "there was nothing here to check" -- and it is
+// distinct from the unavailable-service case, which reports not_run.
+func TestEditToolsClassifyANotApplicableArtifact(t *testing.T) {
+	// Routing premises, asserted rather than assumed: a future entry in either
+	// map turns this into a different case, and the test must fail then.
+	if _, gated := syntaxGateLanguages[".rs"]; gated {
+		t.Fatal(".rs gained a sandbox checker; pick a type neither check applies to")
+	}
+	if embeddedScriptExts[".rs"] {
+		t.Fatal(".rs gained an embedded-script check; pick a type neither check applies to")
+	}
+
+	const rustOriginal = "pub fn area(radius: f64) -> f64 {\n    if radius < 0.0 {\n        panic!(\"negative radius\");\n    }\n    std::f64::consts::PI * radius * radius\n}\n\npub fn total(radii: &[f64]) -> f64 {\n    let mut sum = 0.0;\n    for r in radii {\n        sum += area(*r);\n    }\n    sum\n}\n"
+
+	edited := map[string]string{
+		"edit_file": strings.Replace(rustOriginal, "let mut sum = 0.0;",
+			"let mut sum: f64 = 0.0;", 1),
+		"insert_after": strings.Replace(rustOriginal, "pub fn area(radius: f64) -> f64 {\n",
+			"pub fn area(radius: f64) -> f64 {\n    // checked\n", 1),
+		"replace_lines": strings.Replace(rustOriginal, "    sum\n}", "    sum + 0.0\n}", 1),
+	}
+	args := func(tool string) []byte {
+		var m map[string]interface{}
+		switch tool {
+		case "edit_file":
+			m = map[string]interface{}{"path": "engine.rs",
+				"old_str": "let mut sum = 0.0;", "new_str": "let mut sum: f64 = 0.0;"}
+		case "insert_after":
+			m = map[string]interface{}{"path": "engine.rs", "line": 1,
+				"content": "    // checked"}
+		default:
+			m = map[string]interface{}{"path": "engine.rs",
+				"start_line": 13, "end_line": 13,
+				"expected_first_line": "    sum",
+				"expected_last_line":  "    sum",
+				"content":             "    sum + 0.0"}
+		}
+		b, _ := json.Marshal(m)
+		return b
+	}
+
+	for _, tool := range []string{"edit_file", "insert_after", "replace_lines"} {
+		tool := tool
+		t.Run(tool, func(t *testing.T) {
+			res, disk, st, events := runEditGate(t, tool, editGateCase{
+				original: rustOriginal, relPath: "engine.rs", argsFor: args})
+
+			if !res.Success {
+				t.Fatalf("the edit did not land: %s", res.Error)
+			}
+			if disk != edited[tool] {
+				t.Fatalf("bytes on disk:\n got %q\nwant %q", disk, edited[tool])
+			}
+			if res.MutationStatus != MutationApplied ||
+				res.ValidationKind != ValidationKindNone ||
+				res.ValidationStatus != ValidationNotApplicable {
+				t.Errorf("got %q/%q/%q, want applied/none/not_applicable",
+					res.MutationStatus, res.ValidationKind, res.ValidationStatus)
+			}
+			if res.ValidationStatus.Passed() {
+				t.Error("nothing was checked, so nothing may read as passed")
+			}
+			if !res.Classified() {
+				t.Error("result not fully classified")
+			}
+			if st.syntaxCount() != 0 {
+				t.Errorf("syntax-check requests = %d, want 0", st.syntaxCount())
+			}
+			st.mu.Lock()
+			embedded, structural := st.embedded, st.structural
+			st.mu.Unlock()
+			if embedded != 0 {
+				t.Errorf("embedded-script requests = %d, want 0", embedded)
+			}
+			if structural != 0 {
+				t.Errorf("structural requests = %d, want 0 (the gate is .py-scoped)", structural)
+			}
+			if res.V3Used || res.CandidatesTested != 0 || res.PhaseSolved != "" {
+				t.Errorf("V3 provenance on a non-pipeline edit: %+v", res)
+			}
+			for _, e := range events {
+				if e != "v3_progress" && e != "text" {
+					t.Errorf("unexpected SSE projection %q", e)
+				}
+			}
+		})
 	}
 }
