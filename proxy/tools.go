@@ -3152,6 +3152,16 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 	if cleaned, sanitized := sanitizeFileContent(path, chosen); sanitized {
 		log.Printf("[v3] sanitised candidate for %s", logPath(path))
 		chosen = cleaned
+		// Authorization is re-asked of the bytes as they now stand. The
+		// service earned its evidence on what it returned; stripping a
+		// wrapper produces different bytes, and evidence for the wrapped
+		// form describes nothing that would be delivered. Same rule the
+		// write path applies after its own sanitisation.
+		if ok, why := v3DeliveryAuthorized(v3Result, chosen); !ok {
+			log.Printf("[v3] sanitised candidate for %s is no longer authorized (%s) — keeping the caller's content",
+				logPath(path), why)
+			return content, V3EditMetadata{}, nil
+		}
 	}
 	// A candidate only counts as an improvement if it does not break what it
 	// was handed. V3 regenerates the whole file, so it can reintroduce a

@@ -1921,11 +1921,14 @@ func TestImproveContentV3KeepsCandidateWhenCallerAlreadyBroken(t *testing.T) {
 }
 
 // V3 output arrives wrapped in a markdown fence often enough that both callers
-// used to strip it after the fact. The strip now happens at the boundary, and
-// it MUST run before the regression check: a fenced candidate does not parse as
-// Python, so checking first would drop good candidates as "broken" and silently
-// disable V3 for every fenced response.
-func TestImproveContentV3SanitizesBeforeJudgingCandidate(t *testing.T) {
+// used to strip it after the fact. The strip happens at the boundary, before
+// the regression check, so a fenced candidate is never mistaken for a broken
+// one -- and stripping produces DIFFERENT bytes, which the service's evidence
+// does not describe. Authorization is re-asked of the stripped form and
+// withdrawn, so the caller's own content stands with no provenance. A fenced
+// candidate becomes deliverable again when the service hashes the form it
+// hands over.
+func TestImproveContentV3RevokesAFencedCandidateItMustRewrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "app.py")
 	modelEdit := "def index():\n    return 'ok'\n"
@@ -1943,13 +1946,26 @@ func TestImproveContentV3SanitizesBeforeJudgingCandidate(t *testing.T) {
 		t.Fatalf("improveContentWithV3 error: %v", err)
 	}
 	if strings.Contains(out, "```") || strings.Contains(out, "Looking at the task") {
-		t.Errorf("wrapper must be stripped at the boundary, got %q", out)
+		t.Errorf("the wrapper must never reach the caller, got %q", out)
 	}
-	if strings.TrimSpace(out) != strings.TrimSpace(code) {
-		t.Errorf("expected the unwrapped code, got %q", out)
+	if out != modelEdit {
+		t.Errorf("evidence for the fenced bytes cannot authorize the stripped "+
+			"ones, so the caller's content stands; got %q", out)
 	}
-	if !meta.Used {
-		t.Error("a fenced but otherwise clean candidate must still be adopted, not dropped as unparseable")
+	if meta.Used {
+		t.Error("provenance survived bytes the evidence does not describe")
+	}
+	// The same code, returned in the form it is delivered in, IS adopted --
+	// this is authorization against the final bytes, not a refusal of fences.
+	v3b := v3AndStructuralServer(t, code, "render_template")
+	defer v3b.Close()
+	outB, metaB, err := improveContentWithV3(path, modelEdit, writeGateCtx(t, v3b.URL, sb.URL, dir))
+	if err != nil {
+		t.Fatalf("improveContentWithV3 error: %v", err)
+	}
+	if outB != code || !metaB.Used {
+		t.Errorf("an unwrapped verified candidate must be adopted, got %q used=%v",
+			outB, metaB.Used)
 	}
 }
 

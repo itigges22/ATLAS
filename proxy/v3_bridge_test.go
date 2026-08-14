@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -559,5 +561,381 @@ func TestBothDeliveryPathsUseTheSharedAuthorization(t *testing.T) {
 		if strings.Contains(body, unsafe) {
 			t.Fatalf("delivery path still takes Code without authorization: %q", unsafe)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The edit path obeys the same authorization contract as write_file
+// ---------------------------------------------------------------------------
+//
+// Four production tools reach V3 through improveContentWithV3, three of them
+// via runEditPipeline. Calling the shared helper is not enough on its own: the
+// bytes that come back travel through sanitisation and two drift gates before
+// anything is written, and provenance has to travel with them or fall away.
+
+const editBaseline = "import math\n\n\ndef area(r):\n    if r < 0:\n        raise ValueError('neg')\n    return math.pi * r * r\n\n\ndef edge(r):\n    for _ in range(1):\n        pass\n    return 2 * math.pi * r\n"
+
+// editV3Server answers /v3/generate with `candidate`, and attaches whatever
+// envelope the case asks for. envelopeFor stamps the golden verified-winner
+// shape onto given bytes; a nil builder sends no envelope at all.
+func editV3Server(t *testing.T, candidate string, passed bool,
+	envelope map[string]interface{}) *httptest.Server {
+	return editV3ServerWithEdit(t, candidate, passed, envelope, "")
+}
+
+// editV3ServerWithEdit additionally answers /internal/structural_edit with
+// `edited`, which is how structural_edit composes the content the pipeline
+// then judges.
+func editV3ServerWithEdit(t *testing.T, candidate string, passed bool,
+	envelope map[string]interface{}, edited string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v3/generate":
+			w.Header().Set("Content-Type", "text/event-stream")
+			fl, _ := w.(http.Flusher)
+			body := map[string]interface{}{
+				"code": candidate, "passed": passed, "phase_solved": "phase1",
+				"candidates_tested": 3, "winning_score": 0.9,
+				"verification_evidence": []map[string]interface{}{
+					{"verifier": "sandbox", "status": "passed"}},
+			}
+			if envelope != nil {
+				body["evidence"] = envelope
+			}
+			payload, _ := json.Marshal(body)
+			for _, line := range []string{"event: result", "data: " + string(payload), "", "data: [DONE]", ""} {
+				fmt.Fprint(w, line+"\n")
+				if fl != nil {
+					fl.Flush()
+				}
+			}
+		case "/internal/structural_edit":
+			out, _ := json.Marshal(map[string]interface{}{
+				"success": true, "language": "python", "new_content": edited})
+			_, _ = w.Write(out)
+		case "/internal/structural_check":
+			_, _ = w.Write([]byte(`{"ok":true,"unresolved":[]}`))
+		case "/internal/cyclomatic_complexity":
+			// Complex enough that the edit warrants the pipeline; without it
+			// runEditPipeline returns the caller's edit untouched and the
+			// authorization boundary is never reached.
+			_, _ = w.Write([]byte(`{"ok":true,"cyclomatic_complexity":12}`))
+		default:
+			if strings.HasSuffix(r.URL.Path, "/syntax-check") {
+				_, _ = w.Write([]byte(`{"valid":true}`))
+				return
+			}
+			http.Error(w, "unexpected "+r.URL.Path, http.StatusTeapot)
+		}
+	}))
+}
+
+// The shared boundary, driven through improveContentWithV3 itself: every
+// envelope state, and what the caller is handed for it.
+func TestEditPathDeliversOnlyAuthorizedCandidates(t *testing.T) {
+	candidate := "import math\n\n\ndef area(r):\n    if r < 0:\n        raise ValueError('neg')\n    return math.pi * r ** 2\n\n\ndef edge(r):\n    for _ in range(1):\n        pass\n    return math.tau * r\n"
+
+	for _, c := range []struct {
+		name      string
+		passed    bool
+		omit      bool
+		mutate    func(map[string]interface{})
+		delivered bool
+	}{
+		{name: "verified winner with an exact hash", passed: true, delivered: true},
+		// The envelope is authoritative in both directions.
+		{name: "not passed, verified winner", passed: false, delivered: true},
+		{name: "passed, no envelope", passed: true, omit: true},
+		{name: "passed, unknown wire version", passed: true, mutate: func(e map[string]interface{}) {
+			e["wire_version"] = "99.0.0"
+		}},
+		{name: "passed, malformed identity", passed: true, mutate: func(e map[string]interface{}) {
+			e["identity"].(map[string]interface{})["evaluation_context_hash"] = ""
+		}},
+		{name: "passed, best not closure eligible", passed: true, mutate: func(e map[string]interface{}) {
+			e["evaluation"].(map[string]interface{})["closure_eligible"] = false
+			e["selection"].(map[string]interface{})["status"] = "best_not_closure_eligible"
+		}},
+		{name: "passed, tied", passed: true, mutate: func(e map[string]interface{}) {
+			e["selection"].(map[string]interface{})["status"] = "tied"
+		}},
+		{name: "passed, incomparable", passed: true, mutate: func(e map[string]interface{}) {
+			e["selection"].(map[string]interface{})["status"] = "incomparable"
+		}},
+		{name: "passed, ineligible", passed: true, mutate: func(e map[string]interface{}) {
+			e["selection"].(map[string]interface{})["status"] = "ineligible"
+		}},
+		{name: "passed, no verified winner", passed: true, mutate: func(e map[string]interface{}) {
+			e["selection"].(map[string]interface{})["status"] = "no_verified_winner"
+		}},
+		{name: "passed, closure ineligible", passed: true, mutate: func(e map[string]interface{}) {
+			e["evaluation"].(map[string]interface{})["closure_eligible"] = false
+		}},
+		{name: "passed, hash mismatch", passed: true, mutate: func(e map[string]interface{}) {
+			e["identity"].(map[string]interface{})["candidate_content_hash"] =
+				"1111111111111111111111111111111111111111111111111111111111111111"
+		}},
+	} {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "app.py")
+			var env map[string]interface{}
+			if !c.omit {
+				env = envelopeFor(t, candidate, c.mutate)
+			}
+			srv := editV3Server(t, candidate, c.passed, env)
+			defer srv.Close()
+			sb := fakeSyntaxSandbox(t, "")
+			defer sb.Close()
+			ctx := writeGateCtx(t, srv.URL, sb.URL, dir)
+
+			out, meta, err := improveContentWithV3(path, editBaseline, ctx)
+			if err != nil {
+				t.Fatalf("improveContentWithV3: %v", err)
+			}
+			if c.delivered {
+				if out != candidate {
+					t.Fatalf("authorized candidate was not delivered: %q", out)
+				}
+				if !meta.Used || meta.PhaseSolved != "phase1" {
+					t.Errorf("authorized delivery lost its provenance: %+v", meta)
+				}
+				return
+			}
+			if out != editBaseline {
+				t.Fatalf("unauthorized bytes were delivered: %q", out)
+			}
+			if meta.Used || meta.CandidatesTested != 0 || meta.WinningScore != 0 ||
+				meta.PhaseSolved != "" || len(meta.VerificationEvidence) != 0 {
+				t.Errorf("unauthorized delivery carries provenance: %+v", meta)
+			}
+		})
+	}
+}
+
+// Sanitisation rewrites the candidate AFTER the service earned its evidence,
+// exactly as on the write path. Evidence for the fenced bytes does not
+// describe the unwrapped ones, so the caller's own edit stands and no
+// provenance is attached.
+func TestEditPathRevokesWhenSanitisationChangesTheBytes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.py")
+	inner := "import math\n\n\ndef area(r):\n    if r < 0:\n        raise ValueError('neg')\n    return math.pi * r ** 2\n\n\ndef edge(r):\n    for _ in range(1):\n        pass\n    return math.tau * r\n"
+	fenced := "Looking at the task, I need to update the handler.\n\n```python\n" + inner + "```\n"
+
+	// The service verified what it returned: the FENCED bytes.
+	srv := editV3Server(t, fenced, true, envelopeFor(t, fenced, nil))
+	defer srv.Close()
+	sb := fakeSyntaxSandbox(t, "")
+	defer sb.Close()
+	ctx := writeGateCtx(t, srv.URL, sb.URL, dir)
+
+	out, meta, err := improveContentWithV3(path, editBaseline, ctx)
+	if err != nil {
+		t.Fatalf("improveContentWithV3: %v", err)
+	}
+	if out != editBaseline {
+		t.Fatalf("sanitised bytes no evidence describes were delivered: %q", out)
+	}
+	if meta.Used {
+		t.Error("provenance survived a hash that no longer matches the bytes")
+	}
+	// The same bytes, returned unwrapped and verified as such, ARE delivered:
+	// this is authorization against what will be written, not a blanket
+	// refusal of anything that was ever fenced. A fenced candidate stays
+	// undeliverable until the service hashes the form it hands over -- the
+	// same consequence the write path already carries.
+	srv2 := editV3Server(t, inner, true, envelopeFor(t, inner, nil))
+	defer srv2.Close()
+	ctx2 := writeGateCtx(t, srv2.URL, sb.URL, dir)
+	out2, meta2, err := improveContentWithV3(path, editBaseline, ctx2)
+	if err != nil {
+		t.Fatalf("improveContentWithV3: %v", err)
+	}
+	if out2 != inner || !meta2.Used {
+		t.Errorf("evidence for the delivered form must authorize it, got %q used=%v",
+			out2, meta2.Used)
+	}
+}
+
+// Every production edit tool, driven through its real handler. Each one has to
+// prove it cannot bypass the shared boundary: an unauthorized candidate must
+// leave the caller's own edit on disk with no provenance, and an authorized one
+// must arrive intact.
+func TestEveryEditToolObeysTheAuthorizationBoundary(t *testing.T) {
+	// The file every tool edits, and the candidate V3 offers instead.
+	const original = "import math\n\n\ndef area(r):\n    if r < 0:\n        raise ValueError('neg')\n    return math.pi * r * r\n\n\ndef edge(r):\n    for _ in range(1):\n        pass\n    return 2 * math.pi * r\n"
+
+	for _, tool := range []struct {
+		name string
+		args func(edited string) map[string]interface{}
+		// the bytes the tool itself produces, before V3 is consulted
+		edited string
+		// what V3 offers instead: a variant of the SAME span, so the drift
+		// gate has nothing to object to and authorization is what decides.
+		candidate string
+	}{
+		{name: "edit_file",
+			edited:    strings.Replace(original, "raise ValueError('neg')", "raise ValueError('negative')", 1),
+			candidate: strings.Replace(original, "raise ValueError('neg')", "raise ValueError('negative radius')", 1),
+			args: func(string) map[string]interface{} {
+				return map[string]interface{}{"path": "app.py",
+					"old_str": "raise ValueError('neg')",
+					"new_str": "raise ValueError('negative')"}
+			}},
+		{name: "insert_after",
+			edited:    strings.Replace(original, "import math\n", "import math\nimport sys\n", 1),
+			candidate: strings.Replace(original, "import math\n", "import math\nimport sys  # v3\n", 1),
+			args: func(string) map[string]interface{} {
+				return map[string]interface{}{"path": "app.py", "line": 1,
+					"content": "import sys"}
+			}},
+		{name: "replace_lines",
+			edited:    strings.Replace(original, "    return math.pi * r * r", "    return math.pi * r ** 2", 1),
+			candidate: strings.Replace(original, "    return math.pi * r * r", "    return math.pi * pow(r, 2)", 1),
+			args: func(string) map[string]interface{} {
+				return map[string]interface{}{"path": "app.py",
+					"start_line": 7, "end_line": 7,
+					"expected_first_line": "    return math.pi * r * r",
+					"expected_last_line":  "    return math.pi * r * r",
+					"content":             "    return math.pi * r ** 2"}
+			}},
+		{name: "structural_edit",
+			edited: strings.Replace(original,
+				"def edge(r):\n    for _ in range(1):\n        pass\n    return 2 * math.pi * r\n",
+				"def edge(r):\n    for _ in range(1):\n        pass\n    return math.tau * r\n", 1),
+			candidate: strings.Replace(original,
+				"def edge(r):\n    for _ in range(1):\n        pass\n    return 2 * math.pi * r\n",
+				"def edge(r):\n    for _ in range(1):\n        pass\n    return 2.0 * math.pi * r\n", 1),
+			args: func(string) map[string]interface{} {
+				return map[string]interface{}{"path": "app.py",
+					"selector": "function:edge",
+					"content":  "def edge(r):\n    for _ in range(1):\n        pass\n    return math.tau * r\n"}
+			}},
+	} {
+		tool := tool
+		candidate := tool.candidate
+
+		for _, mode := range []struct {
+			name       string
+			authorized bool
+		}{{"authorized candidate", true}, {"unauthorized candidate", false}} {
+			mode := mode
+			t.Run(tool.name+"/"+mode.name, func(t *testing.T) {
+				dir := t.TempDir()
+				path := filepath.Join(dir, "app.py")
+				if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				var env map[string]interface{}
+				if mode.authorized {
+					env = envelopeFor(t, candidate, nil)
+				} else {
+					// passed=true, and an envelope that authorizes nothing.
+					env = envelopeFor(t, candidate, func(e map[string]interface{}) {
+						e["evaluation"].(map[string]interface{})["closure_eligible"] = false
+						e["selection"].(map[string]interface{})["status"] = "best_not_closure_eligible"
+					})
+				}
+				srv := editV3ServerWithEdit(t, candidate, true, env, tool.edited)
+				defer srv.Close()
+
+				ctx := writeGateCtx(t, srv.URL, srv.URL, dir)
+				ctx.PermissionMode = PermissionYolo
+				ctx.StreamFn = func(string, interface{}) {}
+				ctx.SessionWrites["app.py"] = true
+				ctx.RecordFileRead(path, original)
+
+				args, _ := json.Marshal(tool.args(tool.edited))
+				res := executeToolCall(tool.name, args, ctx)
+				if !res.Success {
+					t.Fatalf("%s failed: %s", tool.name, res.Error)
+				}
+				onDisk, _ := os.ReadFile(path)
+
+				if mode.authorized {
+					if string(onDisk) != candidate {
+						t.Fatalf("authorized candidate did not land:\n got %q\nwant %q",
+							onDisk, candidate)
+					}
+					if !res.V3Used || res.PhaseSolved != "phase1" {
+						t.Errorf("authorized delivery lost its provenance: %+v", res)
+					}
+					return
+				}
+				if string(onDisk) != tool.edited {
+					t.Fatalf("unauthorized bytes reached disk:\n got %q\nwant the caller's edit %q",
+						onDisk, tool.edited)
+				}
+				if res.V3Used || res.CandidatesTested != 0 || res.WinningScore != 0 ||
+					res.PhaseSolved != "" || len(res.VerificationEvidence) != 0 {
+					t.Errorf("baseline edit carries V3 provenance: %+v", res)
+				}
+				// The agent's "V3 verified this edit" nudge keys off exactly
+				// these fields, so an empty set is what keeps it quiet.
+				if res.V3Used && verifiedPhase(res.PhaseSolved) {
+					t.Error("an unauthorized edit would fire the V3-verified nudge")
+				}
+			})
+		}
+	}
+}
+
+// The nudge fires on V3Used plus a verified phase, and nothing else. A
+// baseline fallback must not satisfy it.
+func TestTheV3VerifiedNudgeFollowsAuthorization(t *testing.T) {
+	authorized := &ToolResult{Success: true, V3Used: true, PhaseSolved: "phase1"}
+	if !(authorized.Success && authorized.V3Used && verifiedPhase(authorized.PhaseSolved)) {
+		t.Error("an authorized delivery must be able to fire the nudge")
+	}
+	for _, res := range []*ToolResult{
+		{Success: true},
+		{Success: true, PhaseSolved: "phase1"},
+		{Success: true, V3Used: true, PhaseSolved: ""},
+	} {
+		if res.Success && res.V3Used && verifiedPhase(res.PhaseSolved) {
+			t.Errorf("a delivery without provenance would fire the nudge: %+v", res)
+		}
+	}
+}
+
+// Structural sentinel: the edit path authorizes through the one gate, and
+// never from the legacy fields.
+func TestEditPathAuthorizesOnlyThroughTheSharedGate(t *testing.T) {
+	src, err := os.ReadFile("tools.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	improve := body[strings.Index(body, "func improveContentWithV3("):]
+	improve = improve[:strings.Index(improve, "\n// findActualString")]
+	pipeline := body[strings.Index(body, "func runEditPipeline("):]
+	pipeline = pipeline[:strings.Index(pipeline, "\n// attachV3")]
+
+	for name, fn := range map[string]string{
+		"improveContentWithV3": improve, "runEditPipeline": pipeline,
+	} {
+		for _, banned := range []string{"v3Result.Passed", "result.Passed",
+			".PhaseSolved != \"\"", "v3Result.WinningScore >", "VerificationEvidence) >"} {
+			if strings.Contains(fn, banned) {
+				t.Errorf("%s authorizes from a legacy field: %s", name, banned)
+			}
+		}
+	}
+	// One positive gate, and the post-sanitisation recheck that keeps it
+	// honest. Nothing else may hand back a candidate.
+	if strings.Count(improve, "authorizedV3Replacement(") != 1 {
+		t.Errorf("improveContentWithV3 must authorize exactly once, found %d",
+			strings.Count(improve, "authorizedV3Replacement("))
+	}
+	if !strings.Contains(improve, "v3DeliveryAuthorized(v3Result, chosen)") {
+		t.Error("improveContentWithV3 does not re-authorize the sanitised bytes")
+	}
+	// And the callers never build provenance of their own.
+	if strings.Contains(pipeline, "V3EditMetadata{\n\t\tUsed: true") ||
+		strings.Contains(pipeline, "Used:                 true") {
+		t.Error("runEditPipeline manufactures provenance instead of carrying it")
 	}
 }
