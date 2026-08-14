@@ -215,6 +215,10 @@ class V3Handler(BaseHTTPRequestHandler):
                 file_path=file_path,  # PC-048: language-aware smoke check
                 build_command=build_command,
                 working_dir=working_dir or "/workspace",
+                # The incumbent's exact request bytes, before
+                # _build_problem_from_request wrapped them in prose. Read
+                # only by the diagnostic capture.
+                baseline_code=baseline_code,
             )
         except adapters.ClientDisconnected as e:
             print(f"[generate] pipeline aborted: {e}", flush=True)

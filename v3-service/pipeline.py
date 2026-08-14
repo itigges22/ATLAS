@@ -351,6 +351,49 @@ class _PoolCapture:
         }
         self.write(payload)
 
+    def note_incumbent(self, *, code: str, record, adapter: str,
+                       evaluation: str = "evaluated") -> None:
+        """The artifact V3 was asked to improve on, measured the same way.
+
+        It lives in a SHADOW pool of its own. The live pool, the lens
+        choice, the contract selection, the returned code, the envelope and
+        Go's authorization never see it: this exists to answer "was the
+        selected candidate better than the thing it would replace", which
+        selection cannot answer today because the incumbent has never
+        carried a record.
+        """
+        if not self.enabled or not code:
+            return
+        raw = code.encode("utf-8")
+        self.write({
+            "type": "incumbent_observation",
+            "session_id": self._session_id,
+            "role": "incumbent_baseline",
+            "pool": "shadow_comparison",
+            "code_b64": base64.b64encode(raw).decode("ascii"),
+            "code_sha256": hashlib.sha256(raw).hexdigest(),
+            "code_bytes": len(raw),
+            "adapter_id": adapter,
+            "contract_record": record,
+            "evaluation": evaluation,
+            "influences_live_selection": False,
+        })
+
+    def note_consensus(self, record) -> None:
+        """Per-input clusters with their exact members.
+
+        Agreement counts alone cannot say WHICH candidates agreed, so a
+        ranking could never be checked against an independent verdict. The
+        generated expected outputs are not part of this and are not read to
+        build it.
+        """
+        if not self.enabled or not record:
+            return
+        payload = dict(record)
+        payload["type"] = "consensus_clusters"
+        payload["session_id"] = self._session_id
+        self.write(payload)
+
     def note_pool(self, *, phase: str, pool, lens_index=None,
                   evidence_index=None, verified_index=None,
                   status: str = "", reason: str = "", tied: int = 0,
@@ -1058,15 +1101,16 @@ def _consensus_record(candidates, test_cases, sandbox, task_input_file=""):
     per_case = []
     outputs = {}
     for i, tc in enumerate(test_cases):
-        clusters, crashed, silent = {}, [], []
+        clusters, crashed, timed_out, silent = {}, [], [], []
+        raw_input = getattr(tc, "input_str", "") or ""
         for c in candidates:
             digest = contract.content_hash(c.get("code") or "")
             try:
                 probe_code, probe_files = _make_output_probe(
                     c["code"], tc, task_input_file)
-                ok, out, _err = sandbox(probe_code, files=probe_files)
+                ok, out, err = sandbox(probe_code, files=probe_files)
             except Exception:                          # noqa: BLE001
-                ok, out = False, ""
+                ok, out, err = False, "", "probe error"
             marker = ""
             if ok and _CONSENSUS_MARK in (out or ""):
                 marker = out.split(_CONSENSUS_MARK)[-1].strip()
@@ -1074,17 +1118,29 @@ def _consensus_record(candidates, test_cases, sandbox, task_input_file=""):
                 crashed.append(digest)
                 marker = ""
             elif not marker:
-                silent.append(digest)
+                (timed_out if _CAPTURE_TIMEOUT.search(err or "") else
+                 silent).append(digest)
             else:
                 clusters.setdefault(marker, []).append(digest)
             outputs.setdefault(digest, []).append(marker)
+        # Cluster ids and output hashes, so a ranking can be checked against
+        # an independent verdict afterwards. Agreement counts alone cannot
+        # say WHICH candidates agreed.
+        ordered = sorted(clusters.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+        rows = [{"cluster_id": f"c{i}-{n}",
+                 "output_sha256": contract.content_hash(k),
+                 "members": v, "size": len(v)}
+                for n, (k, v) in enumerate(ordered)]
+        top = max((r["size"] for r in rows), default=0)
+        winners = [r["cluster_id"] for r in rows if r["size"] == top and top]
         per_case.append({
             "input_index": i,
-            "input": (getattr(tc, "input_str", "") or "")[:400],
-            "clusters": [{"output": k, "members": v, "size": len(v)}
-                         for k, v in sorted(clusters.items(),
-                                            key=lambda kv: -len(kv[1]))],
-            "crashed": crashed, "no_output": silent,
+            "input_sha256": contract.content_hash(raw_input),
+            "input": raw_input[:400],
+            "clusters": rows,
+            "winning_cluster_id": winners[0] if len(winners) == 1 else None,
+            "tied_cluster_ids": winners if len(winners) > 1 else [],
+            "crashed": crashed, "timed_out": timed_out, "no_output": silent,
         })
     # A candidate ranks only if it answered every input: partial validity is
     # not agreement material.
@@ -1229,7 +1285,8 @@ class V3PipelineService:
     def run(self, problem: str, task_id: str = "cli",
             progress_callback=None, files: Dict[str, str] = None,
             file_path: str = "", build_command: str = "",
-            working_dir: str = "/workspace") -> Dict[str, Any]:
+            working_dir: str = "/workspace",
+            baseline_code: str = "") -> Dict[str, Any]:
         """Run the full V3 pipeline on a coding problem.
 
         Args:
@@ -1243,6 +1300,10 @@ class V3PipelineService:
             build_command: Optional project build command to run against an
                 ephemeral candidate overlay after syntax/self-tests pass.
             working_dir: Container workspace root used by the sandbox overlay.
+            baseline_code: The incumbent's EXACT bytes, as the request sent
+                them, before prompt construction. Read only by the
+                diagnostic pool capture; with capture off nothing touches
+                it, and it never enters a live list or decision.
 
         Writes one pipeline-summary telemetry line per task (fail-soft;
         see _write_pipeline_summary) around the actual pipeline body.
@@ -1260,7 +1321,8 @@ class V3PipelineService:
             result = self._run_impl(
                 problem, task_id=task_id, progress_callback=progress_callback,
                 files=files, file_path=file_path, build_command=build_command,
-                working_dir=working_dir, _capture=capture)
+                working_dir=working_dir, baseline_code=baseline_code,
+                _capture=capture)
             _ensure_delivered_evidence(result, file_path=file_path, problem=problem)
             return result
         except Exception as e:
@@ -1317,7 +1379,7 @@ class V3PipelineService:
     def _run_impl(self, problem: str, task_id: str = "cli",
                   progress_callback=None, files: Dict[str, str] = None,
                   file_path: str = "", build_command: str = "",
-                  working_dir: str = "/workspace",
+                  working_dir: str = "/workspace", baseline_code: str = "",
                   _capture: Optional["_PoolCapture"] = None) -> Dict[str, Any]:
         """The pipeline body — see run() for the argument contract.
 
@@ -1666,6 +1728,26 @@ class V3PipelineService:
         # for is a fact of the run, not something to re-derive afterwards.
         result["has_oracle"] = _has_oracle
         _task = _task_identity(file_path, problem)
+        # The incumbent, measured the same way and kept apart. Only when the
+        # diagnostic sink is on: with capture off this is not built, not
+        # executed and not written, so default behaviour is unchanged. It
+        # enters no live list and no live decision.
+        if capture.enabled and baseline_code:
+            try:
+                _inc = _evaluate_candidate(
+                    file_path, baseline_code,
+                    scoring.smoke_compile_check(
+                        baseline_code, sandbox, language=smoke_language)[0],
+                    _has_oracle, emit, sandbox, task=_task)
+                capture.note_incumbent(code=baseline_code, record=_inc,
+                                       adapter=_inc["adapter_id"])
+            except Exception as _exc:                  # noqa: BLE001
+                # An incumbent that cannot be evaluated is recorded as
+                # exactly that. Never synthesise a result for it.
+                capture.note_incumbent(
+                    code=baseline_code, record=None, adapter="",
+                    evaluation=f"unevaluated: {str(_exc)[:120]}")
+
         probe_result = _evaluate_candidate(
             file_path, probe_code, probe_passed, _has_oracle, emit, sandbox,
             task=_task)
@@ -2081,6 +2163,7 @@ class V3PipelineService:
                     result["consensus"] = _consensus_record(
                         passing, self_tests.test_cases, sandbox,
                         task_input_file)
+                    capture.note_consensus(result["consensus"])
                     emit("consensus_ranking",
                          f"{result['consensus']['agreement']}/{len(passing)} "
                          f"agree on every input — ranking evidence only",
@@ -2627,6 +2710,16 @@ def _build_problem_from_request(
     user_message: str = "",
 ) -> str:
     """Build a problem description for the V3 pipeline from a generate request.
+
+    This is the ONLY place `baseline_code` is used. The incumbent becomes
+    prose in the prompt; it receives no adapter, no contract record, no
+    execution, no consensus probe, no lens score, and no place in `passing`
+    or the selection pool. Pool index 0 is the phase-zero probe candidate --
+    a fresh generation -- not the incumbent, whatever the "candidate #0"
+    comments elsewhere say. So a selection that concludes
+    `best_not_closure_eligible` has ranked the V3-generated candidates
+    against each other and has said nothing about whether the winner beats
+    the artifact it would replace.
 
     The user's own request leads, when the caller sends one. Without it the
     pipeline saw only "Create the file X", the project context and the

@@ -117,6 +117,41 @@ those exact bytes and check the declared expectations independently — so the
 two languages agree with the contract rather than with each other, and adding a
 case on the Python side automatically binds the Go side to it.
 
+## What selection currently compares
+
+The candidate pool holds artifacts **V3 generated**. It does not hold the
+one it would replace.
+
+`baseline_code` — the caller's own content, the incumbent — reaches the
+service and is appended to the problem statement as a "Reference
+implementation" under an instruction to improve on it. That is its only
+use. It receives no adapter, no contract record, no sandbox execution, no
+consensus probe, no lens score, no place in `passing`, and no place in the
+selection pool. Two comments still call it "candidate #0"
+(`proxy/tools.go`, `v3-service/main.py`); the pool's index 0 is the
+**phase-zero probe candidate**, a fresh generation from phase 0, not the
+incumbent.
+
+Three names, three different artifacts:
+
+| name | what it is |
+| --- | --- |
+| incumbent baseline | the caller's bytes, `baseline_code`; never a pool member |
+| phase-zero probe candidate | pool index 0, generated in phase 0 |
+| generated alternatives | PlanSearch / DivSampling members |
+
+So **`best_not_closure_eligible` means "best among the V3-generated
+candidates"** — nothing more. It carries no claim that the winner beats the
+incumbent, because the incumbent was never measured. The tests that assert
+"candidate zero remains selectable" pin the phase-zero probe candidate's
+place in the generated pool; none of them compares the incumbent, and
+`test_candidate_zero_is_preserved_and_can_win` ranks two synthetic records
+rather than a real baseline.
+
+A replacement-eligibility policy therefore cannot be built on today's
+selection: it would need the incumbent to carry a comparable record, or an
+equally rigorous comparison outside the pipeline.
+
 ## Benchmark-only pool capture
 
 Verification hands the pipeline one bit. A candidate that passed 9 of 10

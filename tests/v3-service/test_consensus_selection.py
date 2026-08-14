@@ -14,6 +14,7 @@ generated tests as an oracle. It runs candidates on the generated INPUTS and
 clusters them by agreement. These tests pin that behaviour.
 """
 
+import json
 import subprocess
 import sys
 import tempfile
@@ -377,3 +378,62 @@ def test_consensus_is_off_unless_the_evidence_mode_turns_probing_on():
     assert pipeline._probing_enabled(
         pipeline._selection_mode({"ATLAS_EVIDENCE_MODE": "enforce"})) is True
     assert pipeline._selection_mode({}) == pipeline.MODE_OFF
+
+
+# --- clusters that can be attributed after the fact ------------------------
+#
+# Agreement counts cannot say WHICH candidates agreed, so a ranking could
+# never be checked against an independent verdict. These pin the mapping
+# from exact candidate hashes to exact output hashes, and pin that a tie
+# stays a tie rather than inventing a winner.
+
+
+def _hash(code):
+    import contract as _contract
+    return _contract.content_hash(code)
+
+
+def test_clusters_map_candidate_hashes_to_output_hashes():
+    case = type("TC", (), {"input_str": "1 2 3", "expected_output": "x"})()
+    rec = pipeline._consensus_record(
+        _pool(CONS_A, CONS_B, CONS_ODD), [case], _sandbox, "input.txt")
+    import contract as _contract
+    row = rec["cases"][0]
+    assert row["input_sha256"] == _contract.content_hash("1 2 3")
+    winner = next(c for c in row["clusters"]
+                  if c["cluster_id"] == row["winning_cluster_id"])
+    assert sorted(winner["members"]) == sorted([_hash(CONS_A), _hash(CONS_B)])
+    assert winner["output_sha256"] == _contract.content_hash("'3'")
+    odd = next(c for c in row["clusters"] if _hash(CONS_ODD) in c["members"])
+    assert odd["output_sha256"] != winner["output_sha256"]
+    assert odd["size"] == 1
+
+
+def test_the_winning_cluster_is_identified_and_a_tie_is_not():
+    case = type("TC", (), {"input_str": "1 2 3", "expected_output": "x"})()
+    row = pipeline._consensus_record(
+        _pool(CONS_A, CONS_ODD), [case], _sandbox, "input.txt")["cases"][0]
+    assert row["winning_cluster_id"] is None, "a tie must not name a winner"
+    assert len(row["tied_cluster_ids"]) == 2
+    assert all(c["size"] == 1 for c in row["clusters"])
+
+
+def test_crashes_and_timeouts_are_members_of_neither_cluster():
+    case = type("TC", (), {"input_str": "1 2 3", "expected_output": "x"})()
+    row = pipeline._consensus_record(
+        _pool(CONS_A, CONS_B, CONS_CRASH), [case], _sandbox,
+        "input.txt")["cases"][0]
+    assert _hash(CONS_CRASH) in row["crashed"]
+    assert all(_hash(CONS_CRASH) not in c["members"] for c in row["clusters"])
+    winner = next(c for c in row["clusters"]
+                  if c["cluster_id"] == row["winning_cluster_id"])
+    assert sorted(winner["members"]) == sorted([_hash(CONS_A), _hash(CONS_B)])
+
+
+def test_the_generated_key_is_absent_from_every_retained_cluster_field():
+    case = type("TC", (), {"input_str": "1 2 3",
+                           "expected_output": "THIS KEY IS WRONG"})()
+    rec = pipeline._consensus_record(
+        _pool(CONS_A, CONS_B), [case], _sandbox, "input.txt")
+    assert "THIS KEY IS WRONG" not in json.dumps(rec)
+    assert rec["reads_expected_output"] is False

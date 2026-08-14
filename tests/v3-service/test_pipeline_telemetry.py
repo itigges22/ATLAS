@@ -550,3 +550,183 @@ def test_candidate_bytes_reach_no_serialiser_or_emitter():
         text = (v3dir / module).read_text()
         assert "code_b64" not in text, module
         assert "ATLAS_V3_CAPTURE_POOL" not in text, module
+
+
+# =====================================================================
+# The incumbent, measured — in a shadow pool that decides nothing.
+#
+# `baseline_code` is the artifact V3 was asked to improve on. It reaches
+# the service as prose in the problem statement and nothing else: no
+# adapter, no contract record, no execution, no place in `passing` or the
+# selection pool. So a selection that concludes best_not_closure_eligible
+# has ranked the generated candidates against each other and said nothing
+# about whether the winner beats what it would replace. These record the
+# incumbent through the SAME adapter->contract path, keep it in a separate
+# pool, and prove the live path is byte-identical either way.
+# =====================================================================
+
+INCUMBENT = "def solve(x):\n    return x + 99"
+
+
+def _of(records, kind):
+    return [r for r in records if r.get("type") == kind]
+
+
+def _run_with_incumbent(monkeypatch, tmp_path, *, capture=True,
+                        baseline=INCUMBENT, task_id="inc"):
+    sink = tmp_path / "pool.jsonl"
+    if capture:
+        monkeypatch.setenv(v3pipeline.CAPTURE_ENV, str(sink))
+    else:
+        monkeypatch.delenv(v3pipeline.CAPTURE_ENV, raising=False)
+    service = _capture_service(monkeypatch)
+    result = service.run("add one", task_id=task_id,
+                         file_path="/workspace/e2e/solve.py",
+                         baseline_code=baseline)
+    return result, sink
+
+
+def test_the_incumbent_is_evaluated_exactly_once(monkeypatch, tmp_path):
+    """One canonical evaluation, not one per candidate and not zero."""
+    calls = []
+    real = v3pipeline._evaluate_candidate
+    monkeypatch.setattr(v3pipeline, "_evaluate_candidate",
+                        lambda fp, code, *a, **k: (calls.append(code),
+                                                   real(fp, code, *a, **k))[1])
+    _, sink = _run_with_incumbent(monkeypatch, tmp_path)
+    assert calls.count(INCUMBENT) == 1, calls.count(INCUMBENT)
+
+    observations = _of(_capture_records(sink), "incumbent_observation")
+    assert len(observations) == 1
+
+
+def test_the_incumbent_record_describes_the_exact_baseline_bytes(
+        monkeypatch, tmp_path):
+    _, sink = _run_with_incumbent(monkeypatch, tmp_path)
+    obs = _of(_capture_records(sink), "incumbent_observation")[0]
+    raw = base64.b64decode(obs["code_b64"])
+    assert raw.decode() == INCUMBENT
+    assert obs["code_sha256"] == hashlib.sha256(raw).hexdigest()
+    assert obs["code_bytes"] == len(raw)
+    assert obs["contract_record"]["candidate_content_hash"] == obs["code_sha256"]
+    assert obs["role"] == "incumbent_baseline"
+    assert obs["pool"] == "shadow_comparison"
+    assert obs["influences_live_selection"] is False
+
+
+def test_the_incumbent_shares_the_task_identity_of_the_candidates(
+        monkeypatch, tmp_path):
+    """Same contract, artifact scope and evaluation context — otherwise the
+    two records are incomparable and the comparison is meaningless."""
+    _, sink = _run_with_incumbent(monkeypatch, tmp_path)
+    records = _capture_records(sink)
+    obs = _of(records, "incumbent_observation")[0]["contract_record"]
+    cand = next(r["contract_record"] for r in _of(records, "candidate_evaluation")
+                if r.get("contract_record"))
+    for field in ("contract_id", "contract_version", "artifact_scope",
+                  "evaluation_context_hash"):
+        assert obs[field] == cand[field], field
+    assert obs["candidate_content_hash"] != cand["candidate_content_hash"]
+
+
+def test_the_incumbent_never_enters_a_live_list_or_decision(
+        monkeypatch, tmp_path):
+    result, sink = _run_with_incumbent(monkeypatch, tmp_path)
+    records = _capture_records(sink)
+    obs = _of(records, "incumbent_observation")[0]
+
+    # Not the returned code, not a pool member, not the selection.
+    assert result["code"] != INCUMBENT
+    summary = _of(records, "selection_summary")[0]
+    assert obs["code_sha256"] not in summary["pool"]
+    assert summary["service_returned_candidate_hash"] != obs["code_sha256"]
+    assert summary["verified_index"] is None
+    # Not in the candidate pool capture either: it has its own record type.
+    assert all(r["code_sha256"] != obs["code_sha256"]
+               for r in _of(records, "candidate_evaluation"))
+    # And nothing about it reaches the envelope the proxy reads.
+    assert result.get("evidence_record", {}).get(
+        "candidate_content_hash") != obs["code_sha256"]
+
+
+def test_capture_off_leaves_the_live_path_byte_identical(monkeypatch, tmp_path):
+    """Default behaviour must not depend on the diagnostic being on."""
+    off, _ = _run_with_incumbent(monkeypatch, tmp_path, capture=False,
+                                 task_id="inc-cmp")
+    on, sink = _run_with_incumbent(monkeypatch, tmp_path, task_id="inc-cmp")
+
+    def comparable(r):
+        return {k: v for k, v in r.items()
+                if k not in ("total_time_ms", "events", "consensus")}
+
+    assert comparable(off) == comparable(on)
+    assert [(e.get("stage"), e.get("detail")) for e in off["events"]] == \
+        [(e.get("stage"), e.get("detail")) for e in on["events"]]
+
+
+def test_capture_off_evaluates_no_incumbent_at_all(monkeypatch, tmp_path):
+    """Off means the work is not done, not that its output is discarded."""
+    calls = []
+    real = v3pipeline._evaluate_candidate
+    monkeypatch.setattr(v3pipeline, "_evaluate_candidate",
+                        lambda fp, code, *a, **k: (calls.append(code),
+                                                   real(fp, code, *a, **k))[1])
+    _run_with_incumbent(monkeypatch, tmp_path, capture=False)
+    assert INCUMBENT not in calls
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_an_unevaluable_incumbent_is_recorded_truthfully(monkeypatch, tmp_path):
+    """Never synthesise a result for it."""
+    real = v3pipeline._evaluate_candidate
+
+    def _boom_on_incumbent(fp, code, *a, **k):
+        if code == INCUMBENT:
+            raise RuntimeError("adapter unavailable")
+        return real(fp, code, *a, **k)
+
+    monkeypatch.setattr(v3pipeline, "_evaluate_candidate", _boom_on_incumbent)
+    sink = tmp_path / "pool.jsonl"
+    monkeypatch.setenv(v3pipeline.CAPTURE_ENV, str(sink))
+    service = _capture_service(monkeypatch)
+    result = service.run("add one", task_id="inc-broken",
+                         file_path="/workspace/e2e/solve.py",
+                         baseline_code=INCUMBENT)
+    # The run itself is unaffected: an incumbent that cannot be measured is
+    # a gap in the diagnostic, never a change to the pipeline.
+    assert result["phase_solved"] != "none" or result["code"] is not None
+    obs = _of(_capture_records(sink), "incumbent_observation")
+    assert len(obs) == 1
+    assert obs[0]["contract_record"] is None
+    assert obs[0]["evaluation"].startswith("unevaluated:")
+
+
+def test_the_three_roles_stay_distinct(monkeypatch, tmp_path):
+    """Incumbent, phase-zero probe and generated alternatives are three
+    different artifacts and three different names."""
+    _, sink = _run_with_incumbent(monkeypatch, tmp_path)
+    records = _capture_records(sink)
+    incumbent = {r["code_sha256"] for r in _of(records, "incumbent_observation")}
+    probe = {r["code_sha256"] for r in _of(records, "candidate_evaluation")
+             if r["role"] == "candidate_zero"}
+    generated = {r["code_sha256"] for r in _of(records, "candidate_evaluation")
+                 if r["role"] == "generated"}
+    assert incumbent and probe and generated
+    assert not (incumbent & probe) and not (incumbent & generated)
+    assert not (probe & generated)
+
+
+def test_no_new_field_reaches_any_public_surface():
+    """The shadow pool is a file. It is not a response, an envelope or a
+    wire type, and no Go field exists for it."""
+    v3dir = PROJECT_ROOT / "v3-service"
+    response_block = (v3dir / "main.py").read_text().split(
+        "response = {", 1)[1].split("}", 1)[0]
+    for leaked in ("incumbent", "shadow", "consensus", "cluster"):
+        assert leaked not in response_block, leaked
+    for module in ("contract.py", "adapters.py"):
+        text = (v3dir / module).read_text()
+        assert "incumbent" not in text, module
+    go = (PROJECT_ROOT / "proxy" / "types.go").read_text()
+    for leaked in ("incumbent", "Incumbent", "shadow_comparison"):
+        assert leaked not in go, leaked
