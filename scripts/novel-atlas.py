@@ -69,17 +69,30 @@ class TelemetrySubscriber:
         self._thread.start()
 
     def _run(self):
-        try:
-            with urllib.request.urlopen(self.url, timeout=5) as resp:
-                for raw in resp:
-                    if self._stop.is_set():
-                        return
-                    line = raw.decode("utf-8", "replace").strip()
-                    if not line.startswith("data:"):
-                        continue
-                    self.lines.append(line[5:].strip())
-        except Exception as exc:                       # noqa: BLE001
-            self.lines.append(json.dumps({"__subscriber_error__": str(exc)[:200]}))
+        # The read timeout must clear the stream's heartbeat interval, and a
+        # timeout must reconnect rather than end the subscription: the first
+        # version used a 5s per-read timeout against a 15s heartbeat, so it
+        # died a few seconds into every session and captured only the opening
+        # envelopes. A dead subscriber looks exactly like a pipeline that never
+        # ran, which is the reading it produced.
+        while not self._stop.is_set():
+            try:
+                with urllib.request.urlopen(self.url, timeout=60) as resp:
+                    for raw in resp:
+                        if self._stop.is_set():
+                            return
+                        line = raw.decode("utf-8", "replace").strip()
+                        if not line.startswith("data:"):
+                            continue
+                        payload = line[5:].strip()
+                        if payload:
+                            self.lines.append(payload)
+            except Exception as exc:                   # noqa: BLE001
+                if self._stop.is_set():
+                    return
+                self.lines.append(json.dumps(
+                    {"__subscriber_reconnect__": str(exc)[:200]}))
+                time.sleep(0.5)
 
     def stop(self):
         self._stop.set()
