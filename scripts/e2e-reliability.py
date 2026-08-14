@@ -1200,7 +1200,11 @@ def tui_handled_types() -> set[str]:
 # --------------------------------------------------------------------------
 
 def run_session(task: Task, rep: int, url: str, workspace: Path,
-                subdir: str, timeout: int) -> Session:
+                subdir: str, timeout: int, raw_sink=None) -> Session:
+    """`raw_sink`, when given, is an open file the exact SSE lines are written
+    to BEFORE anything parses them. A reconstruction bug then stays visible
+    instead of overwriting its own evidence -- the parsed events beside it are
+    derived, and an unparseable frame is truncated in them but whole here."""
     # Wipe the workspace, then lay down only this task's fixtures. Resetting
     # the fixtures alone is not isolation: solve.py from a previous AoC task
     # survived into the next one, and a session that wrote nothing would have
@@ -1253,6 +1257,8 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
                     events.append({"type": "error", "data": {
                         "error": f"harness cap: session exceeded {timeout}s"}})
                     break
+                if raw_sink is not None:
+                    raw_sink.write(raw.decode("utf-8", "replace"))
                 line = raw.decode("utf-8", "replace").strip()
                 if not line.startswith("data: "):
                     continue
