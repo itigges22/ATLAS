@@ -615,7 +615,8 @@ def _sandbox_scoring(pass_cases):
     return _S
 
 
-def _run_with(monkeypatch, sandbox_cls, cases, plan_candidates=None):
+def _run_with(monkeypatch, sandbox_cls, cases, plan_candidates=None,
+              diagnostic_total=0):
     monkeypatch.setenv("ATLAS_V3_TELEMETRY_DIR", "off")
     monkeypatch.setattr(adapters, "LLMAdapter", _llm_returning(RING2_CANDIDATE))
     monkeypatch.setattr(adapters, "SandboxAdapter", sandbox_cls)
@@ -639,9 +640,12 @@ def _run_with(monkeypatch, sandbox_cls, cases, plan_candidates=None):
     service.refinement_loop = SimpleNamespace(
         run=lambda **kw: SimpleNamespace(solved=False, total_tokens=0,
                                          total_iterations=1, winning_code=""))
+    kwargs = {}
+    if diagnostic_total:
+        kwargs["diagnostic_total_candidates"] = diagnostic_total
     return service.run("read input.txt", task_id="trust",
                        file_path="/workspace/e2e/solve.py",
-                       files={"input.txt": "1\n"})
+                       files={"input.txt": "1\n"}, **kwargs)
 
 
 def _llm_returning(code):
@@ -731,3 +735,110 @@ def test_generated_evidence_never_reaches_closure_or_a_verified_winner(monkeypat
     selection = result.get("contract_selection") or {}
     assert selection.get("verified_winner") is None
     assert C.selection_status(selection) != "verified_winner"
+
+
+# =====================================================================
+# Diagnostic candidate allocation.
+#
+# `k` is the TOTAL V3 pool: the phase-zero probe occupies one slot and
+# `remaining_k = k - len(candidates)` fills the rest with generated
+# alternatives. The incumbent is not in it at all -- it lives in the shadow
+# comparison pool. A measurement that needs consensus needs at least two
+# generated alternatives, and the budget cap can drive the allocator's k to
+# 1, so the diagnostic must be able to raise it. It may only raise, only in
+# process, only up to a small hard cap, and never through /v3/generate.
+# =====================================================================
+
+
+def test_k_counts_the_probe_and_the_generated_alternatives():
+    """Naming check: whatever the argument is called, this is the quantity."""
+    src = (Path(__file__).resolve().parents[2] / "v3-service" / "pipeline.py").read_text()
+    assert "remaining_k = max(0, k - len(candidates))" in src
+
+
+def test_the_default_allocation_is_untouched(monkeypatch):
+    """Absent means absent: same k, same events, no diagnostic path."""
+    plain = _run_with(monkeypatch, _sandbox_scoring(2), _generated_cases(),
+                      plan_candidates=[RING2_CANDIDATE.replace("strip", "rstrip")])
+    alloc = [e for e in plain["events"] if e["stage"] == "phase2_allocated"]
+    assert alloc, "allocation must still happen"
+    assert "diagnostic_allocation" not in [e["stage"] for e in plain["events"]]
+
+
+@pytest.mark.parametrize("bad", [True, False, "3", 3.5, -1, 0.0, 99])
+def test_malformed_or_oversized_values_fail_closed(bad):
+    with pytest.raises((ValueError, TypeError)):
+        P._diagnostic_total_candidates(bad)
+
+
+@pytest.mark.parametrize("good,expected", [(None, 0), (0, 0), (3, 3), (6, 6)])
+def test_absent_and_in_range_values_are_accepted(good, expected):
+    assert P._diagnostic_total_candidates(good) == expected
+
+
+def test_the_cap_is_small_and_declared():
+    assert P.DIAGNOSTIC_MAX_TOTAL_CANDIDATES == 6
+
+
+def test_the_diagnostic_floor_raises_the_pool(monkeypatch):
+    """The allocator's own floor is 3; asking for more must raise it."""
+    alternatives = [RING2_CANDIDATE.replace("strip", "rstrip"),
+                    RING2_CANDIDATE.replace("read()", "read(  )"),
+                    RING2_CANDIDATE.replace("main()", "main( )")]
+    result = _run_with(monkeypatch, _sandbox_scoring(2), _generated_cases(),
+                       plan_candidates=alternatives, diagnostic_total=4)
+    diag = [e for e in result["events"] if e["stage"] == "diagnostic_allocation"]
+    assert diag, "the raise must be visible in telemetry"
+    assert diag[0]["data"]["diagnostic_k"] == 4
+    assert diag[0]["data"]["allocated_k"] < 4, "it may only raise"
+    phase1 = [e for e in result["events"] if e["stage"] == "phase1"][0]
+    assert "4 diverse candidates" in phase1["detail"]
+
+
+def test_the_diagnostic_floor_never_lowers_the_allocation(monkeypatch):
+    """Asking for fewer than the allocator chose changes nothing."""
+    result = _run_with(monkeypatch, _sandbox_scoring(2), _generated_cases(),
+                       plan_candidates=[RING2_CANDIDATE.replace("strip", "rstrip")],
+                       diagnostic_total=2)
+    assert not [e for e in result["events"]
+                if e["stage"] == "diagnostic_allocation"]
+    phase1 = [e for e in result["events"] if e["stage"] == "phase1"][0]
+    assert "3 diverse candidates" in phase1["detail"]
+
+
+def test_the_generate_endpoint_cannot_activate_it():
+    """No request field, no env read, no server-side mode: the only way in
+    is an in-process argument the HTTP handler never supplies."""
+    v3dir = Path(__file__).resolve().parents[2] / "v3-service"
+    main_src = (v3dir / "main.py").read_text()
+    assert "diagnostic_total_candidates" not in main_src
+    assert "min_candidates" not in main_src
+    handler = main_src.split("result = pipeline.run(", 1)[1].split(")", 1)[0]
+    assert "diagnostic" not in handler
+    pipeline_src = (v3dir / "pipeline.py").read_text()
+    floor_block = pipeline_src.split("def _diagnostic_total_candidates(", 1)[1]
+    floor_block = floor_block.split("\ndef ", 1)[0]
+    assert "environ" not in floor_block and "getenv" not in floor_block
+
+
+def test_the_go_request_has_no_representation_for_it():
+    go = (Path(__file__).resolve().parents[2] / "proxy" / "types.go").read_text()
+    for name in ("diagnostic_total_candidates", "min_candidates",
+                 "DiagnosticTotalCandidates", "MinCandidates"):
+        assert name not in go, name
+
+
+def test_capture_and_diagnostic_allocation_are_independent(monkeypatch, tmp_path):
+    """Capture alone never raises k; allocation alone never opens a sink."""
+    monkeypatch.setenv("ATLAS_V3_CAPTURE_POOL", str(tmp_path / "p.jsonl"))
+    captured = _run_with(monkeypatch, _sandbox_scoring(2), _generated_cases(),
+                         plan_candidates=[RING2_CANDIDATE.replace("strip", "rstrip")])
+    assert "diagnostic_allocation" not in [e["stage"] for e in captured["events"]]
+
+    monkeypatch.delenv("ATLAS_V3_CAPTURE_POOL", raising=False)
+    empty = tmp_path / "none"
+    empty.mkdir()
+    _run_with(monkeypatch, _sandbox_scoring(2), _generated_cases(),
+              plan_candidates=[RING2_CANDIDATE.replace("strip", "rstrip")],
+              diagnostic_total=3)
+    assert list(empty.iterdir()) == []

@@ -59,7 +59,7 @@ for _phase, _stages in {
     "self_test": ("self_test_gen", "self_test_done", "self_test_error",
                   "self_test_skip", "self_test_inconclusive",
                   "self_test_untrusted"),
-    "allocation": ("phase2", "phase2_allocated"),
+    "allocation": ("phase2", "phase2_allocated", "diagnostic_allocation"),
     "generation": ("phase1", "plansearch", "plansearch_done",
                    "plansearch_error", "divsampling", "divsampling_done",
                    "divsampling_error", "divsampling_stop", "lens_per_step"),
@@ -736,6 +736,45 @@ def _selection_enabled(mode: str) -> bool:
 _CANDIDATE_FILE = "candidate.py"
 
 
+# --- diagnostic candidate allocation -----------------------------------------
+#
+# `k` is the TOTAL V3 pool: the phase-zero probe takes one slot and
+# `remaining_k = k - len(candidates)` fills the rest with generated
+# alternatives. The incumbent is not in it -- it lives in the shadow
+# comparison pool. Consensus needs at least two generated alternatives to
+# mean anything, and the allocator's budget cap can drive k to 1, so a
+# measurement run needs a way to raise it.
+#
+# It raises and never lowers, it is capped small, it is an in-process
+# argument the HTTP handler never supplies, and it reads no environment. No
+# unauthenticated caller can reach it, and it is independent of the capture
+# sink: neither turns the other on.
+#
+# Cost: at most 6 candidates. Each costs one generation call plus its
+# sandbox runs; the existing out_of_budget() checks in the generation loops
+# and the ATLAS_V3_TIMEOUT wall clock still apply unchanged, so the cap
+# bounds the pool, not the clock.
+DIAGNOSTIC_MAX_TOTAL_CANDIDATES = 6
+
+
+def _diagnostic_total_candidates(value) -> int:
+    """Validate the diagnostic pool floor. Absent is 0; anything else that
+    is not a plain int in 1..cap is rejected rather than coerced."""
+    if value is None or value == 0 and not isinstance(value, bool):
+        if isinstance(value, float):
+            raise TypeError("diagnostic candidate count must be an int")
+        return 0
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("diagnostic candidate count must be an int")
+    if value < 1:
+        raise ValueError("diagnostic candidate count must be >= 1")
+    if value > DIAGNOSTIC_MAX_TOTAL_CANDIDATES:
+        raise ValueError(
+            f"diagnostic candidate count exceeds the cap of "
+            f"{DIAGNOSTIC_MAX_TOTAL_CANDIDATES}")
+    return value
+
+
 def _trusted_oracle(self_tests) -> bool:
     """Whether these cases may decide anything about a candidate.
 
@@ -1088,6 +1127,66 @@ def _make_output_probe(code: str, tc, task_input_file: str = ""):
             + f"elif _out:\n    print({repr(_CONSENSUS_MARK)}+repr(_out))\n"), files
 
 
+# --- the shadow recommendation ------------------------------------------------
+#
+# Frozen before acquisition so the counterfactual is a rule, not a reading of
+# the results. Diagnostic vocabulary only: it produces no closure, no
+# verified winner, no authorization, no provenance and no delivery, and it is
+# deliberately NOT called replacement_eligible.
+#
+# The consensus it reads includes the incumbent and every retained candidate,
+# and it never consults a generated expected key. A tie stays a tie: candidate
+# order may not break it. A cluster with several non-identical members is
+# reported whole rather than reduced to one.
+SHADOW_RETAIN = "retain_incumbent"
+SHADOW_PREFER = "prefer_candidate"
+SHADOW_TIED = "tied"
+SHADOW_INCOMPARABLE = "incomparable"
+SHADOW_UNMEASURED = "unmeasured"
+
+
+def _shadow_recommendation(incumbent_hash, consensus, contract_selection=None):
+    """Read the frozen rule off an attributable consensus record.
+
+    1. No consensus, or no candidate answered every input -> unmeasured.
+    2. Contract records that cannot be compared -> incomparable.
+    3. More than one winning cluster -> tied.
+    4. The winning cluster holds the incumbent and nothing else -> retain.
+    5. It holds the incumbent and candidates -> they printed the same thing,
+       so there is nothing to gain by replacing -> retain.
+    6. It holds candidates and not the incumbent -> prefer, and the whole
+       cluster is reported as the recommendation's members.
+    """
+    if not consensus or not consensus.get("cases"):
+        return {"recommendation": SHADOW_UNMEASURED, "reason": "no consensus record"}
+    if contract_selection and contract_selection.get("incomparable"):
+        return {"recommendation": SHADOW_INCOMPARABLE,
+                "reason": "contract records are incomparable"}
+    groups = consensus.get("groups") or []
+    if not groups:
+        return {"recommendation": SHADOW_UNMEASURED,
+                "reason": "no candidate answered every input"}
+    top = groups[0]["size"]
+    winners = [g for g in groups if g["size"] == top]
+    if len(winners) > 1:
+        return {"recommendation": SHADOW_TIED,
+                "reason": f"{len(winners)} clusters of size {top}",
+                "tied_members": [g["members"] for g in winners]}
+    members = winners[0]["members"]
+    others = [m for m in members if m != incumbent_hash]
+    if incumbent_hash in members:
+        return {"recommendation": SHADOW_RETAIN,
+                "reason": ("incumbent agrees with the winning cluster"
+                           if others else "incumbent alone in the winning cluster"),
+                "members": members}
+    if not others:
+        return {"recommendation": SHADOW_UNMEASURED, "reason": "empty cluster"}
+    return {"recommendation": SHADOW_PREFER,
+            "reason": "winning cluster excludes the incumbent",
+            "members": others,
+            "multiple_members": len(others) > 1}
+
+
 def _consensus_record(candidates, test_cases, sandbox, task_input_file=""):
     """What each candidate printed on each generated INPUT, and who agreed.
 
@@ -1286,7 +1385,8 @@ class V3PipelineService:
             progress_callback=None, files: Dict[str, str] = None,
             file_path: str = "", build_command: str = "",
             working_dir: str = "/workspace",
-            baseline_code: str = "") -> Dict[str, Any]:
+            baseline_code: str = "",
+            diagnostic_total_candidates=None) -> Dict[str, Any]:
         """Run the full V3 pipeline on a coding problem.
 
         Args:
@@ -1315,6 +1415,9 @@ class V3PipelineService:
         # Opened per run so a diagnostic can be turned on and off without
         # restarting the service, and closed here so the delivered artifact
         # and the selection summary are written from the finished result.
+        # Validated before anything runs: a malformed diagnostic argument is
+        # an error at the call, never a silently coerced allocation.
+        _diag_floor = _diagnostic_total_candidates(diagnostic_total_candidates)
         capture = _PoolCapture.from_env()
         capture.bind(task_id)
         try:
@@ -1322,7 +1425,7 @@ class V3PipelineService:
                 problem, task_id=task_id, progress_callback=progress_callback,
                 files=files, file_path=file_path, build_command=build_command,
                 working_dir=working_dir, baseline_code=baseline_code,
-                _capture=capture)
+                diagnostic_total_candidates=_diag_floor, _capture=capture)
             _ensure_delivered_evidence(result, file_path=file_path, problem=problem)
             return result
         except Exception as e:
@@ -1380,6 +1483,7 @@ class V3PipelineService:
                   progress_callback=None, files: Dict[str, str] = None,
                   file_path: str = "", build_command: str = "",
                   working_dir: str = "/workspace", baseline_code: str = "",
+                  diagnostic_total_candidates: int = 0,
                   _capture: Optional["_PoolCapture"] = None) -> Dict[str, Any]:
         """The pipeline body — see run() for the argument contract.
 
@@ -1898,6 +2002,13 @@ class V3PipelineService:
         )
         k, budget_tier = alloc.k, alloc.tier
         bf_tier = budget_tier
+        # Diagnostic floor: raises the pool, never lowers it, and leaves the
+        # tier and every budget guard exactly as allocated.
+        if diagnostic_total_candidates and diagnostic_total_candidates > k:
+            emit("diagnostic_allocation",
+                 f"k raised {k} -> {diagnostic_total_candidates} for measurement",
+                 allocated_k=k, diagnostic_k=diagnostic_total_candidates)
+            k = diagnostic_total_candidates
         emit("phase2_allocated", f"k={k} tier={budget_tier}",
              k=k, tier=budget_tier, base_tier=alloc.base_tier,
              gx_escalation=alloc.gx_escalation,

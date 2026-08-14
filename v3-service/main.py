@@ -129,7 +129,10 @@ class V3Handler(BaseHTTPRequestHandler):
 
         Request format (V3GenerateRequest):
             file_path: str          — target file path
-            baseline_code: str      — model's initial content (candidate #0)
+            baseline_code: str      — incumbent_baseline: the caller's own
+                                      content. It becomes prose in the problem
+                                      statement and is NOT a V3 candidate; pool
+                                      index 0 is the phase-zero probe candidate
             project_context: dict   — other files in project {path: content}
             framework: str          — detected framework
             build_command: str      — build verification command

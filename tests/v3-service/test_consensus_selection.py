@@ -24,6 +24,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
 import pipeline  # noqa: E402
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 CORRECT_A = ("def main():\n"
              "    d = [int(x) for x in open('input.txt')]\n"
              "    print(sum(1 for i in range(1, len(d)) if d[i] > d[i-1]))\n"
@@ -437,3 +439,74 @@ def test_the_generated_key_is_absent_from_every_retained_cluster_field():
         _pool(CONS_A, CONS_B), [case], _sandbox, "input.txt")
     assert "THIS KEY IS WRONG" not in json.dumps(rec)
     assert rec["reads_expected_output"] is False
+
+
+# --- the frozen shadow recommendation --------------------------------------
+#
+# Diagnostic vocabulary only. It cannot produce closure, a verified winner,
+# authorization, provenance or delivery, and it is deliberately not called
+# replacement_eligible.
+
+INC = "incumbent-hash"
+
+
+def _consensus(groups, cases=(("c0-0", 1),)):
+    return {"cases": [{"clusters": [], "winning_cluster_id": cases[0][0]}],
+            "groups": [{"members": m, "size": len(m)} for m in groups]}
+
+
+def test_the_incumbent_is_retained_when_it_is_the_only_answer():
+    """Only the incumbent answered every input; nothing outranks it."""
+    rec = pipeline._shadow_recommendation(INC, _consensus([[INC]]))
+    assert rec["recommendation"] == pipeline.SHADOW_RETAIN
+    assert "alone" in rec["reason"]
+
+
+def test_equal_sized_clusters_including_the_incumbent_are_a_tie():
+    """One-each is a tie, even when one of them is the incumbent."""
+    rec = pipeline._shadow_recommendation(INC, _consensus([[INC], ["a"]]))
+    assert rec["recommendation"] == pipeline.SHADOW_TIED
+
+
+def test_agreement_with_the_incumbent_retains_it():
+    """Same printed output on every input: nothing to gain by replacing."""
+    rec = pipeline._shadow_recommendation(INC, _consensus([[INC, "a", "b"]]))
+    assert rec["recommendation"] == pipeline.SHADOW_RETAIN
+    assert INC in rec["members"]
+
+
+def test_a_cluster_without_the_incumbent_prefers_the_candidates():
+    rec = pipeline._shadow_recommendation(INC, _consensus([["a", "b"], [INC]]))
+    assert rec["recommendation"] == pipeline.SHADOW_PREFER
+    assert rec["members"] == ["a", "b"]
+    assert rec["multiple_members"] is True, "report the cluster, do not pick one"
+
+
+def test_a_tie_stays_a_tie_and_candidate_order_cannot_break_it():
+    rec = pipeline._shadow_recommendation(INC, _consensus([["a"], ["b"]]))
+    assert rec["recommendation"] == pipeline.SHADOW_TIED
+    reversed_rec = pipeline._shadow_recommendation(INC, _consensus([["b"], ["a"]]))
+    assert reversed_rec["recommendation"] == pipeline.SHADOW_TIED
+
+
+def test_incomparable_records_produce_no_ordering():
+    rec = pipeline._shadow_recommendation(
+        INC, _consensus([["a"]]), {"incomparable": [{"x": 1}]})
+    assert rec["recommendation"] == pipeline.SHADOW_INCOMPARABLE
+    assert "members" not in rec
+
+
+def test_no_consensus_is_unmeasured_not_a_recommendation():
+    assert pipeline._shadow_recommendation(INC, None)["recommendation"] == \
+        pipeline.SHADOW_UNMEASURED
+    assert pipeline._shadow_recommendation(
+        INC, {"cases": [{}], "groups": []})["recommendation"] == \
+        pipeline.SHADOW_UNMEASURED
+
+
+def test_the_vocabulary_is_diagnostic_only():
+    src = (PROJECT_ROOT / "v3-service" / "pipeline.py").read_text()
+    block = src.split("def _shadow_recommendation(", 1)[1].split("\ndef ", 1)[0]
+    for forbidden in ("closure_eligible", "verified_winner", "replacement_eligible",
+                      "authorized", "provenance", "delivered"):
+        assert forbidden not in block, forbidden
