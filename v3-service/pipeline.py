@@ -394,6 +394,23 @@ class _PoolCapture:
         payload["session_id"] = self._session_id
         self.write(payload)
 
+    def note_shadow_recommendation(self, recommendation,
+                                   incumbent_sha256: str = "") -> None:
+        """The frozen counterfactual, recorded and acted on by nothing.
+
+        The lens preference and the contract selection are already in the
+        selection_summary for this run; this record is the third reading,
+        kept beside them so all three can be compared offline.
+        """
+        if not self.enabled or not recommendation:
+            return
+        payload = dict(recommendation)
+        payload["type"] = "shadow_recommendation"
+        payload["session_id"] = self._session_id
+        payload["incumbent_sha256"] = incumbent_sha256
+        payload["authority"] = "diagnostic_only"
+        self.write(payload)
+
     def note_pool(self, *, phase: str, pool, lens_index=None,
                   evidence_index=None, verified_index=None,
                   status: str = "", reason: str = "", tied: int = 0,
@@ -1836,6 +1853,7 @@ class V3PipelineService:
         # diagnostic sink is on: with capture off this is not built, not
         # executed and not written, so default behaviour is unchanged. It
         # enters no live list and no live decision.
+        _incumbent_observed = ""
         if capture.enabled and baseline_code:
             try:
                 _inc = _evaluate_candidate(
@@ -1845,6 +1863,7 @@ class V3PipelineService:
                     _has_oracle, emit, sandbox, task=_task)
                 capture.note_incumbent(code=baseline_code, record=_inc,
                                        adapter=_inc["adapter_id"])
+                _incumbent_observed = baseline_code
             except Exception as _exc:                  # noqa: BLE001
                 # An incumbent that cannot be evaluated is recorded as
                 # exactly that. Never synthesise a result for it.
@@ -2275,6 +2294,25 @@ class V3PipelineService:
                         passing, self_tests.test_cases, sandbox,
                         task_input_file)
                     capture.note_consensus(result["consensus"])
+                    # The comparison the live pool cannot make: the same
+                    # agreement measured over the incumbent AND every
+                    # retained candidate, then the frozen rule read off it.
+                    # Separate pool, separate record, no live effect.
+                    if _incumbent_observed:
+                        _shadow_pool = ([{"index": -1, "code": _incumbent_observed}]
+                                        + list(passing))
+                        _shadow = _consensus_record(
+                            _shadow_pool, self_tests.test_cases, sandbox,
+                            task_input_file)
+                        _shadow["pool"] = "shadow_comparison"
+                        _shadow["incumbent_sha256"] = contract.content_hash(
+                            _incumbent_observed)
+                        capture.note_consensus(_shadow)
+                        capture.note_shadow_recommendation(
+                            _shadow_recommendation(
+                                _shadow["incumbent_sha256"], _shadow,
+                                result.get("contract_selection")),
+                            incumbent_sha256=_shadow["incumbent_sha256"])
                     emit("consensus_ranking",
                          f"{result['consensus']['agreement']}/{len(passing)} "
                          f"agree on every input — ranking evidence only",

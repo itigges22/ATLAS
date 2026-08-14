@@ -730,3 +730,39 @@ def test_no_new_field_reaches_any_public_surface():
     go = (PROJECT_ROOT / "proxy" / "types.go").read_text()
     for leaked in ("incumbent", "Incumbent", "shadow_comparison"):
         assert leaked not in go, leaked
+
+
+def test_the_shadow_consensus_includes_the_incumbent(monkeypatch, tmp_path):
+    """The comparison the live pool cannot make. Two consensus records: the
+    live one over the candidates, and a shadow one that adds the incumbent."""
+    monkeypatch.setenv("ATLAS_EVIDENCE_MODE", "shadow")
+    _, sink = _run_with_incumbent(monkeypatch, tmp_path, task_id="inc-cons")
+    records = _capture_records(sink)
+    clusters = _of(records, "consensus_clusters")
+    shadow = [c for c in clusters if c.get("pool") == "shadow_comparison"]
+    live = [c for c in clusters if c.get("pool") != "shadow_comparison"]
+    assert live and shadow, [c.get("pool") for c in clusters]
+
+    inc = _of(records, "incumbent_observation")[0]["code_sha256"]
+    assert inc not in live[0]["candidates"], "the live pool stays untouched"
+    assert inc in shadow[0]["candidates"]
+    assert shadow[0]["incumbent_sha256"] == inc
+    assert set(live[0]["candidates"]) <= set(shadow[0]["candidates"])
+
+
+def test_the_shadow_recommendation_is_recorded_and_decides_nothing(
+        monkeypatch, tmp_path):
+    monkeypatch.setenv("ATLAS_EVIDENCE_MODE", "shadow")
+    result, sink = _run_with_incumbent(monkeypatch, tmp_path, task_id="inc-rec")
+    recs = _of(_capture_records(sink), "shadow_recommendation")
+    assert len(recs) == 1
+    rec = recs[0]
+    assert rec["recommendation"] in {
+        v3pipeline.SHADOW_RETAIN, v3pipeline.SHADOW_PREFER,
+        v3pipeline.SHADOW_TIED, v3pipeline.SHADOW_INCOMPARABLE,
+        v3pipeline.SHADOW_UNMEASURED}
+    assert rec["authority"] == "diagnostic_only"
+    assert "replacement_eligible" not in json.dumps(rec)
+    # It changed nothing about the run it observed.
+    assert (result.get("contract_selection") or {}).get("verified_winner") is None
+    assert result.get("evidence_record", {}).get("closure_eligible") is not True
