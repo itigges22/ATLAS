@@ -795,3 +795,41 @@ def test_legacy_case_has_no_envelope_at_all():
     payload = _case_by_id("10_legacy_no_envelope")["response"]
     assert "evidence" not in payload
     assert payload["passed"] is True
+
+
+def test_no_generated_case_observation_reaches_the_wire_or_authorization():
+    """Consensus and generated-case scores are diagnostics.
+
+    Go authorizes on the envelope alone — availability, verified_winner,
+    closure eligibility and a content hash. Nothing derived from a
+    model-generated case may appear there, and nothing may reach the
+    response the proxy reads: the handler writes an explicit whitelist, and
+    `consensus` is deliberately not in it.
+    """
+    main_src = (V3DIR / "main.py").read_text()
+    response_block = main_src.split("response = {", 1)[1].split("}", 1)[0]
+    for leaked in ("consensus", "self_test", "cases_passed", "provenance"):
+        assert leaked not in response_block, leaked
+
+    envelope_src = (V3DIR / "contract.py").read_text()
+    for leaked in ("consensus", "agreement", "cluster", "provenance"):
+        assert leaked not in envelope_src, leaked
+
+    # The envelope's own shape is unchanged by this work.
+    record = _record(_demonstrated(), C.SYNTAX)
+    envelope = C.envelope(record, C.select([record], record),
+                          delivered_content_hash=C.content_hash(CODE))
+    assert set(envelope) == {"wire_version", "record_schema_version", "identity",
+                             "evaluation", "coverage", "selection", "delivery"}
+    assert "consensus" not in json.dumps(envelope)
+
+
+def test_consensus_defines_no_second_strength_scale():
+    """One strength vocabulary, in the contract. A ranking signal that grew
+    its own scale is how correlated agreement becomes 'behavioural'."""
+    pipeline_src = (V3DIR / "pipeline.py").read_text()
+    consensus_block = pipeline_src.split("def _consensus_record(", 1)[1]
+    consensus_block = consensus_block.split("\ndef ", 1)[0]
+    for forbidden in ("STRENGTH_", "closure_eligible", "verified_winner",
+                      "requirements_complete", "evidence_strength"):
+        assert forbidden not in consensus_block, forbidden

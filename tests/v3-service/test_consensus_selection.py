@@ -275,3 +275,105 @@ def test_the_probe_body_reaches_the_sandbox_with_its_files(monkeypatch):
     for body in captured:
         assert body["files"]["input.txt"] == "1\n2\n3"
         assert "'w'" not in body["code"]
+
+
+# --- consensus is ranking evidence, and only that -------------------------
+#
+# The candidates come from one model, so agreement between them is
+# correlated, not independent. It may order a pool; it may never certify
+# one. `_consensus_record` exists so a future adoption policy can be argued
+# from measurement rather than from the appeal of the idea.
+
+CONS_A = "print(len(open('input.txt').read().split()))\n"
+CONS_B = "d = open('input.txt').read().split()\nprint(len(d))\n"
+CONS_ODD = "print(999)\n"
+CONS_CRASH = "raise RuntimeError('boom')\n"
+
+
+def _pool(*codes):
+    return [{"index": i, "code": c} for i, c in enumerate(codes)]
+
+
+def test_consensus_never_reads_the_expected_output():
+    """The key is the thing measured to be wrong 21 times in 36; it must not
+    reach this signal at all."""
+    case = type("TC", (), {"input_str": "1 2 3",
+                           "expected_output": "THIS KEY IS WRONG"})()
+    seen = []
+
+    def _spy(code, test_input="", files=None, **_):
+        seen.append((code, files or {}))
+        return _sandbox(code, files=files)
+
+    rec = pipeline._consensus_record(_pool(CONS_A, CONS_B), [case], _spy,
+                                     "input.txt")
+    for code, files in seen:
+        assert "THIS KEY IS WRONG" not in code
+        assert not any("THIS KEY IS WRONG" in v for v in files.values())
+    assert rec["reads_expected_output"] is False
+    assert rec["authority"] == "ranking_only"
+
+
+def test_consensus_clusters_agreeing_candidates_and_records_hashes():
+    case = type("TC", (), {"input_str": "1 2 3", "expected_output": "x"})()
+    rec = pipeline._consensus_record(
+        _pool(CONS_A, CONS_B, CONS_ODD), [case], _sandbox, "input.txt")
+    import contract as _contract
+    a, b, odd = (_contract.content_hash(c) for c in (CONS_A, CONS_B, CONS_ODD))
+    assert rec["agreement"] == 2
+    biggest = rec["cases"][0]["clusters"][0]
+    assert sorted(biggest["members"]) == sorted([a, b])
+    assert rec["ranked"][:2] == rec["groups"][0]["members"]
+    assert odd in rec["candidates"]
+
+
+def test_consensus_records_crashes_without_rejecting_them():
+    """A crash on a generated input stays visible and decides nothing — the
+    input itself may be the invalid thing."""
+    case = type("TC", (), {"input_str": "(empty file)",
+                           "expected_output": "0"})()
+    rec = pipeline._consensus_record(
+        _pool(CONS_A, CONS_CRASH), [case], _sandbox, "input.txt")
+    import contract as _contract
+    assert _contract.content_hash(CONS_CRASH) in rec["cases"][0]["crashed"]
+    assert _contract.content_hash(CONS_CRASH) in rec["candidates"]
+    assert rec["authority"] == "ranking_only"
+
+
+def test_a_consensus_tie_stays_a_tie():
+    case = type("TC", (), {"input_str": "1 2 3", "expected_output": "x"})()
+    rec = pipeline._consensus_record(
+        _pool(CONS_A, CONS_ODD), [case], _sandbox, "input.txt")
+    assert rec["agreement"] == 1
+    assert rec["tied_groups"] == 2
+
+
+def test_candidate_zero_can_rank_first():
+    """Index 0 is the probe; nothing about consensus may exclude it."""
+    case = type("TC", (), {"input_str": "1 2 3", "expected_output": "x"})()
+    rec = pipeline._consensus_record(
+        _pool(CONS_A, CONS_B, CONS_ODD), [case], _sandbox, "input.txt")
+    import contract as _contract
+    assert rec["ranked"][0] == _contract.content_hash(CONS_A)
+
+
+def test_the_consensus_record_carries_no_closure_vocabulary():
+    """It must not be translatable into oracle strength or completeness: no
+    second strength scale, no parallel verdict fields."""
+    case = type("TC", (), {"input_str": "1 2 3", "expected_output": "x"})()
+    rec = pipeline._consensus_record(_pool(CONS_A, CONS_B), [case], _sandbox,
+                                     "input.txt")
+    blob = repr(rec)
+    for forbidden in ("closure_eligible", "verified_winner", "evidence_strength",
+                      "requirements_complete", "oracle", "passed"):
+        assert forbidden not in blob, forbidden
+
+
+def test_consensus_is_off_unless_the_evidence_mode_turns_probing_on():
+    """Reuses the existing mode; it adds no flag of its own."""
+    assert pipeline._probing_enabled(pipeline._selection_mode({})) is False
+    assert pipeline._probing_enabled(
+        pipeline._selection_mode({"ATLAS_EVIDENCE_MODE": "shadow"})) is True
+    assert pipeline._probing_enabled(
+        pipeline._selection_mode({"ATLAS_EVIDENCE_MODE": "enforce"})) is True
+    assert pipeline._selection_mode({}) == pipeline.MODE_OFF

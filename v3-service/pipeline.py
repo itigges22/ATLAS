@@ -26,7 +26,8 @@ from stages.refinement_loop import (
     RefinementLoop, RefinementLoopConfig,
     can_afford_iteration, estimate_iteration_ms,
 )
-from stages.self_test_gen import SelfTestGen, SelfTestGenConfig
+from stages.self_test_gen import (SelfTestGen, SelfTestGenConfig,
+                                  PROVENANCE_GENERATED, PROVENANCE_TRUSTED)
 from stages.candidate_selection import CandidateInfo, select_candidate
 
 import adapters
@@ -56,7 +57,8 @@ for _phase, _stages in {
               "probe_error", "probe_scored", "probe_sandbox", "probe_pass",
               "probe_unverifiable"),
     "self_test": ("self_test_gen", "self_test_done", "self_test_error",
-                  "self_test_skip", "self_test_inconclusive"),
+                  "self_test_skip", "self_test_inconclusive",
+                  "self_test_untrusted"),
     "allocation": ("phase2", "phase2_allocated"),
     "generation": ("phase1", "plansearch", "plansearch_done",
                    "plansearch_error", "divsampling", "divsampling_done",
@@ -66,7 +68,7 @@ for _phase, _stages in {
                 "self_test_verify", "build_verify",
                 "build_verify_unavailable"),
     "veto": ("lens_veto", "structural_veto", "call_graph_veto"),
-    "selection": ("selected", "consensus"),
+    "selection": ("selected", "consensus", "consensus_ranking"),
     "repair_pr_cot": ("phase3", "call_chain_context", "pr_cot",
                       "pr_cot_pass", "pr_cot_failed", "pr_cot_error"),
     "repair_refinement": ("refinement", "refinement_pass",
@@ -691,6 +693,27 @@ def _selection_enabled(mode: str) -> bool:
 _CANDIDATE_FILE = "candidate.py"
 
 
+def _trusted_oracle(self_tests) -> bool:
+    """Whether these cases may decide anything about a candidate.
+
+    Only a suite whose every case declares trusted provenance is an oracle.
+    Model-generated cases are not: the same model wrote the code and the
+    answer, from the problem statement alone, and for these tasks producing
+    the expected output IS solving the problem. Measured on the captured
+    pool: 21 of 36 valid generated keys disagreed with the task's own
+    reference, and a correct candidate scored 2/5 against its own suite.
+
+    Unknown provenance fails closed. A case that cannot say where it came
+    from gets no authority, so a future producer must opt in deliberately
+    rather than inherit trust by omission.
+    """
+    cases = getattr(self_tests, "test_cases", None) or []
+    if not cases:
+        return False
+    return all(getattr(tc, "provenance", None) == PROVENANCE_TRUSTED
+               for tc in cases)
+
+
 def _staged_candidate_run(code: str, inp: str, infile: str):
     """How a case runs a candidate, for both builders that need it.
 
@@ -1020,6 +1043,69 @@ def _make_output_probe(code: str, tc, task_input_file: str = ""):
             + "_out=_c.getvalue().strip()\n"
             + f"if _crashed:\n    print({repr(_CONSENSUS_MARK)}+'CRASH')\n"
             + f"elif _out:\n    print({repr(_CONSENSUS_MARK)}+repr(_out))\n"), files
+
+
+def _consensus_record(candidates, test_cases, sandbox, task_input_file=""):
+    """What each candidate printed on each generated INPUT, and who agreed.
+
+    The generated expected outputs are never read here — only the inputs are
+    used, so a wrong answer key cannot reach this signal at all. What comes
+    back is correlated ranking evidence: these candidates came from one
+    model, so agreement between them is not independence and may never
+    become closure, a verified winner, or delivery authorization. It is
+    recorded so a future policy can be argued from measurement.
+    """
+    per_case = []
+    outputs = {}
+    for i, tc in enumerate(test_cases):
+        clusters, crashed, silent = {}, [], []
+        for c in candidates:
+            digest = contract.content_hash(c.get("code") or "")
+            try:
+                probe_code, probe_files = _make_output_probe(
+                    c["code"], tc, task_input_file)
+                ok, out, _err = sandbox(probe_code, files=probe_files)
+            except Exception:                          # noqa: BLE001
+                ok, out = False, ""
+            marker = ""
+            if ok and _CONSENSUS_MARK in (out or ""):
+                marker = out.split(_CONSENSUS_MARK)[-1].strip()
+            if marker == "CRASH":
+                crashed.append(digest)
+                marker = ""
+            elif not marker:
+                silent.append(digest)
+            else:
+                clusters.setdefault(marker, []).append(digest)
+            outputs.setdefault(digest, []).append(marker)
+        per_case.append({
+            "input_index": i,
+            "input": (getattr(tc, "input_str", "") or "")[:400],
+            "clusters": [{"output": k, "members": v, "size": len(v)}
+                         for k, v in sorted(clusters.items(),
+                                            key=lambda kv: -len(kv[1]))],
+            "crashed": crashed, "no_output": silent,
+        })
+    # A candidate ranks only if it answered every input: partial validity is
+    # not agreement material.
+    signatures = {}
+    for digest, outs in outputs.items():
+        if all(outs):
+            signatures.setdefault(tuple(outs), []).append(digest)
+    groups = sorted(signatures.values(), key=len, reverse=True)
+    agreement = len(groups[0]) if groups else 0
+    tied = [g for g in groups if len(g) == agreement] if groups else []
+    return {
+        "cases": per_case,
+        "candidates": [contract.content_hash(c.get("code") or "")
+                       for c in candidates],
+        "groups": [{"members": g, "size": len(g)} for g in groups],
+        "agreement": agreement,
+        "tied_groups": len(tied),
+        "ranked": [d for g in groups for d in g],
+        "reads_expected_output": False,
+        "authority": "ranking_only",
+    }
 
 
 def _consensus_winners(candidates, test_cases, sandbox, emit,
@@ -1386,6 +1472,10 @@ class V3PipelineService:
         else:
             emit("self_test_skip", "Interactive task — using compile smoke-test")
 
+        # Set before verified_sandbox is ever called (phase 0 probe is the
+        # first caller, after the self-test generation below).
+        _has_trusted_oracle = _trusted_oracle(self_tests)
+
         def verified_sandbox(code, extra_test=""):
             """Sandbox + verification. Algorithmic tasks: I/O self-tests; interactive: compile smoke."""
             verification_evidence: List[Dict[str, Any]] = []
@@ -1468,6 +1558,25 @@ class V3PipelineService:
                 # verdict.
                 capture.note_oracle(code, observed, p, total)
                 emit("self_test_verify", f"{p}/{total} passed")
+                if not _has_trusted_oracle:
+                    # Observed, recorded, and given no authority. These cases
+                    # were written by the same model as the candidate, from
+                    # the problem statement alone; letting them reject is how
+                    # a candidate that matched the task's own reference on
+                    # every input scored 2/5 and was discarded. The score and
+                    # every per-case pair stay in telemetry and in the pool
+                    # capture for offline analysis -- what changes is that
+                    # nothing downstream reads them as a verdict.
+                    #
+                    # The verdict below is the part that does not depend on
+                    # the generated cases: the candidate executed, and the
+                    # project's own build command still gets to speak.
+                    emit("self_test_untrusted",
+                         f"{p}/{total} against model-generated cases — "
+                         f"diagnostic only, no rejection authority",
+                         cases=total, passed_cases=p,
+                         provenance=PROVENANCE_GENERATED)
+                    return verify_build_if_requested(out, err)
                 # A suite the candidate passes NO case of says nothing about
                 # the candidate. The cases come from the same model that
                 # writes the code, and for these tasks producing an expected
@@ -1548,7 +1657,11 @@ class V3PipelineService:
         # wrong for Pygame/Tkinter/Flask — those get a compile smoke and
         # nothing more, and would have closed the pipeline claiming behaviour
         # nobody demonstrated.
-        _has_oracle = bool(self_tests and getattr(self_tests, "test_cases", None))
+        # A suite exists; whether it may DECIDE anything is a separate
+        # question, and only a trusted one may. Model-generated cases route
+        # the artifact to the no-oracle adapter, so nothing claims oracle
+        # strength on evidence that never had it.
+        _has_oracle = _trusted_oracle(self_tests)
         # Recorded for the finaliser: which verifier the artifact was eligible
         # for is a fact of the run, not something to re-derive afterwards.
         result["has_oracle"] = _has_oracle
@@ -1635,7 +1748,11 @@ class V3PipelineService:
         # nothing: return unverified FAST and let the caller's own draft
         # stand. A partial oracle score (some case passed) still runs the
         # full pipeline, because there the suite can actually rank.
-        if "inconclusive" in (probe_stderr or ""):
+        # Untrusted cases never produce the inconclusive verdict above, and
+        # the guard says so rather than relying on that: a 0/N from
+        # model-generated cases must not skip candidate generation, which is
+        # how every session on this path returned nothing at all.
+        if _has_oracle and "inconclusive" in (probe_stderr or ""):
             # Flagged recovery before the fast return: bounded input-only
             # consensus (see _dead_oracle_consensus). Default off until an
             # A/B shows the bounded version pays for its latency.
@@ -1951,6 +2068,27 @@ class V3PipelineService:
 
             emit("sandbox_done", f"{len(passing)}/{len(candidates)} passed",
                  passed=len(passing), total=len(candidates))
+
+            # Counterfactual ranking, recorded and acted on by nothing. It
+            # runs the candidates on the generated INPUTS and reports who
+            # agreed; the generated expected outputs never enter it. Off
+            # unless ATLAS_EVIDENCE_MODE turns probing on, because it costs
+            # one sandbox run per candidate per case. Candidate zero is in
+            # this pool like any other candidate and may rank first.
+            if (_probing_enabled(_selection_mode()) and len(passing) >= 2
+                    and self_tests and getattr(self_tests, "test_cases", None)):
+                try:
+                    result["consensus"] = _consensus_record(
+                        passing, self_tests.test_cases, sandbox,
+                        task_input_file)
+                    emit("consensus_ranking",
+                         f"{result['consensus']['agreement']}/{len(passing)} "
+                         f"agree on every input — ranking evidence only",
+                         agreement=result["consensus"]["agreement"],
+                         groups=len(result["consensus"]["groups"]),
+                         tied_groups=result["consensus"]["tied_groups"])
+                except Exception as exc:               # noqa: BLE001
+                    emit("consensus_ranking", f"unavailable: {str(exc)[:120]}")
 
             # Nothing passed, which for these tasks usually means the answer
             # key was wrong rather than every candidate. Measured across 42

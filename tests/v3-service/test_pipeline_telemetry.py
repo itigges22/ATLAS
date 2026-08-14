@@ -356,11 +356,13 @@ def test_passed_and_total_survive_the_boolean_the_pipeline_still_uses(
     _, sink = _run_captured(monkeypatch, tmp_path)
     evaluations = _of_type(_capture_records(sink), "candidate_evaluation")
     by_code = {base64.b64decode(r["code_b64"]).decode(): r for r in evaluations}
-    # 2/5 and 1/5 are both rejected, and the record still tells them apart.
-    assert by_code[CAP_TWO]["accepted"] is False
-    assert by_code[CAP_ZERO]["accepted"] is False
+    # Model-generated cases no longer reject, so `accepted` is the trusted
+    # part — the candidate executed. The scores behind it are still kept,
+    # and still tell 2/5 from 1/5, which is the point: production uses one
+    # boolean, capture keeps the number that boolean cannot carry.
     assert by_code[CAP_TWO]["oracle"]["cases_passed"] == 2
     assert by_code[CAP_ZERO]["oracle"]["cases_passed"] == 1
+    assert by_code[CAP_TWO]["oracle"]["cases_total"] == 5
 
 
 def test_candidate_zero_is_identified_as_such(monkeypatch, tmp_path):

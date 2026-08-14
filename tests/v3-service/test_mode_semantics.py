@@ -129,7 +129,12 @@ def _service(monkeypatch, *, oracle_cases=0, self_test_pass=True, smoke_ok=True,
 
     service = P.V3PipelineService()
     if oracle_cases:
-        cases = [SimpleNamespace(input_str="1", expected_output="1")
+        # These stand in for a REAL oracle — repository or task-supplied
+        # cases whose expected output ATLAS did not invent. They declare
+        # trusted provenance, so they keep the reject-and-close authority
+        # model-generated cases no longer have.
+        cases = [SimpleNamespace(input_str="1", expected_output="1",
+                                 provenance=P.PROVENANCE_TRUSTED)
                  for _ in range(oracle_cases)]
         service.self_test_gen = SimpleNamespace(
             generate=lambda problem, llm, task_id: SimpleNamespace(test_cases=cases))
@@ -564,3 +569,165 @@ def test_every_successful_exit_is_covered():
         assert f'result["phase_solved"] = "{phase}"' in src, phase
     # And the finaliser is the single place that guarantees it.
     assert "_ensure_delivered_evidence(result" in src
+
+
+# =====================================================================
+# Model-generated cases lose their authority; a trusted oracle keeps its own.
+#
+# The captured ring2 shape: five generated cases, two keys agreeing with the
+# task's own reference and three disagreeing. The candidate matched the
+# reference on every input and scored 2/5 against its own suite. Under the
+# old rule that was a rejection, and at 0/N it skipped candidate generation
+# entirely and returned nothing.
+# =====================================================================
+
+RING2_CANDIDATE = ("def main():\n"
+                   "    print(open('input.txt').read().strip())\n"
+                   "if __name__ == '__main__':\n    main()\n")
+
+
+def _generated_cases(n=5):
+    return [SimpleNamespace(input_str=str(i), expected_output=str(i),
+                            provenance=P.PROVENANCE_GENERATED)
+            for i in range(n)]
+
+
+def _sandbox_scoring(pass_cases):
+    """A sandbox whose generated self-tests pass exactly `pass_cases` of 5.
+
+    The candidate itself always runs cleanly — the only thing failing is the
+    comparison against the model's own answer key.
+    """
+    class _S:
+        def __init__(self, project_files=None):
+            pass
+
+        def __call__(self, code, test_input="", files=None, **_):
+            if "SELF_TEST_PASS" not in code:
+                return True, "ok", ""
+            idx = int((files or {}).get("input.txt", "0") or "0")
+            if idx < pass_cases:
+                return True, "SELF_TEST_PASS\n", ""
+            return False, "", "AssertionError: got something else"
+
+        def syntax_check(self, code, language, filename=""):
+            return True, "", ""
+    return _S
+
+
+def _run_with(monkeypatch, sandbox_cls, cases, plan_candidates=None):
+    monkeypatch.setenv("ATLAS_V3_TELEMETRY_DIR", "off")
+    monkeypatch.setattr(adapters, "LLMAdapter", _llm_returning(RING2_CANDIDATE))
+    monkeypatch.setattr(adapters, "SandboxAdapter", sandbox_cls)
+    monkeypatch.setattr(adapters, "EmbedAdapter", lambda: (lambda t: []))
+    monkeypatch.setattr(scoring, "classify_task_type", lambda p: "algorithmic")
+    monkeypatch.setattr(scoring, "score_candidate", lambda code: (1.0, 0.5, False))
+    monkeypatch.setattr(scoring, "score_candidate_combined",
+                        lambda code: dict(scoring.NEUTRAL_COMBINED))
+    monkeypatch.setattr(scoring, "score_candidate_per_step", lambda code: None)
+    service = P.V3PipelineService()
+    service.self_test_gen = SimpleNamespace(
+        generate=lambda problem, llm, task_id:
+            SimpleNamespace(test_cases=cases, generation_tokens=0))
+    service.plan_search = SimpleNamespace(
+        generate=lambda problem, task_id, llm, num_plans=None,
+        budget_tier="standard": SimpleNamespace(
+            candidates=list(plan_candidates or []), total_tokens=0))
+    service.pr_cot = SimpleNamespace(
+        repair=lambda problem, code, error, llm_call, task_id:
+            SimpleNamespace(repairs=[], total_tokens=0))
+    service.refinement_loop = SimpleNamespace(
+        run=lambda **kw: SimpleNamespace(solved=False, total_tokens=0,
+                                         total_iterations=1, winning_code=""))
+    return service.run("read input.txt", task_id="trust",
+                       file_path="/workspace/e2e/solve.py",
+                       files={"input.txt": "1\n"})
+
+
+def _llm_returning(code):
+    class _L:
+        def __init__(self, progress_callback=None, thinking=False):
+            pass
+
+        def __call__(self, prompt, temperature, max_tokens, seed, thinking=None):
+            return f"```python\n{code}\n```", 5, 1.0
+    return _L
+
+
+def test_two_of_five_generated_cases_does_not_reject_the_candidate(monkeypatch):
+    """The captured ring2 score, on a candidate that is actually correct."""
+    result = _run_with(monkeypatch, _sandbox_scoring(2), _generated_cases())
+    stages = [e["stage"] for e in result["events"]]
+    assert "self_test_verify" in stages
+    assert "self_test_untrusted" in stages
+    assert "self_test_inconclusive" not in stages
+    assert result["phase_solved"] != "oracle_inconclusive"
+
+
+def test_five_zero_of_n_results_do_not_skip_candidate_generation(monkeypatch):
+    """0/N from model-generated cases must not take the dead-oracle exit."""
+    result = _run_with(monkeypatch, _sandbox_scoring(0), _generated_cases(),
+                       plan_candidates=[RING2_CANDIDATE.replace("strip", "rstrip")])
+    stages = [e["stage"] for e in result["events"]]
+    assert "probe_unverifiable" not in stages
+    assert result["phase_solved"] != "oracle_inconclusive"
+    assert "plansearch" in stages, "candidate generation must happen"
+    assert result["candidates_generated"] >= 2
+
+
+def test_a_generated_score_never_reaches_a_repair_prompt(monkeypatch):
+    """A wrong key must not become 'your output was wrong; expected X'.
+
+    The score reached repair as the candidate's error_output, so a candidate
+    that was right and a key that was wrong produced an instruction to fix
+    working code.
+    """
+    result = _run_with(monkeypatch, _sandbox_scoring(0), _generated_cases())
+    blob = repr(result.get("events", []))
+    assert "Self-test:" not in blob
+    assert "expected" not in blob.lower() or "self_test_untrusted" in blob
+
+
+def test_a_trusted_oracle_still_rejects_and_still_closes(monkeypatch):
+    """Requirement 6: correcting generated-case authority must not weaken a
+    real oracle."""
+    trusted = [SimpleNamespace(input_str=str(i), expected_output=str(i),
+                               provenance=P.PROVENANCE_TRUSTED)
+               for i in range(5)]
+    result = _run_with(monkeypatch, _sandbox_scoring(0), trusted)
+    stages = [e["stage"] for e in result["events"]]
+    assert "self_test_inconclusive" in stages
+    assert "self_test_untrusted" not in stages
+    assert result["phase_solved"] == "oracle_inconclusive"
+
+
+def test_a_syntax_failure_still_rejects_independently(monkeypatch):
+    """The syntax/compile verifier does not depend on a generated case, so it
+    keeps its rejection authority."""
+    class _Broken:
+        def __init__(self, project_files=None):
+            pass
+
+        def __call__(self, code, test_input="", files=None, **_):
+            if "SELF_TEST_PASS" in code:
+                return True, "SELF_TEST_PASS\n", ""
+            return False, "", "SyntaxError: invalid syntax"
+
+        def syntax_check(self, code, language, filename=""):
+            return False, "", "SyntaxError: invalid syntax"
+
+    result = _run_with(monkeypatch, _Broken, _generated_cases())
+    assert result["passed"] is False
+    assert result["code"] == ""
+
+
+def test_generated_evidence_never_reaches_closure_or_a_verified_winner(monkeypatch):
+    """With no trusted oracle nothing may close, whatever the pool did."""
+    result = _run_with(monkeypatch, _sandbox_scoring(5), _generated_cases(),
+                       plan_candidates=[RING2_CANDIDATE.replace("strip", "rstrip")])
+    record = result.get("evidence_record") or {}
+    assert record.get("requirements_complete") is False
+    assert record.get("closure_eligible") is False
+    selection = result.get("contract_selection") or {}
+    assert selection.get("verified_winner") is None
+    assert C.selection_status(selection) != "verified_winner"
