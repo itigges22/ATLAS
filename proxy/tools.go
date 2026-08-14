@@ -2573,20 +2573,20 @@ func editFileTool() *ToolDef {
 			// content already fails to parse, a still-failing result is a
 			// permitted repair-in-progress (fixing one error at a time),
 			// so the gate only blocks healthy→broken transitions.
-			if synErr, ok := checkFallbackSyntax(ctx, path, newContent); !ok {
-				if _, origOK := checkFallbackSyntax(ctx, path, content); origOK {
-					log.Printf("[edit_file] edited content for %s failed syntax gate: %s", input.Path, truncateStr(synErr, 120))
+			observed, refusal := editSyntaxObservation(ctx, "edit_file", path, input.Path,
+				content, newContent, func(detail string) string {
 					// An embedded-script finding is already model-ready and names
 					// its own fix; the generic wrapper's "check old_str/new_str"
 					// advice is wrong for JavaScript inside a string.
-					if msg, isEmbedded := embeddedScriptRejectionFor(synErr); isEmbedded {
-						return &ToolResult{Success: false, Error: msg}, nil
+					if msg, isEmbedded := embeddedScriptRejectionFor(detail); isEmbedded {
+						return msg
 					}
-					return &ToolResult{Success: false, Error: fmt.Sprintf(
+					return fmt.Sprintf(
 						"edit_file result for %s does not parse (%s). The file was NOT modified — check that old_str/new_str are complete and re-issue the edit.",
-						input.Path, truncateStr(synErr, 200))}, nil
-				}
-				log.Printf("[edit_file] %s still unparsable after edit (was already broken) — allowing repair-in-progress", input.Path)
+						input.Path, truncateStr(detail, 200))
+				})
+			if refusal != nil {
+				return refusal, nil
 			}
 
 			// Structural gate (#147): a parse-clean edit can still introduce
@@ -2596,7 +2596,7 @@ func editFileTool() *ToolDef {
 			// (mid-repair) is allowed, mirroring the syntax gate above.
 			if introduced := editIntroducesUnresolved(ctx, path, content, newContent); len(introduced) > 0 {
 				log.Printf("[edit_file] edit introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
-				return &ToolResult{Success: false, Error: structuralRejection(input.Path, introduced)}, nil
+				return structuralRefusal(structuralRejection(input.Path, introduced)), nil
 			}
 			// edit_file ran checkFallbackSyntax, which parses the embedded
 			// script but has no pre-edit file to compare against, so the
@@ -2607,21 +2607,23 @@ func editFileTool() *ToolDef {
 			// edit_file, and the page returned 200 with a dead game.
 			if msg := embeddedScriptGate(ctx, path, content, newContent); msg != "" {
 				log.Printf("[edit_file] edit breaks an embedded script in %s — rejecting", logPath(input.Path))
-				return &ToolResult{Success: false, Error: msg}, nil
+				return structuralRefusal(msg), nil
 			}
 			if msg := duplicateMainGuard(path, content, newContent); msg != "" {
 				log.Printf("[edit_file] edit duplicates the module entrypoint in %s — rejecting", logPath(input.Path))
-				return &ToolResult{Success: false, Error: msg}, nil
+				return structuralRefusal(msg), nil
 			}
 
 			// Atomic write
 			tmpPath := path + ".atlas.tmp"
 			if err := os.WriteFile(tmpPath, []byte(newContent), 0644); err != nil {
-				return nil, fmt.Errorf("cannot write %s: %w", input.Path, err)
+				return nil, editWriteFailure(path,
+					fmt.Errorf("cannot write %s: %w", input.Path, err), observed)
 			}
 			if err := os.Rename(tmpPath, path); err != nil {
 				os.Remove(tmpPath)
-				return nil, fmt.Errorf("cannot rename temp file: %w", err)
+				return nil, editWriteFailure(path,
+					fmt.Errorf("cannot rename temp file: %w", err), observed)
 			}
 
 			// Update cached state with whatever was actually written
@@ -2649,7 +2651,13 @@ func editFileTool() *ToolDef {
 			if ctx.AppliedEdits != nil {
 				ctx.AppliedEdits[editKey] = true
 			}
-			result := &ToolResult{Success: true, Data: outBytes}
+			result := &ToolResult{Success: true, Data: outBytes,
+				MutationStatus: MutationApplied}
+			// The observation describes exactly the bytes just written --
+			// the tool's own edit, an authorized V3 candidate, or a baseline
+			// restored after revocation, whichever runEditPipeline returned.
+			// Provenance is a separate fact and is attached below.
+			overlayValidation(result, observed)
 			if v3Out.Used {
 				result.V3Used = true
 				result.CandidatesTested = v3Out.CandidatesTested
@@ -3461,23 +3469,26 @@ func insertAfterTool() *ToolDef {
 			}
 			updated = piped
 
-			if synErr, ok := checkFallbackSyntax(ctx, in.Path, updated); !ok {
-				if _, wasHealthy := checkFallbackSyntax(ctx, in.Path, original); wasHealthy {
-					return &ToolResult{Success: false, Error: fallbackSyntaxRejection(in.Path, updated, synErr)}, nil
-				}
+			observed, refusal := editSyntaxObservation(ctx, "insert_after", in.Path, in.Path,
+				original, updated, func(detail string) string {
+					return fallbackSyntaxRejection(in.Path, updated, detail)
+				})
+			if refusal != nil {
+				return refusal, nil
 			}
 			if introduced := editIntroducesUnresolved(ctx, path, original, updated); len(introduced) > 0 {
-				return &ToolResult{Success: false, Error: structuralRejection(in.Path, introduced)}, nil
+				return structuralRefusal(structuralRejection(in.Path, introduced)), nil
 			}
 			if msg := embeddedScriptGate(ctx, path, original, updated); msg != "" {
-				return &ToolResult{Success: false, Error: msg}, nil
+				return structuralRefusal(msg), nil
 			}
 			if msg := duplicateMainGuard(path, original, updated); msg != "" {
-				return &ToolResult{Success: false, Error: msg}, nil
+				return structuralRefusal(msg), nil
 			}
 
 			if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
-				return nil, fmt.Errorf("cannot write %s: %w", in.Path, err)
+				return nil, editWriteFailure(path,
+					fmt.Errorf("cannot write %s: %w", in.Path, err), observed)
 			}
 			ctx.SessionWrites[in.Path] = true
 			ctx.RecordFileRead(path, updated)
@@ -3487,7 +3498,14 @@ func insertAfterTool() *ToolDef {
 				OK:          true,
 				DiffPreview: fmt.Sprintf("+%d lines after line %d", len(insert), in.Line),
 			})
-			return attachV3(&ToolResult{Success: true, Data: out}, v3Out), nil
+			result := &ToolResult{Success: true, Data: out,
+				MutationStatus: MutationApplied}
+			// The observation describes exactly the bytes just written --
+			// the tool's own edit, an authorized V3 candidate, or a baseline
+			// restored after revocation, whichever runEditPipeline returned.
+			// Provenance is a separate fact, attached by attachV3.
+			overlayValidation(result, observed)
+			return attachV3(result, v3Out), nil
 		},
 	}
 }
@@ -3706,23 +3724,26 @@ func replaceLinesTool() *ToolDef {
 			}
 			updated = piped
 
-			if synErr, ok := checkFallbackSyntax(ctx, in.Path, updated); !ok {
-				if _, wasHealthy := checkFallbackSyntax(ctx, in.Path, original); wasHealthy {
-					return &ToolResult{Success: false, Error: fallbackSyntaxRejection(in.Path, updated, synErr)}, nil
-				}
+			observed, refusal := editSyntaxObservation(ctx, "replace_lines", in.Path, in.Path,
+				original, updated, func(detail string) string {
+					return fallbackSyntaxRejection(in.Path, updated, detail)
+				})
+			if refusal != nil {
+				return refusal, nil
 			}
 			if introduced := editIntroducesUnresolved(ctx, path, original, updated); len(introduced) > 0 {
-				return &ToolResult{Success: false, Error: structuralRejection(in.Path, introduced)}, nil
+				return structuralRefusal(structuralRejection(in.Path, introduced)), nil
 			}
 			if msg := embeddedScriptGate(ctx, path, original, updated); msg != "" {
-				return &ToolResult{Success: false, Error: msg}, nil
+				return structuralRefusal(msg), nil
 			}
 			if msg := duplicateMainGuard(path, original, updated); msg != "" {
-				return &ToolResult{Success: false, Error: msg}, nil
+				return structuralRefusal(msg), nil
 			}
 
 			if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
-				return nil, fmt.Errorf("cannot write %s: %w", in.Path, err)
+				return nil, editWriteFailure(path,
+					fmt.Errorf("cannot write %s: %w", in.Path, err), observed)
 			}
 			ctx.SessionWrites[in.Path] = true
 			ctx.RecordFileRead(path, updated)
@@ -3733,7 +3754,14 @@ func replaceLinesTool() *ToolDef {
 				OK:          true,
 				DiffPreview: fmt.Sprintf("lines %d-%d replaced (%d -> %d lines)", in.StartLine, in.EndLine, replaced, len(replacement)),
 			})
-			return attachV3(&ToolResult{Success: true, Data: out}, v3Out), nil
+			result := &ToolResult{Success: true, Data: out,
+				MutationStatus: MutationApplied}
+			// The observation describes exactly the bytes just written --
+			// the tool's own edit, an authorized V3 candidate, or a baseline
+			// restored after revocation, whichever runEditPipeline returned.
+			// Provenance is a separate fact, attached by attachV3.
+			overlayValidation(result, observed)
+			return attachV3(result, v3Out), nil
 		},
 	}
 }
@@ -5255,6 +5283,65 @@ func generateInputExample(toolName string) string {
 	default:
 		return `{}`
 	}
+}
+
+// editSyntaxObservation is the healthy->broken syntax gate the three
+// content-edit tools share, as one structured observation.
+//
+// The bytes about to be written are evaluated ONCE, and the original only when
+// those bytes demonstrably fail -- an edit may not INTRODUCE breakage, but a
+// file already failing the checker stays editable, which is what makes
+// repair-in-progress possible. The three tools had three copies of that rule;
+// they now have one, and each supplies only its own model-facing wording.
+//
+// Returns the observation for the proposed bytes, and a classified refusal when
+// the rule declines the edit. The observation describes the exact bytes the
+// caller is about to write, so the caller attaches it to whichever outcome the
+// filesystem produces rather than re-deriving it.
+func editSyntaxObservation(ctx *AgentContext, tool, checkPath, relPath, original, edited string,
+	rejection func(detail string) string) (checkOutcome, *ToolResult) {
+	proposal := fallbackSyntaxOutcomeFor(ctx, checkPath, edited).aggregate()
+	if proposal.Status != ValidationFailed {
+		return proposal, nil
+	}
+	baseline := fallbackSyntaxOutcomeFor(ctx, checkPath, original).aggregate()
+	if baselineAllowsRepair(baseline) {
+		log.Printf("[%s] %s still unparsable after the edit (was already broken) — allowing repair-in-progress",
+			tool, logPath(relPath))
+		return proposal, nil
+	}
+	log.Printf("[%s] edited content for %s failed the syntax gate: %s",
+		tool, logPath(relPath), truncateStr(proposal.Detail, 120))
+	return proposal, &ToolResult{
+		Success:          false,
+		Error:            rejection(proposal.Detail),
+		MutationStatus:   MutationRefused,
+		ValidationKind:   ValidationKindSyntax,
+		ValidationStatus: ValidationFailed,
+		ValidationDetail: proposal.Detail,
+	}
+}
+
+// structuralRefusal is the shared shape of the three later gates' verdicts:
+// the content parses, and something about its structure does not. Syntax ran
+// first and did not fail on these bytes, so the structural failure is the
+// decisive one and recording it as syntax/failed would assert the opposite.
+func structuralRefusal(msg string) *ToolResult {
+	return &ToolResult{
+		Success:          false,
+		Error:            msg,
+		MutationStatus:   MutationRefused,
+		ValidationKind:   ValidationKindStructural,
+		ValidationStatus: ValidationFailed,
+		ValidationDetail: msg,
+	}
+}
+
+// editWriteFailure keeps an edit tool's real error while stating both facts:
+// the mutation did not establish the intended state, and the observation made
+// on those exact bytes still holds.
+func editWriteFailure(path string, err error, observed checkOutcome) error {
+	return overlayValidationOnError(failedMutation(path, err), observed)
 }
 
 // runEditPipeline is the V3 entry every content edit goes through: classify

@@ -1591,14 +1591,14 @@ func TestStrippedOldStrOnlyCountsWhenItMatchesTheFile(t *testing.T) {
 // rather than hashing every line of read_file output.
 func TestRelocateStaleRange(t *testing.T) {
 	file := []string{
-		"import sys",          // 1
-		"",                    // 2
-		"def helper():",       // 3
-		"    return 1",        // 4
-		"",                    // 5
-		"def main():",         // 6
-		"    x = helper()",    // 7
-		"    return x",        // 8
+		"import sys",       // 1
+		"",                 // 2
+		"def helper():",    // 3
+		"    return 1",     // 4
+		"",                 // 5
+		"def main():",      // 6
+		"    x = helper()", // 7
+		"    return x",     // 8
 	}
 	limit := len(file)
 
@@ -1752,5 +1752,454 @@ func TestIdenticalEditRefusalNamesAWayOut(t *testing.T) {
 		if !strings.Contains(msg, "not help") {
 			t.Errorf("%s: refusal should say re-sending will not help: %s", tc.name, msg)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The content-edit tools' syntax gate, as structured evidence
+// ---------------------------------------------------------------------------
+//
+// edit_file, insert_after and replace_lines share one healthy->broken policy:
+// evaluate the bytes about to be written once, and consult the original only
+// when those bytes demonstrably fail. What each tool reports about that
+// observation is what these pin -- through the real handlers, with the request
+// counts that prove the evaluation happened once per side.
+
+// editGateStub answers the checker for the three edit tools and counts what it
+// was asked. `badFor` names the content it calls unparseable.
+type editGateStub struct {
+	mu         sync.Mutex
+	syntax     []string
+	structural int
+	embedded   int
+	unexpected []string
+}
+
+func (s *editGateStub) syntaxCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.syntax)
+}
+
+type editGateCase struct {
+	name string
+	// what is on disk before the edit
+	original string
+	// the edit each tool performs, expressed per tool below
+	badFor func(code string) bool
+	// non-200 for content carrying this marker: applicable, but unrunnable
+	unavailableFor string
+	// non-200 for the Nth syntax request (1-based). The baseline check is the
+	// second one, and for an insertion the original's text is a subset of the
+	// edited text, so only the ordinal can separate the two sides.
+	unavailableCall int
+	// no sandbox at all
+	noSandbox bool
+	// structural_check reports this symbol as newly unresolved
+	introduces string
+	// the destination directory is read-only, so the write fails
+	readOnlyDir bool
+
+	wantSuccess    bool
+	wantMutation   MutationStatus
+	wantKind       ValidationKind
+	wantStatus     ValidationStatus
+	wantSyntaxReqs int
+	// bytes expected on disk afterwards: "edited" or "original"
+	wantDisk string
+}
+
+// The three tools' fixtures: the same file, edited the same way, so one table
+// drives all of them.
+const egOriginal = "import math\n\n\ndef area(r):\n    if r < 0:\n        raise ValueError('neg')\n    return math.pi * r * r\n\n\ndef edge(r):\n    for _ in range(1):\n        pass\n    return 2 * math.pi * r\n"
+
+func egEdited(tool string) string {
+	switch tool {
+	case "edit_file":
+		return strings.Replace(egOriginal, "raise ValueError('neg')",
+			"raise ValueError('negative')", 1)
+	case "insert_after":
+		return strings.Replace(egOriginal, "import math\n", "import math\nimport sys\n", 1)
+	default: // replace_lines
+		return strings.Replace(egOriginal, "    return math.pi * r * r",
+			"    return math.pi * r ** 2", 1)
+	}
+}
+
+func egArgs(tool string) []byte {
+	var m map[string]interface{}
+	switch tool {
+	case "edit_file":
+		m = map[string]interface{}{"path": "app.py",
+			"old_str": "raise ValueError('neg')", "new_str": "raise ValueError('negative')"}
+	case "insert_after":
+		m = map[string]interface{}{"path": "app.py", "line": 1, "content": "import sys"}
+	default:
+		m = map[string]interface{}{"path": "app.py", "start_line": 7, "end_line": 7,
+			"expected_first_line": "    return math.pi * r * r",
+			"expected_last_line":  "    return math.pi * r * r",
+			"content":             "    return math.pi * r ** 2"}
+	}
+	b, _ := json.Marshal(m)
+	return b
+}
+
+func runEditGate(t *testing.T, tool string, c editGateCase) (*ToolResult, string, *editGateStub, []string) {
+	t.Helper()
+	dir := t.TempDir()
+	st := &editGateStub{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/v3/"):
+			st.mu.Lock()
+			st.unexpected = append(st.unexpected, r.URL.Path)
+			st.mu.Unlock()
+			http.Error(w, "V3 generation must not run on this route", http.StatusTeapot)
+		case r.URL.Path == "/internal/cyclomatic_complexity":
+			// Below the bar that would route this edit through V3: this table
+			// is about the local gate, not the pipeline.
+			_, _ = w.Write([]byte(`{"ok":true,"cyclomatic_complexity":1}`))
+		case r.URL.Path == "/internal/structural_check":
+			st.mu.Lock()
+			st.structural++
+			st.mu.Unlock()
+			var body map[string]interface{}
+			json.NewDecoder(r.Body).Decode(&body)
+			src, _ := body["source"].(string)
+			out := map[string]interface{}{"ok": true, "unresolved": []string{}}
+			if c.introduces != "" && strings.Contains(src, c.introduces+"(") {
+				out["unresolved"] = []string{c.introduces}
+			}
+			json.NewEncoder(w).Encode(out)
+		case r.URL.Path == "/internal/pycheck":
+			// edit_file's own pre-gate lint. Answered benignly: this table is
+			// about the syntax gate's classification, not that check.
+			_, _ = w.Write([]byte(`{"ok":true,"errors":[]}`))
+		case r.URL.Path == "/internal/embedded_script_check":
+			st.mu.Lock()
+			st.embedded++
+			st.mu.Unlock()
+			_, _ = w.Write([]byte(`{"ok":true,"findings":[]}`))
+		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			st.mu.Lock()
+			st.syntax = append(st.syntax, in.Code)
+			st.mu.Unlock()
+			st.mu.Lock()
+			nth := len(st.syntax)
+			st.mu.Unlock()
+			if (c.unavailableFor != "" && strings.Contains(in.Code, c.unavailableFor)) ||
+				(c.unavailableCall != 0 && nth == c.unavailableCall) {
+				http.Error(w, "checker unavailable", http.StatusInternalServerError)
+				return
+			}
+			bad := c.badFor != nil && c.badFor(in.Code)
+			out := map[string]interface{}{"valid": !bad}
+			if bad {
+				out["errors"] = []string{"SyntaxError: invalid syntax (line 6)"}
+			}
+			json.NewEncoder(w).Encode(out)
+		default:
+			st.mu.Lock()
+			st.unexpected = append(st.unexpected, r.URL.Path)
+			st.mu.Unlock()
+			http.Error(w, "unexpected endpoint", http.StatusTeapot)
+		}
+	}))
+	defer srv.Close()
+
+	path := filepath.Join(dir, "app.py")
+	if err := os.WriteFile(path, []byte(c.original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var events []string
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.PermissionMode = PermissionYolo
+	ctx.StreamFn = func(e string, _ interface{}) { events = append(events, e) }
+	ctx.V3URL = srv.URL
+	if !c.noSandbox {
+		ctx.SandboxURL = srv.URL
+	}
+	ctx.SessionWrites["app.py"] = true
+	ctx.RecordFileRead(path, c.original)
+
+	if c.readOnlyDir {
+		// Both: edit_file creates a temp file in the directory, the two
+		// line-addressed tools overwrite the file in place.
+		if err := os.Chmod(path, 0o444); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(dir, 0o555); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(dir, 0o755); os.Chmod(path, 0o644) })
+	}
+
+	res := executeToolCall(tool, egArgs(tool), ctx)
+	if len(st.unexpected) > 0 {
+		t.Fatalf("unexpected endpoints: %v", st.unexpected)
+	}
+	after, _ := os.ReadFile(path)
+	ents, _ := os.ReadDir(dir)
+	for _, e := range ents {
+		if strings.Contains(e.Name(), ".atlas.tmp") {
+			t.Errorf("temporary artifact survived: %s", e.Name())
+		}
+	}
+	return res, string(after), st, events
+}
+
+func TestEditToolsClassifyTheirSyntaxGate(t *testing.T) {
+	broken := func(marker string) func(string) bool {
+		return func(code string) bool { return strings.Contains(code, marker) }
+	}
+	for _, tool := range []string{"edit_file", "insert_after", "replace_lines"} {
+		tool := tool
+		edited := egEdited(tool)
+		// What the edit introduced, used to make the checker condemn exactly
+		// the proposed bytes and not the original.
+		var editedMarker string
+		switch tool {
+		case "edit_file":
+			editedMarker = "negative"
+		case "insert_after":
+			editedMarker = "import sys"
+		default:
+			editedMarker = "r ** 2"
+		}
+
+		for _, c := range []editGateCase{
+			{name: "proposal passes", original: egOriginal,
+				wantSuccess: true, wantMutation: MutationApplied,
+				wantKind: ValidationKindSyntax, wantStatus: ValidationPassed,
+				wantSyntaxReqs: 1, wantDisk: "edited"},
+			{name: "checker applicable but unavailable", original: egOriginal,
+				unavailableFor: "import math",
+				wantSuccess:    true, wantMutation: MutationApplied,
+				wantKind: ValidationKindSyntax, wantStatus: ValidationNotRun,
+				wantSyntaxReqs: 1, wantDisk: "edited"},
+			{name: "no sandbox configured", original: egOriginal, noSandbox: true,
+				wantSuccess: true, wantMutation: MutationApplied,
+				wantKind: ValidationKindSyntax, wantStatus: ValidationNotRun,
+				wantSyntaxReqs: 0, wantDisk: "edited"},
+			{name: "failed over a failed baseline lands", original: egOriginal,
+				badFor:      broken("import math"), // both sides are broken
+				wantSuccess: true, wantMutation: MutationApplied,
+				wantKind: ValidationKindSyntax, wantStatus: ValidationFailed,
+				wantSyntaxReqs: 2, wantDisk: "edited"},
+			{name: "failed over a passing baseline is refused", original: egOriginal,
+				badFor:      broken(editedMarker),
+				wantSuccess: false, wantMutation: MutationRefused,
+				wantKind: ValidationKindSyntax, wantStatus: ValidationFailed,
+				wantSyntaxReqs: 2, wantDisk: "original"},
+			{name: "failed over an unavailable baseline is refused", original: egOriginal,
+				badFor: broken(editedMarker), unavailableCall: 2,
+				wantSuccess: false, wantMutation: MutationRefused,
+				wantKind: ValidationKindSyntax, wantStatus: ValidationFailed,
+				wantSyntaxReqs: 2, wantDisk: "original"},
+			{name: "passed then the write fails", original: egOriginal,
+				readOnlyDir: true,
+				wantSuccess: false, wantMutation: MutationFailed,
+				wantKind: ValidationKindSyntax, wantStatus: ValidationPassed,
+				wantSyntaxReqs: 1, wantDisk: "original"},
+			{name: "not_run then the write fails", original: egOriginal,
+				noSandbox: true, readOnlyDir: true,
+				wantSuccess: false, wantMutation: MutationFailed,
+				wantKind: ValidationKindSyntax, wantStatus: ValidationNotRun,
+				wantSyntaxReqs: 0, wantDisk: "original"},
+		} {
+			c := c
+			t.Run(tool+"/"+c.name, func(t *testing.T) {
+				res, disk, st, events := runEditGate(t, tool, c)
+
+				if res.Success != c.wantSuccess {
+					t.Fatalf("Success = %v, want %v (%s)", res.Success, c.wantSuccess, res.Error)
+				}
+				want := edited
+				if c.wantDisk == "original" {
+					want = c.original
+				}
+				if disk != want {
+					t.Fatalf("bytes on disk:\n got %q\nwant %q", disk, want)
+				}
+				if res.MutationStatus != c.wantMutation ||
+					res.ValidationKind != c.wantKind ||
+					res.ValidationStatus != c.wantStatus {
+					t.Errorf("got %q/%q/%q, want %q/%q/%q",
+						res.MutationStatus, res.ValidationKind, res.ValidationStatus,
+						c.wantMutation, c.wantKind, c.wantStatus)
+				}
+				if !res.Classified() {
+					t.Error("result not fully classified")
+				}
+				if got := st.syntaxCount(); got != c.wantSyntaxReqs {
+					t.Errorf("syntax-check requests = %d, want %d", got, c.wantSyntaxReqs)
+				}
+				// No V3 ran on this route, so no provenance may appear.
+				if res.V3Used || res.CandidatesTested != 0 || res.PhaseSolved != "" {
+					t.Errorf("V3 provenance on a non-pipeline edit: %+v", res)
+				}
+				for _, e := range events {
+					if e != "v3_progress" && e != "text" {
+						t.Errorf("unexpected SSE projection %q", e)
+					}
+				}
+			})
+		}
+	}
+}
+
+// Syntax passes on the edited bytes and a later gate refuses them: the
+// structural failure is decisive, and the passing syntax verdict must not be
+// what the result reports.
+func TestEditToolsReportTheDecisiveStructuralRefusal(t *testing.T) {
+	for _, tc := range []struct {
+		tool string
+		args map[string]interface{}
+	}{
+		{"edit_file", map[string]interface{}{"path": "app.py",
+			"old_str": "    return math.pi * r * r",
+			"new_str": "    return missing_helper(r)"}},
+		{"insert_after", map[string]interface{}{"path": "app.py", "line": 7,
+			"content": "AREA = missing_helper(2)"}},
+		{"replace_lines", map[string]interface{}{"path": "app.py",
+			"start_line": 7, "end_line": 7,
+			"expected_first_line": "    return math.pi * r * r",
+			"expected_last_line":  "    return math.pi * r * r",
+			"content":             "    return missing_helper(r)"}},
+	} {
+		tc := tc
+		t.Run(tc.tool, func(t *testing.T) {
+			dir := t.TempDir()
+			st := &editGateStub{}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.URL.Path == "/internal/cyclomatic_complexity":
+					_, _ = w.Write([]byte(`{"ok":true,"cyclomatic_complexity":1}`))
+				case r.URL.Path == "/internal/pycheck":
+					_, _ = w.Write([]byte(`{"ok":true,"errors":[]}`))
+				case r.URL.Path == "/internal/structural_check":
+					var body map[string]interface{}
+					json.NewDecoder(r.Body).Decode(&body)
+					src, _ := body["source"].(string)
+					out := map[string]interface{}{"ok": true, "unresolved": []string{}}
+					if strings.Contains(src, "missing_helper(") {
+						out["unresolved"] = []string{"missing_helper"}
+					}
+					json.NewEncoder(w).Encode(out)
+				case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+					var in struct{ Code string }
+					json.NewDecoder(r.Body).Decode(&in)
+					st.mu.Lock()
+					st.syntax = append(st.syntax, in.Code)
+					st.mu.Unlock()
+					_, _ = w.Write([]byte(`{"valid":true}`))
+				default:
+					_, _ = w.Write([]byte(`{"ok":true}`))
+				}
+			}))
+			defer srv.Close()
+
+			path := filepath.Join(dir, "app.py")
+			if err := os.WriteFile(path, []byte(egOriginal), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			ctx := NewAgentContext(dir, Tier2Medium)
+			ctx.PermissionMode = PermissionYolo
+			ctx.StreamFn = func(string, interface{}) {}
+			ctx.V3URL = srv.URL
+			ctx.SandboxURL = srv.URL
+			ctx.SessionWrites["app.py"] = true
+			ctx.RecordFileRead(path, egOriginal)
+
+			args, _ := json.Marshal(tc.args)
+			res := executeToolCall(tc.tool, args, ctx)
+
+			if res.Success {
+				t.Fatalf("the structural gate did not refuse: %+v", res)
+			}
+			if !strings.Contains(res.Error, "missing_helper") {
+				t.Fatalf("refusal came from a different gate: %q", res.Error)
+			}
+			if res.MutationStatus != MutationRefused ||
+				res.ValidationKind != ValidationKindStructural ||
+				res.ValidationStatus != ValidationFailed {
+				t.Errorf("got %q/%q/%q, want refused/structural/failed",
+					res.MutationStatus, res.ValidationKind, res.ValidationStatus)
+			}
+			if !strings.Contains(res.ValidationDetail, "missing_helper") {
+				t.Errorf("ValidationDetail must name the symbol, got %q", res.ValidationDetail)
+			}
+			if !res.Classified() {
+				t.Error("result not fully classified")
+			}
+			if disk, _ := os.ReadFile(path); string(disk) != egOriginal {
+				t.Errorf("a refused edit changed the file: %q", disk)
+			}
+			// Syntax ran first and passed on those exact bytes; exactly one
+			// request, and the baseline was never consulted.
+			if got := st.syntaxCount(); got != 1 {
+				t.Errorf("syntax-check requests = %d, want 1", got)
+			}
+		})
+	}
+}
+
+// Source-level inventory. The three edit handlers now use the structured
+// producer, and the remaining legacy wrapper calls are named rather than
+// counted, so a reintroduction has to edit this list.
+func TestLegacyCheckerWrapperInventory(t *testing.T) {
+	src, err := os.ReadFile("tools.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+
+	span := func(from, to string) string {
+		i := strings.Index(body, from)
+		if i < 0 {
+			t.Fatalf("cannot find %q", from)
+		}
+		rest := body[i:]
+		j := strings.Index(rest, to)
+		if j < 0 {
+			return rest
+		}
+		return rest[:j]
+	}
+	for name, fn := range map[string]string{
+		"edit_file":     span("Name:   \"edit_file\"", "\nfunc structuralEditTool("),
+		"insert_after":  span("Name:   \"insert_after\"", "\n// replaceLinesMaxSpan"),
+		"replace_lines": span("Name:   \"replace_lines\"", "\nfunc deleteFileTool("),
+	} {
+		if n := strings.Count(fn, "checkFallbackSyntax("); n != 0 {
+			t.Errorf("%s still calls the legacy wrapper %d time(s)", name, n)
+		}
+		if !strings.Contains(fn, "editSyntaxObservation(") {
+			t.Errorf("%s does not use the shared structured gate", name)
+		}
+	}
+
+	// What is left, named. Two sites, both inside writeFileWithV3: the V3
+	// preflight's own pair is gone, and these belong to candidate revocation.
+	remaining := strings.Count(body, "checkFallbackSyntax(ctx")
+	if remaining != 0 {
+		t.Errorf("unexpected legacy wrapper calls remain in tools.go: %d", remaining)
+	}
+	// One producer, one wrapper definition -- no second checker implementation.
+	gates, err := os.ReadFile("gates.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(gates), "func checkFallbackSyntax("); n != 1 {
+		t.Errorf("checkFallbackSyntax definitions = %d, want 1", n)
+	}
+	if n := strings.Count(string(gates), "func fallbackSyntaxOutcomeFor("); n != 1 {
+		t.Errorf("fallbackSyntaxOutcomeFor definitions = %d, want 1", n)
+	}
+	// And the shared edit gate exists exactly once.
+	if n := strings.Count(body, "func editSyntaxObservation("); n != 1 {
+		t.Errorf("editSyntaxObservation definitions = %d, want 1", n)
 	}
 }

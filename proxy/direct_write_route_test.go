@@ -610,6 +610,8 @@ def perimeter(radius):
 //	                                          baseline they restore is written
 //	V3 terminal guard   final bytes           re-observes only if some branch
 //	                                          changed the bytes without saying so
+//	edit gate           proposal + baseline   shared by edit_file, insert_after
+//	                                          and replace_lines, once each
 //
 // None is in the final direct-write block. Growth beyond this means a route
 // recomputed an observation it already held.
@@ -637,14 +639,15 @@ func TestWriteRoutesDoNotRecomputeTheirObservation(t *testing.T) {
 		}
 		return true
 	})
-	if structured != 13 {
-		t.Errorf("fallbackSyntaxOutcomeFor call sites = %d, want 13; a new one on a "+
+	if structured != 15 {
+		t.Errorf("fallbackSyntaxOutcomeFor call sites = %d, want 15; a new one on a "+
 			"route that already holds an observation is a recomputation", structured)
 	}
-	// Still on the legacy wrapper: edit_file, insert_after and replace_lines,
-	// two calls each. Every write_file route now uses the structured checker.
-	if legacy != 6 {
-		t.Errorf("checkFallbackSyntax call sites = %d, want 6 -- the three edit "+
-			"tools, two calls each", legacy)
+	// The migration is complete: no route calls the legacy wrapper any more.
+	// It survives as one definition in gates.go, whose own tests still cover
+	// it, and TestLegacyCheckerWrapperInventory names what is left.
+	if legacy != 0 {
+		t.Errorf("checkFallbackSyntax call sites = %d, want 0 -- every route now "+
+			"uses the structured producer", legacy)
 	}
 }
