@@ -37,11 +37,16 @@ WRONG = ("import sys\n"
          "main()\n")
 
 
-def _sandbox(code):
+def _sandbox(code, test_input="", files=None, **_):
+    """The executor's shape: stage the request's files into a fresh
+    workspace, then run from it."""
     work = tempfile.mkdtemp()
+    for name, content in (files or {}).items():
+        Path(work, name).write_text(content)
     Path(work, "t.py").write_text(code)
     run = subprocess.run([sys.executable, "t.py"], cwd=work,
-                         capture_output=True, text=True, timeout=60)
+                         capture_output=True, text=True,
+                         stdin=subprocess.DEVNULL, timeout=60)
     return run.returncode == 0, run.stdout, run.stderr
 
 
@@ -95,10 +100,12 @@ def test_a_crashing_candidate_does_not_join_a_cluster():
 
 
 def test_the_probe_reports_output_rather_than_asserting():
-    probe = pipeline._make_output_probe(CORRECT_A, _case())
+    probe, files = pipeline._make_output_probe(CORRECT_A, _case())
     assert pipeline._CONSENSUS_MARK in probe
     assert "SELF_TEST_PASS" not in probe
     assert "THIS KEY IS WRONG" not in probe, "the probe must not see the key"
+    assert not any("THIS KEY IS WRONG" in v for v in files.values()), \
+        "nor may the key be staged for it"
 
 
 def test_the_consensus_stage_is_registered():
@@ -155,9 +162,116 @@ def test_without_a_task_input_file_the_old_shapes_stand():
 
 
 def test_the_probe_uses_the_same_contract():
-    probe = pipeline._make_output_probe(STDIN_CANDIDATE, _case(), "input.txt")
-    assert "open('input.txt','w')" in probe
-    # stdin is attached-and-empty under the task contract; the case input
-    # must never ride it.
+    probe, files = pipeline._make_output_probe(
+        STDIN_CANDIDATE, _case(), "input.txt")
+    # The case input is staged for the program, exactly as the self-test
+    # stages it; stdin is attached-and-empty under the task contract, and
+    # the case input must never ride it.
+    assert files["input.txt"] == "199\n200\n208\n210\n200"
     assert "_s.stdin=_o.StringIO('')" in probe
-    assert "199" not in probe.split("open(")[0], "case input stays out of the stdin setup"
+    assert "199" not in probe, "case input stays out of the wrapper entirely"
+
+
+# --- the probe runs a candidate the way the self-test does -----------------
+#
+# `_make_self_test` was repaired to stage the case input through the
+# sandbox's files map and run the candidate once as `__main__`. The output
+# probe kept the old shape: it wrote `input.txt` from executable code, which
+# raises under the hardened sandbox before the candidate runs, and it exec'd
+# the source inside the imported `solution` module, where `__name__` is
+# `'solution'` and a main-guarded body never executes. Same contract, so the
+# same staging and the same entry point.
+
+PROBE_MAIN_GUARDED = ("def main():\n"
+                      "    print(len(open('input.txt').read().split()))\n"
+                      "\n"
+                      "if __name__ == '__main__':\n"
+                      "    main()\n")
+
+
+def _run_probe(built, work=None):
+    body, files = built
+    work = work or tempfile.mkdtemp()
+    for name, content in (files or {}).items():
+        Path(work, name).write_text(content)
+    Path(work, "solution.py").write_text(body)
+    return subprocess.run(
+        [sys.executable, "-c",
+         f"import sys; sys.path.insert(0,{work!r}); import solution"],
+        cwd=work, capture_output=True, text=True,
+        stdin=subprocess.DEVNULL, timeout=60), work
+
+
+def test_the_probe_stages_its_case_input():
+    body, files = pipeline._make_output_probe(
+        FILE_CANDIDATE, _case3("3"), "input.txt")
+    assert "'w'" not in body, "the probe creates no files of its own"
+    assert files["input.txt"] == "1\n2\n3"
+    assert files[pipeline._CANDIDATE_FILE] == FILE_CANDIDATE
+
+
+def test_the_probe_runs_a_main_guarded_candidate():
+    """Its output is the whole point of the probe; under the old module
+    identity it was empty and clustered with every other empty result."""
+    run, _ = _run_probe(pipeline._make_output_probe(
+        PROBE_MAIN_GUARDED, _case3("3"), "input.txt"))
+    assert pipeline._CONSENSUS_MARK + repr("3") in run.stdout, (
+        run.stdout, run.stderr[:300])
+
+
+def test_the_probe_executes_the_candidate_once():
+    counter = ("open('runs.txt','a').write('x')\n"
+               "if __name__ == '__main__':\n"
+               "    print(len(open('runs.txt').read()))\n")
+    run, work = _run_probe(pipeline._make_output_probe(
+        counter, _case3("3"), "input.txt"))
+    assert pipeline._CONSENSUS_MARK + repr("1") in run.stdout, run.stdout
+    assert Path(work, "runs.txt").read_text() == "x"
+
+
+def test_each_probe_case_stages_its_own_input():
+    _, f1 = pipeline._make_output_probe(FILE_CANDIDATE, _case3("3"), "input.txt")
+    other = type("TC", (), {"input_str": "9\n9", "expected_output": "2"})()
+    _, f2 = pipeline._make_output_probe(FILE_CANDIDATE, other, "input.txt")
+    assert f1["input.txt"] == "1\n2\n3"
+    assert f2["input.txt"] == "9\n9"
+
+
+def test_the_probe_body_reaches_the_sandbox_with_its_files(monkeypatch):
+    """Through the real caller and the real adapter: the serialized
+    /execute body carries the staged case, not a wrapper that writes it."""
+    import json as _json
+    import adapters as _adapters
+
+    captured = []
+
+    class _Resp:
+        def __init__(self, payload):
+            self._p = payload
+
+        def read(self):
+            return _json.dumps(self._p).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        captured.append(_json.loads(req.data.decode()))
+        return _Resp({"success": True,
+                      "stdout": pipeline._CONSENSUS_MARK + repr("3") + "\n",
+                      "stderr": ""})
+
+    monkeypatch.setattr(_adapters.urllib.request, "urlopen", fake_urlopen)
+    sandbox = _adapters.SandboxAdapter()
+    pipeline._consensus_winners(
+        [{"index": 0, "code": FILE_CANDIDATE},
+         {"index": 1, "code": PROBE_MAIN_GUARDED}],
+        [_case3("3")], sandbox, lambda *a, **k: None, "input.txt")
+
+    assert captured, "the consensus stage sent no sandbox request"
+    for body in captured:
+        assert body["files"]["input.txt"] == "1\n2\n3"
+        assert "'w'" not in body["code"]

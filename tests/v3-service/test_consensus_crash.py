@@ -23,11 +23,16 @@ GOOD_A = "print(len(open('input.txt').read().split()))\n"
 GOOD_B = "print(sum(1 for _ in open('input.txt').read().split()))\n"
 
 
-def _sandbox(code):
+def _sandbox(code, test_input="", files=None, **_):
+    """The executor's shape: stage the request's files into a fresh
+    workspace, then run from it."""
     work = tempfile.mkdtemp()
+    for name, content in (files or {}).items():
+        Path(work, name).write_text(content)
     Path(work, "t.py").write_text(code)
     run = subprocess.run([sys.executable, "t.py"], cwd=work,
-                         capture_output=True, text=True, timeout=60)
+                         capture_output=True, text=True,
+                         stdin=subprocess.DEVNULL, timeout=60)
     return run.returncode == 0, run.stdout, run.stderr
 
 
@@ -72,10 +77,7 @@ def test_partial_validity_is_not_agreement_material():
 
 
 def test_the_probe_marks_crashes_distinctly():
-    body = pipeline._make_output_probe(CRASH_RUNTIME, _case(), "input.txt")
-    work = tempfile.mkdtemp()
-    Path(work, "t.py").write_text(body)
-    run = subprocess.run([sys.executable, "t.py"], cwd=work,
-                         capture_output=True, text=True, timeout=60)
-    assert "CRASH" in run.stdout
-    assert "''" not in run.stdout
+    body, files = pipeline._make_output_probe(CRASH_RUNTIME, _case(), "input.txt")
+    ok, out, _err = _sandbox(body, files=files)
+    assert "CRASH" in out
+    assert "''" not in out

@@ -691,6 +691,42 @@ def _selection_enabled(mode: str) -> bool:
 _CANDIDATE_FILE = "candidate.py"
 
 
+def _staged_candidate_run(code: str, inp: str, infile: str):
+    """How a case runs a candidate, for both builders that need it.
+
+    Returns ``(header, run, files)``: the files the sandbox stages, the
+    source that attaches stdin and captures stdout, and the one statement
+    that executes the candidate. The self-test and the output probe differ
+    only in what they do with the captured output and with an exception, so
+    they share this and nothing else -- two copies of "how to run a
+    candidate" is how one of them was repaired and the other was not.
+
+    The case's input is staged, never written by executable code: that write
+    lands in the candidate's working directory, which is read-only in the
+    sandbox, so it raised before the candidate ran. The candidate executes
+    once, from a file, under the name a program is really run with; exec'ing
+    it inside the imported ``solution`` module left ``__name__`` as
+    ``'solution'`` and a ``if __name__ == "__main__":`` body never ran.
+    """
+    files = {_CANDIDATE_FILE: code}
+    if infile:
+        # Empty stdin, not absent stdin. The caller runs the program with
+        # stdin at EOF, so a candidate that reads sys.stdin must terminate
+        # immediately and fail fast. With no stdin attached it BLOCKS until
+        # the sandbox timeout instead: measured live, one stdin candidate
+        # turned the probe into a 300s hang and the dead-oracle fast return
+        # never fired, because the probe "failed" by timeout rather than by
+        # inconclusive.
+        files[infile] = inp
+        stdin_setup = "_s.stdin=_o.StringIO('')\n"
+    else:
+        stdin_setup = f"_s.stdin=_o.StringIO({repr(inp)})\n"
+    header = ("import sys as _s,io as _o,runpy as _rp\n" + stdin_setup
+              + "_c=_o.StringIO()\n_old=_s.stdout\n_s.stdout=_c\n")
+    run = f"_rp.run_path({repr(_CANDIDATE_FILE)},run_name='__main__')\n"
+    return header, run, files
+
+
 def _make_self_test(code: str, tc, task_input_file: str = ""):
     """Build one case's executable check, and the files the sandbox stages.
 
@@ -736,31 +772,15 @@ def _make_self_test(code: str, tc, task_input_file: str = ""):
     # and both tasks sat at 7/26. The same model asked directly, with no
     # pipeline, wrote input.txt readers and scored 12/12.
     infile = task_input_file or _reads_input_file(code)
-    files = {_CANDIDATE_FILE: code}
-    if infile:
-        # The case's input is staged, not written. Empty stdin, not absent
-        # stdin: the caller runs the program with stdin at EOF, so a
-        # candidate that reads sys.stdin must terminate immediately and fail
-        # fast. With no stdin attached it BLOCKS until the sandbox timeout
-        # instead: measured live, one stdin candidate turned the probe into a
-        # 300s hang and the dead-oracle fast return never fired, because the
-        # probe "failed" by timeout rather than by inconclusive.
-        files[infile] = inp
-        stdin_setup = "_s.stdin=_o.StringIO('')\n"
-    else:
-        stdin_setup = f"_s.stdin=_o.StringIO({repr(inp)})\n"
-    # run_path, not exec of a string literal: the candidate runs exactly once,
-    # from the exact bytes staged for it, under the name a program is really
-    # run with. A SystemExit the program raised itself is ordinary
-    # termination when its code is 0 or None, and an execution failure
-    # otherwise; anything else propagates and the process exits non-zero.
+    header, run, files = _staged_candidate_run(code, inp, infile)
+    # A SystemExit the program raised itself is ordinary termination when its
+    # code is 0 or None, and an execution failure otherwise; anything else
+    # propagates and the process exits non-zero.
     return (
-        "import sys as _s,io as _o,runpy as _rp\n"
-        + stdin_setup
-        + "_c=_o.StringIO()\n_old=_s.stdout\n_s.stdout=_c\n"
-        "try:\n"
-        f"    _rp.run_path({repr(_CANDIDATE_FILE)},run_name='__main__')\n"
-        "except SystemExit as _e:\n"
+        header
+        + "try:\n"
+        + "    " + run
+        + "except SystemExit as _e:\n"
         "    if _e.code not in (0,None):\n"
         "        raise\n"
         "finally:\n"
@@ -947,8 +967,11 @@ def run_browser_probe(code: str, sandbox=None, timeout_s: int = BROWSER_PROBE_TI
     return adapters.combine_runs(runs.get("baseline"), runs.get("input"))
 
 
-def _make_output_probe(code: str, tc, task_input_file: str = "") -> str:
+def _make_output_probe(code: str, tc, task_input_file: str = ""):
     """Run a candidate on a case's INPUT and report what it printed.
+
+    Returns ``(wrapper_source, files)`` — the same staged shape the self-test
+    uses, through the same ``_staged_candidate_run``.
 
     The self-test compares that output to the model's predicted answer. For a
     problem the model cannot reliably solve, producing the answer IS the
@@ -973,26 +996,30 @@ def _make_output_probe(code: str, tc, task_input_file: str = "") -> str:
                 + f"_r={name}(*_p) if isinstance(_p,tuple) else {name}(_p)\n"
                 + f"print({repr(_CONSENSUS_MARK)}+repr(str(_r).strip()))\n")
     infile = task_input_file or _reads_input_file(code)
-    setup = ((f"_s.stdin=_o.StringIO('')\n"
-              f"open({repr(infile)},'w').write({repr(inp)})\n") if infile
-             else f"_s.stdin=_o.StringIO({repr(inp)})\n")
+    header, run, files = _staged_candidate_run(code, inp, infile)
     # The marker is emitted ONLY on clean completion, and only for non-empty
     # output. Swallowing exceptions and printing the marker regardless let two
     # CRASHING candidates agree: repr('') is the two-character string "''",
     # which is truthy, so their empty outputs clustered and crash consensus
     # won (third-party audit reproduction: two ordinary-exception candidates,
-    # WINNERS [0, 1]). A crash now prints a CRASH line the clustering
-    # explicitly refuses, and silence emits nothing.
-    return ("import sys as _s,io as _o\n" + setup
-            + "_c=_o.StringIO()\n_old=_s.stdout\n_s.stdout=_c\n"
-            + f"_src={repr(code)}\n"
+    # WINNERS [0, 1]). A crash prints a CRASH line the clustering explicitly
+    # refuses, and silence emits nothing.
+    #
+    # The probe reports rather than fails, so unlike the self-test it catches
+    # what the candidate raised instead of letting it end the process. A
+    # SystemExit the program raised itself is ordinary termination at code 0
+    # or None -- a candidate that prints its answer and calls sys.exit() has
+    # answered, and calling that a crash discarded a real output.
+    return (header
             + "_crashed=False\n"
-            + "try:\n    exec(compile(_src,'solution.py','exec'),globals())\n"
+            + "try:\n"
+            + "    " + run
+            + "except SystemExit as _e:\n    _crashed=_e.code not in (0,None)\n"
             + "except BaseException:\n    _crashed=True\n"
             + "finally:\n _s.stdout=_old\n"
             + "_out=_c.getvalue().strip()\n"
             + f"if _crashed:\n    print({repr(_CONSENSUS_MARK)}+'CRASH')\n"
-            + f"elif _out:\n    print({repr(_CONSENSUS_MARK)}+repr(_out))\n")
+            + f"elif _out:\n    print({repr(_CONSENSUS_MARK)}+repr(_out))\n"), files
 
 
 def _consensus_winners(candidates, test_cases, sandbox, emit,
@@ -1017,8 +1044,9 @@ def _consensus_winners(candidates, test_cases, sandbox, emit,
         outs = []
         for tc in test_cases:
             try:
-                ok, out, _ = sandbox(
-                    _make_output_probe(c["code"], tc, task_input_file))
+                probe_code, probe_files = _make_output_probe(
+                    c["code"], tc, task_input_file)
+                ok, out, _ = sandbox(probe_code, files=probe_files)
             except Exception:
                 ok, out = False, ""
             marker = ""
