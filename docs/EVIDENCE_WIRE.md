@@ -117,6 +117,30 @@ those exact bytes and check the declared expectations independently — so the
 two languages agree with the contract rather than with each other, and adding a
 case on the Python side automatically binds the Go side to it.
 
+## Benchmark-only pool capture
+
+Verification hands the pipeline one bit. A candidate that passed 9 of 10
+generated cases and one that passed none produce the same contract record,
+and the rejected candidates' bytes are gone when the run returns — so a run
+where every suite scored 0/N cannot be attributed to the candidates or to
+the answer key from what was retained.
+
+`ATLAS_V3_CAPTURE_POOL=<absolute path>` turns on an append-only JSONL sink
+in `pipeline.py` holding `candidate_evaluation` (exact candidate bytes,
+hash, length, role including candidate zero, contract record, and every
+generated case with its input, generated expected output, observed actual
+and a classified outcome), one `selection_summary` and one `capture_status`
+per run. Unset is fully inert: no path is opened and no record is built.
+
+It is an instrument, not a feature. It decides nothing, its output is
+untracked, and every failure mode — a relative path, a missing parent, a
+symlink at the final component, a full disk, the byte cap — disables
+capture rather than changing the run. Candidate source reaches this file
+and no other surface; `test_candidate_bytes_reach_no_serialiser_or_emitter`
+pins that. The sink names the bytes the **service returned**, never the
+delivered artifact: only Go knows what was written, so the delivered hash
+is joined offline from the runner's authorization telemetry.
+
 ## `evidence.py`: retired
 
 The prototype that predated `contract.py` is **deleted**. Every symbol moved to

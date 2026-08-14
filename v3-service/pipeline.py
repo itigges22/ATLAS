@@ -2,9 +2,13 @@
 verification, the lens/structural/call-graph vetoes, candidate selection,
 the repair phases, stage telemetry, and the /v3/generate problem builder."""
 
+import base64
+import fcntl
+import hashlib
 import json
 import os
 import re
+import stat
 import threading
 import time
 from datetime import datetime, timezone
@@ -120,6 +124,354 @@ def _resolve_telemetry_dir() -> Optional[Path]:
             print(f"  [telemetry] {candidate} not writable ({e}) — "
                   f"stage telemetry disabled", flush=True)
         return None
+
+
+# --- Benchmark-only candidate-pool capture -----------------------------------
+#
+# Verification hands the rest of the pipeline one bit: accepted or not. A
+# candidate that passed 9 of 10 generated cases and one that passed none
+# arrive at the contract record identically, and the rejected candidates'
+# bytes are gone the moment the run returns. That is what made the measured
+# "every suite scored 0/N" pattern unattributable — nothing retained could
+# separate a wrong candidate from a wrong answer key.
+#
+# This writes the pool, the per-case expected/actual pairs and the selection
+# identities to one append-only file so the question can be settled offline.
+# It is a measurement instrument, not a feature: unset means no file is
+# opened, capture decides nothing, and every failure mode disables capture
+# rather than touching the run. Candidate source appears here and nowhere
+# else — never in a response, an SSE frame, telemetry or a log line.
+
+CAPTURE_ENV = "ATLAS_V3_CAPTURE_POOL"
+CAPTURE_SCHEMA = "atlas.v3_candidate_capture/1"
+
+# Sizing, from the Suite A run this instrument exists to explain: candidates
+# averaged 1.9 KB (p95 4.1 KB, max 13 KB), at most 3 per generation call and
+# roughly 2 calls per task. A candidate_evaluation is the base64 of that plus
+# ≤5 cases and the contract record — ~10 KB typical, ~25 KB worst — so a
+# 12-task diagnostic is a few megabytes. 64 MiB is ~25x that headroom and
+# still bounds a runaway loop to something the telemetry volume absorbs.
+CAPTURE_DEFAULT_MAX_BYTES = 64 * 1024 * 1024
+# One pathological candidate must not consume the whole budget. Its identity
+# is still recorded; only the bytes are dropped, and the record says so.
+CAPTURE_MAX_RECORD_BYTES = 2 * 1024 * 1024
+# Execution output is diagnostic context, not evidence: tails are enough.
+CAPTURE_MAX_FIELD_BYTES = 4096
+
+_CAPTURE_GOT = re.compile(r"got\s+(.*)", re.DOTALL)
+_CAPTURE_TIMEOUT = re.compile(r"tim(?:ed?\s*)?out", re.IGNORECASE)
+
+
+def _capture_clip(text: str) -> str:
+    text = text or ""
+    if len(text) <= CAPTURE_MAX_FIELD_BYTES:
+        return text
+    return text[:CAPTURE_MAX_FIELD_BYTES] + "…[clipped]"
+
+
+def _capture_case(index, tc, ran_ok, out, err, harness_error=""):
+    """One generated case as observed, with the failure kinds kept apart.
+
+    A wrong answer, a crash, a timeout and a case the harness could not even
+    build are four different findings about a run that all reduce to "not
+    passed" in production. Classification is read off what the sandbox
+    already returned; nothing extra is executed.
+    """
+    inp = (getattr(tc, "input_str", "") or "").strip()
+    exp = (getattr(tc, "expected_output", "") or "").strip()
+    out, err = out or "", err or ""
+    passed = bool(ran_ok) and "SELF_TEST_PASS" in out
+    # The generated assertion reports the value it saw as `got <actual>`, so
+    # the candidate's real output survives in the failure text.
+    match = None if passed else _CAPTURE_GOT.search(err)
+    actual = match.group(1).strip() if match else None
+    if harness_error:
+        outcome = "harness_error"
+    elif passed:
+        outcome = "pass"
+    elif not inp or not exp:
+        outcome = "generated_test_malformed"
+    elif _CAPTURE_TIMEOUT.search(err):
+        outcome = "timeout"
+    elif actual is not None or "AssertionError" in err:
+        outcome = "wrong_answer"
+    else:
+        outcome = "execution_error"
+    return {"index": index, "input": inp, "expected": exp, "actual": actual,
+            "passed": passed, "outcome": outcome,
+            "stdout": _capture_clip(out), "stderr": _capture_clip(err),
+            "harness_error": harness_error}
+
+
+class _PoolCapture:
+    """An append-only JSONL sink for one run's candidate pool.
+
+    Disabled is the default and the only state that costs anything: with no
+    path configured every method is a no-op. Once enabled, no error it can
+    hit — encoding, a full disk, a revoked directory — is allowed to reach
+    the pipeline; capture turns itself off and the diagnostic record is
+    invalid instead of the run being different.
+    """
+
+    def __init__(self, path: Optional[Path] = None, fd: Optional[int] = None,
+                 error: str = ""):
+        self.path = path
+        self._fd = fd
+        self.enabled = fd is not None
+        self.write_error = error
+        self.records_written = 0
+        self.bytes_written = 0
+        self.limit_reached = False
+        self._lock = threading.Lock()
+        self._seen = set()
+        self._oracle: Dict[str, Dict[str, Any]] = {}
+        self._selection: Optional[Dict[str, Any]] = None
+        self._next_index = 0
+        self._session_id = ""
+
+    # -- lifecycle ----------------------------------------------------------
+
+    @classmethod
+    def disabled(cls) -> "_PoolCapture":
+        return cls()
+
+    @classmethod
+    def from_env(cls, env: Optional[Dict[str, str]] = None) -> "_PoolCapture":
+        """Open the configured sink, or stay inert.
+
+        Every rejection here is a refusal to write, never an exception: a
+        relative path, a missing parent, a symlink at the final component, or
+        anything that is not a regular file. O_NOFOLLOW is what stops the
+        configured path being aimed at something else through a link that was
+        planted first.
+        """
+        configured = (env or os.environ).get(CAPTURE_ENV, "").strip()
+        if not configured:
+            return cls()
+        path = Path(configured)
+        if not path.is_absolute():
+            return cls(error="capture path must be absolute")
+        if not path.parent.is_dir():
+            return cls(error="capture parent directory does not exist")
+        try:
+            fd = os.open(str(path),
+                         os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW,
+                         0o600)
+        except OSError as exc:
+            return cls(error=f"open: {exc}")
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode):
+                raise OSError("capture path is not a regular file")
+            # A file that already existed may carry wider permissions than
+            # the create mode would have given it.
+            if stat.S_IMODE(info.st_mode) != 0o600:
+                os.fchmod(fd, 0o600)
+        except OSError as exc:
+            os.close(fd)
+            return cls(error=f"validate: {exc}")
+        return cls(path=path, fd=fd)
+
+    def close(self, result: Optional[Dict[str, Any]] = None) -> None:
+        """Write the delivered artifact, the selection summary and the status
+        line, then release the descriptor."""
+        if not self.enabled:
+            return
+        try:
+            if result:
+                code = result.get("code") or ""
+                if code:
+                    self.note_candidate(
+                        role="delivered", index=None, code=code,
+                        accepted=bool(result.get("passed")),
+                        record=result.get("evidence_record"), phase="delivered")
+            self._write_selection(result)
+        except Exception as exc:                       # noqa: BLE001
+            self.write_error = self.write_error or f"close: {exc}"
+        self._write_status()
+        fd, self._fd = self._fd, None
+        self.enabled = False
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+    # -- collection ---------------------------------------------------------
+
+    def bind(self, session_id: str) -> None:
+        self._session_id = session_id or ""
+
+    def note_oracle(self, code: str, cases, passed: int, total: int) -> None:
+        """Keep a verification run's per-case detail, keyed by the bytes it
+        judged. Production keeps only the boolean this discards."""
+        if not self.enabled:
+            return
+        self._oracle[contract.content_hash(code)] = {
+            "suite_available": True, "cases": list(cases),
+            "cases_passed": passed, "cases_total": total}
+
+    def note_candidate(self, *, role: str, index, code: str, accepted: bool,
+                       record, phase: str, lens=None) -> None:
+        """One candidate_evaluation record.
+
+        Deduplicated on (role, bytes): candidate zero is evaluated twice by
+        design — once as the probe, once as pool member 0 — and one record
+        per role is the honest count of distinct candidates, not of visits.
+        """
+        if not self.enabled or not code:
+            return
+        raw = code.encode("utf-8")
+        digest = hashlib.sha256(raw).hexdigest()
+        key = (role, digest)
+        if key in self._seen:
+            return
+        self._seen.add(key)
+        if index is None:
+            index = self._next_index
+        self._next_index = max(self._next_index, int(index) + 1)
+        oracle = self._oracle.get(digest) or {
+            "suite_available": False, "cases": [],
+            "cases_passed": 0, "cases_total": 0}
+        payload = {
+            "type": "candidate_evaluation",
+            "session_id": self._session_id, "phase": phase,
+            "candidate_index": index, "role": role,
+            "code_b64": base64.b64encode(raw).decode("ascii"),
+            "code_sha256": digest, "code_bytes": len(raw),
+            "adapter_id": (record or {}).get("adapter_id", ""),
+            "contract_record": record,
+            "contract_record_source":
+                "production" if record else "not_built_in_production",
+            "oracle": oracle,
+            "accepted": bool(accepted),
+            "lens": lens or {},
+        }
+        self.write(payload)
+
+    def note_pool(self, *, phase: str, pool, lens_index=None,
+                  evidence_index=None, verified_index=None,
+                  status: str = "", reason: str = "", tied: int = 0,
+                  incomparable: int = 0, ineligible: int = 0) -> None:
+        """What the selectable pool was and what each selector picked."""
+        if not self.enabled:
+            return
+        self._selection = {
+            "phase": phase,
+            "pool": [contract.content_hash(c.get("code") or "") for c in pool],
+            "pool_indices": [c.get("index") for c in pool],
+            "lens_index": lens_index, "evidence_index": evidence_index,
+            "verified_index": verified_index,
+            "selection_status": status, "selection_reason": reason,
+            "tied_count": tied, "incomparable_count": incomparable,
+            "ineligible_count": ineligible,
+        }
+
+    def next_index(self) -> int:
+        return self._next_index
+
+    # -- writing ------------------------------------------------------------
+
+    def write(self, record: Dict[str, Any]) -> bool:
+        """Append one complete record, or nothing at all."""
+        if not self.enabled or self._fd is None:
+            return False
+        record = dict(record)
+        record.setdefault("schema", CAPTURE_SCHEMA)
+        try:
+            blob = (json.dumps(record, separators=(",", ":"), default=str)
+                    + "\n").encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            self.write_error = self.write_error or f"encode: {exc}"
+            return False
+        if len(blob) > CAPTURE_MAX_RECORD_BYTES:
+            # Identity survives; the bytes do not, and the record says which.
+            trimmed = dict(record)
+            trimmed["code_b64"] = ""
+            trimmed["omitted"] = "record_exceeds_per_record_limit"
+            try:
+                blob = (json.dumps(trimmed, separators=(",", ":"), default=str)
+                        + "\n").encode("utf-8")
+            except (TypeError, ValueError) as exc:
+                self.write_error = self.write_error or f"encode: {exc}"
+                return False
+        return self._append(blob)
+
+    def _append(self, blob: bytes) -> bool:
+        """The cap is checked and the bytes are written under one exclusive
+        lock, so a second worker process cannot slip a record in between and
+        neither can interleave a partial line."""
+        with self._lock:
+            fd = self._fd
+            if fd is None:
+                return False
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                try:
+                    size = os.lseek(fd, 0, os.SEEK_END)
+                    if size + len(blob) > CAPTURE_DEFAULT_MAX_BYTES:
+                        self.limit_reached = True
+                        return False
+                    os.write(fd, blob)
+                finally:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError as exc:
+                self.write_error = self.write_error or f"append: {exc}"
+                self.enabled = False
+                return False
+        self.records_written += 1
+        self.bytes_written += len(blob)
+        return True
+
+    def _write_selection(self, result: Optional[Dict[str, Any]]) -> None:
+        summary = dict(self._selection or {
+            "phase": (result or {}).get("phase_solved", "none"),
+            "pool": [], "pool_indices": [], "lens_index": None,
+            "evidence_index": None, "verified_index": None,
+            "selection_status": "not_run", "selection_reason": "",
+            "tied_count": 0, "incomparable_count": 0, "ineligible_count": 0})
+        summary["type"] = "selection_summary"
+        summary["session_id"] = self._session_id
+        # The service does not know what Go finally wrote. This names the
+        # bytes the service RETURNED; the delivered artifact is joined
+        # offline from the runner's own authorization telemetry.
+        code = (result or {}).get("code") or ""
+        summary["service_returned_candidate_hash"] = \
+            contract.content_hash(code) if code else ""
+        self.write(summary)
+
+    def _write_status(self) -> None:
+        status = {"type": "capture_status", "session_id": self._session_id,
+                  "max_bytes": CAPTURE_DEFAULT_MAX_BYTES,
+                  "bytes_written": self.bytes_written,
+                  "records_written": self.records_written,
+                  "write_error": self.write_error,
+                  "limit_reached": self.limit_reached}
+        if not self.write(status):
+            # The cap refused the full line; a bare marker still tells the
+            # reader the file is truncated rather than complete.
+            self.limit_reached = True
+            self._append(b'{"type":"capture_status","limit_reached":true}\n')
+
+
+def _capture_pool_member(capture: "_PoolCapture", candidate, probe_code: str) -> None:
+    """Record a pool member under the role that explains where it came from.
+
+    Index 0 is candidate zero only when a probe actually produced code; with
+    no probe the pool is generated candidates all the way down, and calling
+    the first of them "candidate zero" would misname the comparison the
+    diagnostic exists to make.
+    """
+    capture.note_candidate(
+        role=("candidate_zero" if probe_code and candidate.get("index") == 0
+              else "generated"),
+        index=candidate.get("index"), code=candidate.get("code") or "",
+        accepted=bool(candidate.get("passed")),
+        record=candidate.get("contract_record"), phase="sandbox",
+        lens={"energy": candidate.get("energy"),
+              "energy_norm": candidate.get("energy_norm"),
+              "energy_calibrated": candidate.get("energy_calibrated"),
+              "per_step": candidate.get("per_step")})
 
 
 def _summarize_phases(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -762,17 +1114,24 @@ class V3PipelineService:
         start = time.time()
         result: Optional[Dict[str, Any]] = None
         error = ""
+        # Benchmark-only: inert unless ATLAS_V3_CAPTURE_POOL names a file.
+        # Opened per run so a diagnostic can be turned on and off without
+        # restarting the service, and closed here so the delivered artifact
+        # and the selection summary are written from the finished result.
+        capture = _PoolCapture.from_env()
+        capture.bind(task_id)
         try:
             result = self._run_impl(
                 problem, task_id=task_id, progress_callback=progress_callback,
                 files=files, file_path=file_path, build_command=build_command,
-                working_dir=working_dir)
+                working_dir=working_dir, _capture=capture)
             _ensure_delivered_evidence(result, file_path=file_path, problem=problem)
             return result
         except Exception as e:
             error = f"{type(e).__name__}: {e}"
             raise
         finally:
+            capture.close(result)
             self._write_pipeline_summary(task_id, result, error, start)
 
     def _write_pipeline_summary(self, task_id: str,
@@ -822,11 +1181,17 @@ class V3PipelineService:
     def _run_impl(self, problem: str, task_id: str = "cli",
                   progress_callback=None, files: Dict[str, str] = None,
                   file_path: str = "", build_command: str = "",
-                  working_dir: str = "/workspace") -> Dict[str, Any]:
-        """The pipeline body — see run() for the argument contract."""
+                  working_dir: str = "/workspace",
+                  _capture: Optional["_PoolCapture"] = None) -> Dict[str, Any]:
+        """The pipeline body — see run() for the argument contract.
+
+        `_capture` is the benchmark-only pool sink run() owns; it observes
+        and decides nothing, and defaults to an inert one.
+        """
         start = time.time()
         events = []
         files = files or {}
+        capture = _capture if _capture is not None else _PoolCapture.disabled()
 
         # PC-048: derive language from the target file's extension. Used
         # only by smoke_compile_check below to pick the right syntax
@@ -1031,6 +1396,7 @@ class V3PipelineService:
                 return False, out, err, verification_evidence
             if self_tests and self_tests.test_cases:
                 p, fails = 0, []
+                observed = []
                 for i, tc in enumerate(self_tests.test_cases):
                     try:
                         tc_code = _make_self_test(code, tc, task_input_file)
@@ -1039,9 +1405,17 @@ class V3PipelineService:
                             p += 1
                         else:
                             fails.append(f"TC{i+1}:{te[:60] if te else 'wrong'}")
+                        observed.append(_capture_case(i, tc, tp, to, te))
                     except Exception as ex:
                         fails.append(f"TC{i+1}:{str(ex)[:40]}")
+                        observed.append(_capture_case(i, tc, False, "", "",
+                                                      harness_error=str(ex)[:200]))
                 total = len(self_tests.test_cases)
+                # p and total are computed here and discarded at the return
+                # below, which hands back a boolean. Capture keeps them,
+                # and the per-case pairs behind them, without touching the
+                # verdict.
+                capture.note_oracle(code, observed, p, total)
                 emit("self_test_verify", f"{p}/{total} passed")
                 # A suite the candidate passes NO case of says nothing about
                 # the candidate. The cases come from the same model that
@@ -1133,6 +1507,13 @@ class V3PipelineService:
             task=_task)
         probe_adapter = probe_result["adapter_id"]
         result["evidence_record"] = probe_result
+        capture.note_candidate(
+            role="candidate_zero", index=0, code=probe_code,
+            accepted=probe_passed, record=probe_result, phase="probe",
+            lens={"energy": probe_energy_raw, "energy_norm": probe_energy_norm,
+                  "energy_calibrated": probe_cx_calibrated,
+                  "gx_score": probe_scores.get("gx_score"),
+                  "verdict": probe_scores.get("verdict")})
         emit("probe_evidence",
              f"adapter={probe_adapter} strength={probe_result['evidence_strength']} "
              f"supported={probe_result['supported']}",
@@ -1346,6 +1727,11 @@ class V3PipelineService:
                 emit("budget_no_verified_candidate",
                      f"{len(pool)} candidate(s), none verified — "
                      f"leaving the caller's gated baseline in place")
+            capture.note_pool(
+                phase="budget", pool=passing,
+                lens_index=(chosen or {}).get("index"),
+                status="budget_exhausted", reason=reason,
+                ineligible=len(pool) - len(passing))
             if chosen is not None:
                 result["code"] = chosen["code"]
                 result["verification_evidence"] = chosen.get("verification_evidence", [])
@@ -1483,6 +1869,7 @@ class V3PipelineService:
                         c["contract_record"] = _evaluate_candidate(
                             file_path, c["code"], True, _has_oracle, emit, sandbox,
                             task=_task)
+                    _capture_pool_member(capture, c, probe_code)
                     passing.append(c)
                     continue
                 sb_start = time.time()
@@ -1500,6 +1887,7 @@ class V3PipelineService:
                 c["contract_record"] = _evaluate_candidate(
                     file_path, c["code"], passed, _has_oracle, emit, sandbox,
                     task=_task)
+                _capture_pool_member(capture, c, probe_code)
                 if passed:
                     passing.append(c)
                     emit("sandbox_pass", f"Candidate {c['index']} passed",
@@ -1790,6 +2178,15 @@ class V3PipelineService:
                              "energy": c.get("energy")}
                             for c in pool],
                     }
+                    capture.note_pool(
+                        phase="phase1", pool=pool,
+                        lens_index=getattr(selected, "index", None),
+                        evidence_index=(contract_pick or {}).get("index"),
+                        verified_index=(verified or {}).get("index"),
+                        status=status, reason=picked.get("selection_reason", ""),
+                        tied=len(picked.get("tied") or []),
+                        incomparable=len(picked.get("incomparable") or []),
+                        ineligible=len(picked.get("ineligible") or []))
                     emit("evidence_shadow",
                          f"lens picked {getattr(selected, 'index', None)}, "
                          f"contract would pick {(contract_pick or {}).get('index')} "
@@ -1898,6 +2295,9 @@ class V3PipelineService:
                     result["total_tokens"] += pr_result.total_tokens
                     for repair_code in pr_result.repairs:
                         passed, stdout, stderr, repair_evidence = verified_sandbox(repair_code)
+                        capture.note_candidate(
+                            role="repair", index=None, code=repair_code,
+                            accepted=passed, record=None, phase="repair_pr_cot")
                         if passed:
                             emit("pr_cot_pass", "PR-CoT repair succeeded!",
                                  strategy="pr_cot", tokens=pr_result.total_tokens)
@@ -1967,6 +2367,10 @@ class V3PipelineService:
                     result["total_tokens"] += ref_result.total_tokens
                     if ref_result.solved:
                         passed, stdout, stderr, refinement_evidence = verified_sandbox(ref_result.winning_code)
+                        capture.note_candidate(
+                            role="refinement", index=None,
+                            code=ref_result.winning_code, accepted=passed,
+                            record=None, phase="refinement")
                         if passed:
                             emit("refinement_pass",
                                  f"Refinement solved in {ref_result.total_iterations} iterations!",
