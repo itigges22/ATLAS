@@ -686,8 +686,29 @@ def _selection_enabled(mode: str) -> bool:
     return mode == MODE_ENFORCE
 
 
-def _make_self_test(code: str, tc, task_input_file: str = "") -> str:
-    """Build executable assertion code for a single test case.
+# The candidate is staged beside its input rather than spliced into the
+# wrapper, so the bytes that run are the bytes that were generated.
+_CANDIDATE_FILE = "candidate.py"
+
+
+def _make_self_test(code: str, tc, task_input_file: str = ""):
+    """Build one case's executable check, and the files the sandbox stages.
+
+    Returns ``(wrapper_source, files)``. The wrapper creates nothing: the
+    case's input file is staged through the sandbox's request files map, the
+    same mechanism that already carries project context. Writing it from
+    executable code instead put the write in the candidate's working
+    directory, which is read-only in the sandbox container, so the case died
+    with ``OSError: [Errno 30]`` before the candidate ran. Measured on the
+    captured candidate pool: 50 of 50 generated cases failed there, which is
+    why every suite in a 50-task run scored 0/N and a partial score was
+    structurally impossible.
+
+    The candidate then runs through ``runpy.run_path(..., run_name="__main__")``
+    -- once, from a file, with the name a program is actually run under. The
+    previous form exec'd it inside the imported ``solution`` module, where
+    ``__name__`` is ``'solution'``, so a ``if __name__ == "__main__":`` body
+    never executed and the case compared against empty output.
 
     Uses ast.literal_eval (safe — only parses Python literals) to convert
     I/O string representations to actual values for comparison.
@@ -702,7 +723,7 @@ def _make_self_test(code: str, tc, task_input_file: str = "") -> str:
             + "try:\n _p=_a.literal_eval(_i)\nexcept:\n _p=_i\n"  # noqa: E722  -- bare except inside generated user code, intentional
             + f"_r={name}(*_p) if isinstance(_p,tuple) else {name}(_p) if isinstance(_p,list) else {name}(_p)\n"
             + "try:\n _ev=_a.literal_eval(_e)\nexcept:\n _ev=_e\n"  # noqa: E722  -- bare except inside generated user code, intentional
-            + "assert str(_r)==str(_ev) or _r==_ev,f'got {_r}'\nprint('SELF_TEST_PASS')\n")
+            + "assert str(_r)==str(_ev) or _r==_ev,f'got {_r}'\nprint('SELF_TEST_PASS')\n"), {}
     # A program that reads a named file has to be given that file. Feeding it
     # stdin instead tests a contract the task never stated, and the verdict
     # comes out backwards: a candidate that correctly reads input.txt finds no
@@ -715,36 +736,37 @@ def _make_self_test(code: str, tc, task_input_file: str = "") -> str:
     # and both tasks sat at 7/26. The same model asked directly, with no
     # pipeline, wrote input.txt readers and scored 12/12.
     infile = task_input_file or _reads_input_file(code)
+    files = {_CANDIDATE_FILE: code}
     if infile:
-        # Empty stdin, not absent stdin. The caller runs the program with
-        # stdin at EOF, so a candidate that reads sys.stdin must terminate
-        # immediately and fail fast. With no stdin attached it BLOCKS until
-        # the sandbox timeout instead: measured live, one stdin candidate
-        # turned the probe into a 300s hang and the dead-oracle fast return
-        # never fired, because the probe "failed" by timeout rather than by
-        # inconclusive.
-        return (
-            "import sys as _s,io as _o\n"
-            "_s.stdin=_o.StringIO('')\n"
-            f"open({repr(infile)},'w').write({repr(inp)})\n"
-            "_c=_o.StringIO()\n_old=_s.stdout\n_s.stdout=_c\n"
-            f"_src={repr(code)}\n"
-            "try:\n    exec(compile(_src,'solution.py','exec'),globals())\n"
-            "finally:\n _s.stdout=_old\n"
-            f"assert _c.getvalue().strip()=={repr(exp)},f'got {{_c.getvalue().strip()}}'\n"
-            "print('SELF_TEST_PASS')\n")
-    # exec the candidate from a string literal instead of splicing its lines
-    # under `try:` — per-line indenting corrupts multiline string literals
-    # inside the candidate. exec(..., globals()) keeps the namespace (and
-    # __name__) identical to the previous inline form.
+        # The case's input is staged, not written. Empty stdin, not absent
+        # stdin: the caller runs the program with stdin at EOF, so a
+        # candidate that reads sys.stdin must terminate immediately and fail
+        # fast. With no stdin attached it BLOCKS until the sandbox timeout
+        # instead: measured live, one stdin candidate turned the probe into a
+        # 300s hang and the dead-oracle fast return never fired, because the
+        # probe "failed" by timeout rather than by inconclusive.
+        files[infile] = inp
+        stdin_setup = "_s.stdin=_o.StringIO('')\n"
+    else:
+        stdin_setup = f"_s.stdin=_o.StringIO({repr(inp)})\n"
+    # run_path, not exec of a string literal: the candidate runs exactly once,
+    # from the exact bytes staged for it, under the name a program is really
+    # run with. A SystemExit the program raised itself is ordinary
+    # termination when its code is 0 or None, and an execution failure
+    # otherwise; anything else propagates and the process exits non-zero.
     return (
-        "import sys as _s,io as _o\n"
-        f"_s.stdin=_o.StringIO({repr(inp)})\n"
-        "_c=_o.StringIO()\n_old=_s.stdout\n_s.stdout=_c\n"
-        f"_src={repr(code)}\n"
-        "try:\n    exec(compile(_src,'solution.py','exec'),globals())\nfinally:\n _s.stdout=_old\n"
+        "import sys as _s,io as _o,runpy as _rp\n"
+        + stdin_setup
+        + "_c=_o.StringIO()\n_old=_s.stdout\n_s.stdout=_c\n"
+        "try:\n"
+        f"    _rp.run_path({repr(_CANDIDATE_FILE)},run_name='__main__')\n"
+        "except SystemExit as _e:\n"
+        "    if _e.code not in (0,None):\n"
+        "        raise\n"
+        "finally:\n"
+        " _s.stdout=_old\n"
         f"assert _c.getvalue().strip()=={repr(exp)},f'got {{_c.getvalue().strip()}}'\n"
-        "print('SELF_TEST_PASS')\n")
+        "print('SELF_TEST_PASS')\n"), files
 
 
 _CONSENSUS_MARK = "V3_OUT:"
@@ -1399,8 +1421,9 @@ class V3PipelineService:
                 observed = []
                 for i, tc in enumerate(self_tests.test_cases):
                     try:
-                        tc_code = _make_self_test(code, tc, task_input_file)
-                        tp, to, te = sandbox(tc_code)
+                        tc_code, tc_files = _make_self_test(
+                            code, tc, task_input_file)
+                        tp, to, te = sandbox(tc_code, files=tc_files)
                         if tp and "SELF_TEST_PASS" in to:
                             p += 1
                         else:

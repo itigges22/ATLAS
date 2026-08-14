@@ -75,7 +75,7 @@ class MockSandbox:
         self._call_count = 0
         self._pass_on = pass_on_iteration
 
-    def __call__(self, code: str, test_input: str) -> Tuple[bool, str, str]:
+    def __call__(self, code: str, test_input: str = "", **_) -> Tuple[bool, str, str]:
         self.calls.append({"code": code, "input": test_input})
         self._call_count += 1
         if self._pass_on is not None and self._call_count >= self._pass_on:
@@ -89,7 +89,7 @@ class MockSandboxAlwaysPass:
     def __init__(self):
         self.calls: list = []
 
-    def __call__(self, code: str, test_input: str) -> Tuple[bool, str, str]:
+    def __call__(self, code: str, test_input: str = "", **_) -> Tuple[bool, str, str]:
         self.calls.append({"code": code, "input": test_input})
         return True, "correct", ""
 
@@ -100,7 +100,7 @@ class MockSandboxAlwaysFail:
     def __init__(self):
         self.calls: list = []
 
-    def __call__(self, code: str, test_input: str) -> Tuple[bool, str, str]:
+    def __call__(self, code: str, test_input: str = "", **_) -> Tuple[bool, str, str]:
         self.calls.append({"code": code, "input": test_input})
         return False, "", "AssertionError: wrong answer"
 

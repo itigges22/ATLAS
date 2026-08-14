@@ -73,7 +73,7 @@ def test_the_generated_test_calls_the_entry_point():
             "def solve(lines):\n"
             "    return sum(parse(lines))\n")
     tc = type("TC", (), {"input_str": "[1, 2, 3]", "expected_output": "6"})()
-    body = pipeline._make_self_test(code, tc)
+    body, _files = pipeline._make_self_test(code, tc)
     assert "solve(" in body
     assert "_r=parse(" not in body
 
@@ -103,15 +103,19 @@ def test_a_stdin_script_is_driven_through_stdin():
     return value to compare — so every case failed. The stdin/stdout path
     already existed and was never reached, because the choice keyed on a
     function merely existing."""
-    body = pipeline._make_self_test(SCRIPT, _case())
+    body, files = pipeline._make_self_test(SCRIPT, _case())
     assert "_s.stdin" in body, "a stdin-reading script must be fed stdin"
-    assert "main(" not in body.split("_src=")[0]
+    # The candidate is staged, not spliced: the wrapper names no function of
+    # its own, it runs the file.
+    assert "main(" not in body
+    assert files[pipeline._CANDIDATE_FILE] == SCRIPT
 
 
 def test_a_pure_function_is_still_called_directly():
-    body = pipeline._make_self_test(FUNCTION, _case())
+    body, files = pipeline._make_self_test(FUNCTION, _case())
     assert "solve(" in body
     assert "_s.stdin" not in body
+    assert files == {}, "the function form needs nothing staged"
 
 
 def test_a_zero_argument_function_cannot_take_the_case():
@@ -176,9 +180,10 @@ def test_a_computed_path_is_left_alone():
         "import sys\nopen(sys.argv[1]).read()\n") is None
 
 
-def test_the_case_input_is_written_to_that_file_not_stdin():
-    body = pipeline._make_self_test(FILE_READER, _case())
-    assert "open('input.txt','w')" in body, "the file the program reads must exist"
+def test_the_case_input_reaches_the_file_not_stdin():
+    body, files = pipeline._make_self_test(FILE_READER, _case())
+    assert files["input.txt"] == "199\n200\n208", \
+        "the file the program reads must be staged for it"
     # Empty stdin is part of the contract: a stdin-reader must hit EOF and
     # fail fast rather than hang the sandbox. The CASE INPUT riding stdin is
     # what tests a contract the task never stated.
@@ -192,7 +197,9 @@ def test_the_file_shape_actually_passes(tmp_path):
     import subprocess
     import sys as _sys
     tc = type("TC", (), {"input_str": "199\n200\n208", "expected_output": "2"})()
-    body = pipeline._make_self_test(FILE_READER, tc)
+    body, files = pipeline._make_self_test(FILE_READER, tc)
+    for name, content in files.items():
+        (tmp_path / name).write_text(content)
     script = tmp_path / "t.py"
     script.write_text(body)
     run = subprocess.run([_sys.executable, "t.py"], cwd=tmp_path,
@@ -202,6 +209,168 @@ def test_the_file_shape_actually_passes(tmp_path):
 
 def test_the_stdin_shape_is_unchanged():
     """Programs that really do read stdin must keep working."""
-    body = pipeline._make_self_test("import sys\nprint(len(list(sys.stdin)))\n",
-                                    _case())
+    body, _files = pipeline._make_self_test(
+        "import sys\nprint(len(list(sys.stdin)))\n", _case())
     assert "_s.stdin=" in body
+
+
+# --- the case input is STAGED, and the candidate runs as __main__ ----------
+#
+# Two faults sat in the same wrapper, one hiding the other.
+#
+# The wrapper created the case's input file by executing
+# `open('input.txt','w')` inside the sandbox. The sandbox runs a candidate
+# from a directory it cannot write to, so that line raised
+# `OSError: [Errno 30] Read-only file system` before the candidate executed.
+# Measured on the captured candidate pool: 50 of 50 generated cases died
+# there, so every suite in a 50-task run scored 0/N and a partial score was
+# structurally impossible.
+#
+# Behind it: the wrapper ran the candidate with `exec(..., globals())` inside
+# the imported `solution` module, so `__name__` was `'solution'` and a
+# `if __name__ == "__main__":` body — the shape most of these candidates
+# have — never ran at all. Repairing staging alone turns every case from a
+# filesystem error into "wrong answer, got ''".
+
+MAIN_GUARDED = ("def main():\n"
+                "    with open('input.txt') as f:\n"
+                "        d = [int(x) for x in f]\n"
+                "    print(sum(1 for i in range(1, len(d)) if d[i] > d[i-1]))\n"
+                "\n"
+                "if __name__ == '__main__':\n"
+                "    main()\n")
+
+
+def _materialise(tmp_path, built):
+    """Write what the sandbox would stage, and run the wrapper the way the
+    executor runs it: from the workspace, as a module named `solution`."""
+    import subprocess
+    import sys as _sys
+    body, files = built
+    for name, content in (files or {}).items():
+        (tmp_path / name).write_text(content)
+    (tmp_path / "solution.py").write_text(body)
+    return subprocess.run(
+        [_sys.executable, "-c",
+         f"import sys; sys.path.insert(0,{str(tmp_path)!r}); import solution"],
+        cwd=tmp_path, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+
+
+def test_the_case_input_is_staged_not_written_by_the_wrapper():
+    """No executable write, and the file the program opens is in the map."""
+    tc = type("TC", (), {"input_str": "199\n200\n208",
+                         "expected_output": "2"})()
+    body, files = pipeline._make_self_test(FILE_READER, tc, "input.txt")
+    assert "open('input.txt','w')" not in body
+    assert "'w'" not in body, "the wrapper creates no files of its own"
+    assert files["input.txt"] == "199\n200\n208"
+
+
+def test_a_main_guarded_candidate_runs_as_main_and_reads_its_input(tmp_path):
+    """The shape the whole run was made of: guarded entry, file input."""
+    tc = type("TC", (), {"input_str": "199\n200\n208",
+                         "expected_output": "2"})()
+    run = _materialise(tmp_path, pipeline._make_self_test(
+        MAIN_GUARDED, tc, "input.txt"))
+    assert "SELF_TEST_PASS" in run.stdout, (run.stdout, run.stderr[:400])
+
+
+def test_a_wrong_main_guarded_candidate_fails_as_a_wrong_answer(tmp_path):
+    """Not as a filesystem error, and not silently as empty output."""
+    tc = type("TC", (), {"input_str": "199\n200\n208",
+                         "expected_output": "99"})()
+    run = _materialise(tmp_path, pipeline._make_self_test(
+        MAIN_GUARDED, tc, "input.txt"))
+    assert "SELF_TEST_PASS" not in run.stdout
+    assert "AssertionError" in run.stderr and "got 2" in run.stderr
+    assert "Read-only file system" not in run.stderr
+
+
+def test_the_candidate_executes_exactly_once(tmp_path):
+    """An import followed by a second exec would double every module-level
+    side effect, so the count is the assertion."""
+    counter = ("open('runs.txt','a').write('x')\n"
+               "if __name__ == '__main__':\n"
+               "    print(len(open('runs.txt').read()))\n")
+    tc = type("TC", (), {"input_str": "1", "expected_output": "1"})()
+    run = _materialise(tmp_path, pipeline._make_self_test(
+        counter, tc, "input.txt"))
+    assert "SELF_TEST_PASS" in run.stdout, (run.stdout, run.stderr[:400])
+    assert (tmp_path / "runs.txt").read_text() == "x"
+
+
+def test_a_candidate_that_raises_is_an_execution_failure(tmp_path):
+    tc = type("TC", (), {"input_str": "1", "expected_output": "1"})()
+    run = _materialise(tmp_path, pipeline._make_self_test(
+        "raise ValueError('boom')\n", tc, "input.txt"))
+    assert run.returncode != 0
+    assert "ValueError" in run.stderr and "boom" in run.stderr
+
+
+def test_a_clean_sys_exit_is_not_an_execution_failure(tmp_path):
+    """`sys.exit()` after printing the answer is ordinary program behaviour."""
+    code = ("import sys\n"
+            "if __name__ == '__main__':\n"
+            "    print(open('input.txt').read().strip())\n"
+            "    sys.exit(0)\n")
+    tc = type("TC", (), {"input_str": "42", "expected_output": "42"})()
+    run = _materialise(tmp_path, pipeline._make_self_test(code, tc, "input.txt"))
+    assert "SELF_TEST_PASS" in run.stdout, (run.stdout, run.stderr[:400])
+
+
+def test_a_nonzero_sys_exit_is_an_execution_failure(tmp_path):
+    code = "import sys\nif __name__ == '__main__':\n    sys.exit(3)\n"
+    tc = type("TC", (), {"input_str": "1", "expected_output": "1"})()
+    run = _materialise(tmp_path, pipeline._make_self_test(code, tc, "input.txt"))
+    assert run.returncode != 0
+    assert "SELF_TEST_PASS" not in run.stdout
+
+
+def test_exact_candidate_bytes_are_staged(tmp_path):
+    """Bytes travel as a staged file, so nothing re-quotes or re-indents
+    them on the way — multiline literals, quotes and Unicode included."""
+    code = ('S = """line1\n\'quoted\'\n"line2"\nprüfung ✓\n"""\n'
+            "if __name__ == '__main__':\n"
+            "    print(open('input.txt').read().strip())\n")
+    tc = type("TC", (), {"input_str": "ok", "expected_output": "ok"})()
+    body, files = pipeline._make_self_test(code, tc, "input.txt")
+    staged = [v for k, v in files.items() if k != "input.txt"]
+    assert staged == [code]
+    run = _materialise(tmp_path, (body, files))
+    assert "SELF_TEST_PASS" in run.stdout, (run.stdout, run.stderr[:400])
+
+
+def test_input_round_trips_exactly(tmp_path):
+    """Multiline, quotes and Unicode reach the file byte for byte.
+
+    The surrounding whitespace strip is the generator's own, applied to the
+    case before either form uses it, and it is unchanged here — what is new
+    is that the bytes travel as a staged file instead of through a repr()
+    embedded in executable source.
+    """
+    payload = "a 'b'\n\"c\"\nprüfung ✓\n"
+    code = ("if __name__ == '__main__':\n"
+            "    print(repr(open('input.txt').read()))\n")
+    tc = type("TC", (), {"input_str": payload,
+                         "expected_output": repr(payload.strip())})()
+    body, files = pipeline._make_self_test(code, tc, "input.txt")
+    assert files["input.txt"] == payload.strip()
+    run = _materialise(tmp_path, (body, files))
+    assert "SELF_TEST_PASS" in run.stdout, (run.stdout, run.stderr[:400])
+
+
+def test_each_case_stages_its_own_input():
+    tc1 = type("TC", (), {"input_str": "1\n2", "expected_output": "x"})()
+    tc2 = type("TC", (), {"input_str": "9\n9", "expected_output": "y"})()
+    _, f1 = pipeline._make_self_test(FILE_READER, tc1, "input.txt")
+    _, f2 = pipeline._make_self_test(FILE_READER, tc2, "input.txt")
+    assert f1["input.txt"] == "1\n2" and f2["input.txt"] == "9\n9"
+
+
+def test_a_stdin_candidate_still_runs_as_main(tmp_path):
+    code = ("import sys\n"
+            "if __name__ == '__main__':\n"
+            "    print(len(list(sys.stdin)))\n")
+    tc = type("TC", (), {"input_str": "1\n2\n3", "expected_output": "3"})()
+    run = _materialise(tmp_path, pipeline._make_self_test(code, tc))
+    assert "SELF_TEST_PASS" in run.stdout, (run.stdout, run.stderr[:400])

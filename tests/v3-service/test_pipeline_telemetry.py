@@ -50,7 +50,7 @@ class PassingSandbox:
     def __init__(self, project_files=None):
         pass
 
-    def __call__(self, code, test_input=""):
+    def __call__(self, code, test_input="", **_):
         return True, "ok", ""
 
 
@@ -219,7 +219,7 @@ class CaptureSandbox:
     def __init__(self, project_files=None):
         pass
 
-    def __call__(self, code, test_input="", language="python", timeout=15):
+    def __call__(self, code, test_input="", language="python", timeout=15, **_):
         if "SELF_TEST_PASS" not in code:
             return True, "ok", ""
         candidate = next((c for c in (CAP_ZERO, CAP_ONE, CAP_TWO)

@@ -119,11 +119,16 @@ STDIN_CANDIDATE = "import sys\nprint(len([x for x in sys.stdin]))\n"
 FILE_CANDIDATE = "print(len(open('input.txt').read().split()))\n"
 
 
-def _run(body):
+def _run(built):
+    """`built` is a self-test (wrapper, files) pair or a bare probe body."""
+    body, files = built if isinstance(built, tuple) else (built, {})
     work = tempfile.mkdtemp()
+    for name, content in (files or {}).items():
+        Path(work, name).write_text(content)
     Path(work, "t.py").write_text(body)
     return subprocess.run([sys.executable, "t.py"], cwd=work,
-                          capture_output=True, text=True, timeout=60)
+                          capture_output=True, text=True,
+                          stdin=subprocess.DEVNULL, timeout=60)
 
 
 def test_the_task_input_file_is_recognised():
@@ -145,7 +150,7 @@ def test_a_file_candidate_passes_the_task_contract():
 
 def test_without_a_task_input_file_the_old_shapes_stand():
     """Tasks that really are stdin-driven must keep working."""
-    body = pipeline._make_self_test(STDIN_CANDIDATE, _case3("3"))
+    body, _files = pipeline._make_self_test(STDIN_CANDIDATE, _case3("3"))
     assert "_s.stdin=" in body
 
 

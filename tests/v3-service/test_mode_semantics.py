@@ -75,7 +75,7 @@ def _sandbox_factory(self_test_pass=True, smoke_ok=True, partial_oracle=False,
         def __init__(self, project_files=None):
             pass
 
-        def __call__(self, code, test_input=""):
+        def __call__(self, code, test_input="", **_):
             if "SELF_TEST_PASS" in code:
                 seen["cases"] += 1
                 if passing_marker is not None:

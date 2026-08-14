@@ -67,7 +67,7 @@ class FakeSandbox:
     def __init__(self, project_files=None):
         self.project_files = project_files or {}
 
-    def __call__(self, code, test_input=""):
+    def __call__(self, code, test_input="", **_):
         if "FAILS" in code:
             return False, "", "boom: genuine sandbox failure"
         return True, "ok", ""

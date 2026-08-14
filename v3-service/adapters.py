@@ -477,7 +477,8 @@ class SandboxAdapter:
 
     def __call__(self, code: str, test_input: str = "",
                  language: str = "python",
-                 timeout: int = 15) -> Tuple[bool, str, str]:
+                 timeout: int = 15,
+                 files: Optional[Dict[str, str]] = None) -> Tuple[bool, str, str]:
         """Execute `code` in the sandbox.
 
         `language` defaults to python so every existing call site is
@@ -497,8 +498,15 @@ class SandboxAdapter:
             # Empty string keeps the executor default (inherit server
             # stdin) — every no-input call site passes "" positionally.
             body["stdin"] = test_input
-        if self.project_files:
-            body["files"] = self.project_files
+        # Per-call staging on top of project context: a self-test case's own
+        # input file is this request's, and where the two name the same file
+        # the case wins. Omitting `files` leaves every existing caller's body
+        # byte for byte what it was.
+        staged = dict(self.project_files or {})
+        if files:
+            staged.update(files)
+        if staged:
+            body["files"] = staged
         try:
             req = urllib.request.Request(
                 f"{SANDBOX_URL}/execute",
