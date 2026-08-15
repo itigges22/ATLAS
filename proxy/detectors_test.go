@@ -925,24 +925,27 @@ func TestModelIssuedDoneIsUnchanged(t *testing.T) {
 
 // --- production-path reproduction of debounce5 ------------------------------
 //
-// Drives the real agent loop. Turn 0 creates the deliverable with content the
-// syntax checker rejects: a NEW file has no healthy prior state, so it lands
-// with a parse warning — bytes on disk, madeProductiveChange set, file
-// invalid. Every turn after re-sends the same failing verification command,
-// which is what reaches the repeat detector's terminal branch.
+// Reconstructed from the retained raw events of the seed-20260901 run, not
+// guessed. The recorded shape: every write_file SUCCEEDS (1181, 1180, 1181,
+// 1182, 1183, 1181, 1183 bytes — the model rewrites the same file with
+// slightly different content each turn), the runaway-write backstop fires
+// twice with "you have fully rewritten solve.py N times", and the second
+// detection reaches the terminal. Nothing is ever refused, which is why the
+// refusal-ban terminal never engages — an earlier fixture built on rejected
+// calls reached that wrong branch and had to be rebuilt from the trace.
+//
+// The deliverable stays syntactically invalid throughout: the first write
+// creates it (a new file has no healthy prior state, so it lands with a parse
+// warning) and every later write is broken->broken, which the healthy->broken
+// policy allows as repair-in-progress.
+//
+// Deliberately free of production symbols added by the fix, so the same
+// fixture runs against the parent commit.
 
-const debounce5Invalid = "def solve():\n    return [1, 2]]\n"
+const debounce5Broken = "def solve():\n    return [1, 2]]\n"
 
 func debounce5Stubs(t *testing.T, dir, rel string, calls *int) *httptest.Server {
 	t.Helper()
-	write, _ := json.Marshal(map[string]interface{}{
-		"type": "tool_call", "name": "write_file",
-		"args": map[string]string{"path": rel, "content": debounce5Invalid},
-	})
-	verify, _ := json.Marshal(map[string]interface{}{
-		"type": "tool_call", "name": "run_command",
-		"args": map[string]interface{}{"command": "python3 " + rel, "timeout": 5},
-	})
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/v3/") || strings.HasPrefix(r.URL.Path, "/internal/") {
 			http.Error(w, "v3 unavailable in this test", http.StatusServiceUnavailable)
@@ -951,7 +954,7 @@ func debounce5Stubs(t *testing.T, dir, rel string, calls *int) *httptest.Server 
 		if strings.HasSuffix(r.URL.Path, "/syntax-check") {
 			var in struct{ Code string }
 			json.NewDecoder(r.Body).Decode(&in)
-			valid := !strings.Contains(in.Code, "[1, 2]]")
+			valid := !strings.Contains(in.Code, "]]")
 			out := map[string]interface{}{"valid": valid}
 			if !valid {
 				out["errors"] = []string{"SyntaxError: unmatched ']' (line 2)"}
@@ -962,21 +965,14 @@ func debounce5Stubs(t *testing.T, dir, rel string, calls *int) *httptest.Server 
 		if strings.HasSuffix(r.URL.Path, "/execute") {
 			var in struct{ Code string }
 			json.NewDecoder(r.Body).Decode(&in)
-			// Serve the workspace-alignment probe honestly so the session
-			// starts; anything else is the verification command, which
-			// SUCCEEDS at transport and fails on exit code — the shape that
-			// reaches the repeat detector rather than the refusal path.
 			if strings.Contains(in.Code, ".atlas-mount-probe") {
 				b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
 				json.NewEncoder(w).Encode(map[string]interface{}{
-					"success": true, "stdout": string(b), "stderr": "", "exit_code": 0,
-				})
+					"success": true, "stdout": string(b), "stderr": "", "exit_code": 0})
 				return
 			}
 			json.NewEncoder(w).Encode(map[string]interface{}{
-				"success": true, "stdout": "",
-				"stderr": "SyntaxError: unmatched ']'", "exit_code": 1,
-			})
+				"success": true, "stdout": "", "stderr": "", "exit_code": 0})
 			return
 		}
 		if !strings.HasSuffix(r.URL.Path, "/v1/chat/completions") {
@@ -985,20 +981,31 @@ func debounce5Stubs(t *testing.T, dir, rel string, calls *int) *httptest.Server 
 		}
 		i := *calls
 		*calls++
-		body := string(verify) // every turn after the first repeats the verify
-		if i == 0 {
-			body = string(write)
+		// write_file signatures carry a CONTENT fingerprint, so novel content
+		// every turn is never "repetition". The recorded run alternated a
+		// small set of near-identical rewrites -- byte counts 1181, 1180,
+		// 1181, 1182, 1183, 1181, 1183, with 1181 recurring three times --
+		// which is the model re-emitting the same broken file from memory.
+		// Two variants reproduce that: one recurs three times inside the
+		// eight-call window and the detector fires, twice.
+		variant := "# a\n" + debounce5Broken
+		if i%2 == 1 {
+			variant = "# b\n" + debounce5Broken
 		}
+		body, _ := json.Marshal(map[string]interface{}{
+			"type": "tool_call", "name": "write_file",
+			"args": map[string]string{"path": rel, "content": variant},
+		})
 		w.Header().Set("Content-Type", "text/event-stream")
 		delta, _ := json.Marshal(map[string]interface{}{
 			"choices": []map[string]interface{}{
-				{"delta": map[string]string{"content": body}}},
+				{"delta": map[string]string{"content": string(body)}}},
 		})
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", delta)
 	}))
 }
 
-func TestDebounce5ProductionLoopNeverClaimsCompletionOverInvalidBytes(t *testing.T) {
+func TestDebounce5ReachesTheRepeatDetectorTerminal(t *testing.T) {
 	dir := t.TempDir()
 	rel := "solve.py"
 	calls := 0
@@ -1011,46 +1018,72 @@ func TestDebounce5ProductionLoopNeverClaimsCompletionOverInvalidBytes(t *testing
 	ctx.V3URL = srv.URL
 	ctx.PermissionMode = PermissionYolo
 	ctx.MaxTurns = 40
+
 	var summary string
-	var notRunErr bool
+	interventions, acceptedWrites, banEntries, rescues := 0, 0, 0, 0
 	ctx.StreamFn = func(eventType string, data interface{}) {
 		b, _ := json.Marshal(data)
 		switch eventType {
+		case "agent_repeat_intervention":
+			interventions++
+		case "tool_result":
+			if strings.Contains(string(b), `"success":true`) &&
+				strings.Contains(string(b), "bytes_written") {
+				acceptedWrites++
+			}
+		case "gate":
+			if strings.Contains(string(b), "no longer available") {
+				banEntries++
+			}
 		case "done":
 			summary = string(b)
-		case "tool_result":
-			if strings.Contains(string(b), "the session stopped before this call executed") {
-				notRunErr = true
-			}
+		}
+		if strings.Contains(string(b), "named deliverable") ||
+			strings.Contains(string(b), "was never created") {
+			rescues++
 		}
 	}
-	if err := runAgentLoop(ctx, "Create solve.py and run it."); err != nil {
+	if err := runAgentLoop(ctx, "Create solve.py that solves the task."); err != nil {
 		t.Fatalf("agent loop error: %v", err)
 	}
 
+	// --- routing premises: this run reached the repeat-DETECTOR terminal ---
+	if interventions < 2 {
+		t.Fatalf("second-detection condition not reached: %d repeat interventions", interventions)
+	}
+	if acceptedWrites == 0 {
+		t.Fatal("no write landed, so the productive-change hint was never set")
+	}
 	onDisk, err := os.ReadFile(filepath.Join(dir, rel))
 	if err != nil {
-		t.Fatalf("deliverable missing: %v", err)
+		t.Fatalf("expected output missing, so output-rescue would have fired: %v", err)
 	}
-	if string(onDisk) != debounce5Invalid {
-		t.Errorf("terminal must not rewrite disk; got %q", string(onDisk))
+	if rescues > 0 {
+		t.Fatalf("output-rescue fired (%d); this is not the terminal under test", rescues)
 	}
+	if banEntries > 0 {
+		t.Fatalf("refusal-ban fired (%d); wrong terminal", banEntries)
+	}
+	if strings.Contains(summary, "re-sent after being refused") {
+		t.Fatalf("terminal came from the refusal ban, not the repeat detector:\n%s", summary)
+	}
+	if !strings.Contains(summary, "kept repeating") && !strings.Contains(summary, "Made your change") {
+		t.Fatalf("terminal did not come from the repeat-detector call site:\n%s", summary)
+	}
+
+	// --- the behaviour under test ---
 	if strings.Contains(summary, "Made your change") {
-		t.Errorf("false completion over invalid bytes:\n%s", summary)
+		t.Errorf("completion claimed over invalid bytes:\n%s", summary)
 	}
 	if !strings.Contains(summary, "Stopped:") {
 		t.Errorf("terminal must be an honest stop:\n%s", summary)
 	}
-	// Routing disclosure. With these stubs the loop reaches the REFUSAL-ban
-	// terminal (repeatedRefusalSummary), not the repeat-DETECTOR branch that
-	// repeatTerminalSummary owns. Both must be honest, and this test proves
-	// the production loop cannot claim completion over invalid bytes by
-	// either route — but the detector branch itself is covered directly by
-	// the repeatTerminalSummary tests above, and this assertion exists so a
-	// future change cannot silently reroute and appear to cover it.
-	if !strings.Contains(summary, "re-sent after being refused") {
-		t.Logf("NOTE: terminal route changed; this run reached a different "+
-			"branch than the refusal ban: %s", summary)
+	after, _ := os.ReadFile(filepath.Join(dir, rel))
+	if string(after) != string(onDisk) {
+		t.Errorf("termination must not rewrite disk")
 	}
-	t.Logf("summary=%s final_write_not_run=%v", summary, notRunErr)
+	if !strings.Contains(string(after), "]]") {
+		t.Errorf("fixture no longer leaves an invalid deliverable: %q", string(after))
+	}
+	t.Logf("interventions=%d accepted_writes=%d summary=%s", interventions, acceptedWrites, summary)
 }
