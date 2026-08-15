@@ -1200,7 +1200,8 @@ def tui_handled_types() -> set[str]:
 # --------------------------------------------------------------------------
 
 def run_session(task: Task, rep: int, url: str, workspace: Path,
-                subdir: str, timeout: int, raw_sink=None) -> Session:
+                subdir: str, timeout: int, raw_sink=None,
+                bypass_v3: bool = False) -> Session:
     """`raw_sink`, when given, is an open file the exact SSE lines are written
     to BEFORE anything parses them. A reconstruction bug then stays visible
     instead of overwriting its own evidence -- the parsed events beside it are
@@ -1234,12 +1235,22 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
     # an earlier version of this harness had every session operating on
     # /workspace while the checks read the subdirectory — so real successes
     # were scored as failures. sandbox_subdir is the field that scopes a run.
-    body = json.dumps({
+    payload = {
         "message": task.prompt,
         "mode": "yolo",
         "sandbox_subdir": subdir,
         "session_id": f"reliability-{task.name}-{rep}",
-    }).encode()
+    }
+    if bypass_v3:
+        # The proxy's own per-request switch for a V3-free arm. It
+        # short-circuits the V3 orchestration only: ctx.V3URL stays set, so
+        # structural_check, embedded_script_check, symbol_index and
+        # orphaned_symbols keep running. Clearing ATLAS_V3_URL would disable
+        # those mutation gates too, which is a different experiment.
+        # Omitted entirely when false, so every existing caller's request
+        # body is byte-for-byte what it was.
+        payload["bypass_v3"] = True
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(f"{url}/v1/agent", data=body,
                                  headers={"Content-Type": "application/json"})
     events: list[dict] = []

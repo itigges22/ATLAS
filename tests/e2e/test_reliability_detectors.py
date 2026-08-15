@@ -440,3 +440,74 @@ def test_h6_still_reports_a_parse_failure_the_session_died_on(rel, tmp_path):
     s = _session(rel, [_call("edit_file", path="app.py"), err], tmp_path,
                  stream_ok=False)
     assert any("parse model response" in d for d in rel.h6_service_fault(s))
+
+
+# --- the V3-disabled control arm -------------------------------------------
+#
+# The independent confirmation needs incumbents ATLAS produces with the V3
+# capability absent and NOTHING else changed. `bypass_v3` is the proxy's
+# existing per-request field for exactly that: it short-circuits the V3
+# orchestration while ctx.V3URL stays set, so structural_check,
+# embedded_script_check, symbol_index and orphaned_symbols — the mutation
+# gates — keep running. Clearing ATLAS_V3_URL instead would silently
+# disable those gates too, which is a different experiment.
+
+
+def _capture_body(rel, monkeypatch, **kwargs):
+    """Run one session against a stubbed transport and return the request."""
+    seen = {}
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def __iter__(self):
+            return iter([b'data: {"type":"done"}\n\n'])
+
+    def fake_urlopen(req, timeout=None):
+        seen["url"] = req.full_url
+        seen["body"] = json.loads(req.data.decode())
+        return _Resp()
+
+    monkeypatch.setattr(rel.urllib.request, "urlopen", fake_urlopen)
+    return seen
+
+
+def test_bypass_v3_reaches_the_agent_request(rel, monkeypatch, tmp_path):
+    import json as _json
+    globals()["json"] = _json
+    seen = _capture_body(rel, monkeypatch)
+    task = rel.Task(name="t", prompt="do it", files={}, check=lambda ws, s=None: (True, ""))
+    rel.run_session(task, 0, "http://proxy", tmp_path, "e2e", 30, bypass_v3=True)
+    assert seen["body"]["bypass_v3"] is True
+    assert seen["body"]["message"] == "do it"
+
+
+def test_the_field_is_absent_by_default(rel, monkeypatch, tmp_path):
+    import json as _json
+    globals()["json"] = _json
+    seen = _capture_body(rel, monkeypatch)
+    task = rel.Task(name="t", prompt="do it", files={}, check=lambda ws, s=None: (True, ""))
+    rel.run_session(task, 0, "http://proxy", tmp_path, "e2e", 30)
+    assert "bypass_v3" not in seen["body"], \
+        "every existing caller's request body must be unchanged"
+
+
+def test_the_proxy_declares_the_field():
+    """Only honest if the server accepts it under this exact name."""
+    agent = (REPO / "proxy" / "agent.go").read_text()
+    assert 'BypassV3         bool   `json:"bypass_v3,omitempty"`' in agent
+
+
+def test_disabling_v3_does_not_disable_the_mutation_gates():
+    """ctx.V3URL still reaches the structural and embedded checks; only the
+    generation call sites consult BypassV3."""
+    gates = (REPO / "proxy" / "gates.go").read_text()
+    tools = (REPO / "proxy" / "tools.go").read_text()
+    for probe in ("/internal/structural_check", "/internal/embedded_script_check"):
+        block = gates.split(probe)[0].rsplit("func ", 1)[1]
+        assert "BypassV3" not in block, f"{probe} must not consult BypassV3"
+    assert tools.count("!ctx.BypassV3") >= 2, "the generation sites do consult it"
