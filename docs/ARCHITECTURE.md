@@ -162,6 +162,33 @@ In the default `strict` mode the proxy sends a full JSON schema — `oneOf` with
 | `tail_background` | Fetch new stdout/stderr from a backgrounded job by `job_id` | Yes |
 | `stop_background` | SIGTERM/SIGKILL a backgrounded job by `job_id` | No |
 
+### Deliverable ledger (observational)
+
+`executeToolCall` records what each call did to the session's deliverables, in
+`AgentContext.Ledger` keyed on the resolved workspace path. It observes and
+decides nothing: no restoration, no refusal, no event. `ToolEffect` picks the
+treatment.
+
+| Effect | What is recorded |
+|--------|------------------|
+| direct mutation (`write_file`, `edit_file`, `structural_edit`, `insert_after`, `replace_lines`) | the file is re-read and hashed after the call, so the recorded hash names the bytes on disk rather than the bytes the tool proposed |
+| `delete_file`, `move_file` | a tombstone once the path is actually gone, retaining any checkpoint bytes and prohibiting automatic restoration; a move observes its destination fresh and transfers no verdict |
+| `run_command` | every tracked path is rehashed: unchanged files keep their verdict, changed ones lose it |
+| `run_background`, `stop_background` | a workspace hazard is raised on start and lowered only on a reaped exit code |
+
+A branch that proves it mutated nothing (`MutationNone`) records nothing, so a
+refused write to a path the session never owned does not enter the ledger.
+
+`ValidationKind`/`ValidationStatus` are copied from the tool's own result and
+bound to the hash they describe; `CurrentValidation()` returns unknown as soon
+as the file's hash moves away from the validated one. Bytes are checkpointed
+only on an explicit `passed` for that exact hash, under a 256 KiB per-file and
+2 MiB per-session ceiling. Over the ceiling the observation is kept, the bytes
+are not, and `checkpoint_unavailable` records why.
+
+`SessionWrites` is a separate, older map keyed on the raw model-supplied path;
+`proxy/types.go` documents the aliasing that follows from that.
+
 ### Tool-selection bias mitigations
 
 A measured reference deployment showed a bias toward `edit_file` over

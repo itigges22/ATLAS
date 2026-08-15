@@ -133,6 +133,10 @@ func executeToolCall(name string, args json.RawMessage, ctx *AgentContext) *Tool
 		result.ValidationKind = ValidationKindNone
 		result.ValidationStatus = ValidationNotApplicable
 	}
+	// Observational: records what the call did to the session's deliverables.
+	// Runs after classification so it sees the final evidence, and returns the
+	// same result either way — nothing downstream can observe that it ran.
+	recordLedgerEffect(name, args, ctx, result)
 	return result
 }
 

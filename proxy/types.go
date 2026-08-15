@@ -607,6 +607,61 @@ type ListDirectoryOutput struct {
 // Agent context — shared state for the agent loop
 // ---------------------------------------------------------------------------
 
+// DeliverableState is one canonical path's observed state. Four different
+// things are kept apart deliberately and must never be collapsed: what is on
+// disk now, what evidence exists about some exact bytes, whether a restorable
+// checkpoint is available, and task correctness -- which this type never
+// claims and never stores.
+type DeliverableState struct {
+	Path        string // canonical workspace-relative
+	CurrentHash string // sha256 of the bytes last observed on disk
+	CurrentSize int
+	Generation  int // increments on every observed mutation
+
+	// The verdict and the EXACT bytes it describes. A verdict whose
+	// ValidatedHash differs from CurrentHash is historical, never current.
+	ValidationKind   ValidationKind
+	ValidationStatus ValidationStatus
+	ValidationDetail string
+	ValidatedHash    string
+
+	// At most one prior demonstrably-passed version. Bytes are held in
+	// memory only, under explicit ceilings.
+	CheckpointHash        string
+	CheckpointBytes       []byte
+	CheckpointUnavailable string // why there is none, when there is none
+
+	// Tombstones. A deliberately removed file must never be resurrected, so
+	// the state is recorded and restoration is prohibited outright.
+	Tombstoned        bool
+	TombstoneReason   string // "deleted" | "moved:<canonical dst>"
+	RestoreProhibited bool
+}
+
+// CurrentValidation reports the verdict ONLY when it describes the bytes
+// currently recorded. Anything else is historical evidence and is reported as
+// unknown, which fails closed.
+func (d *DeliverableState) CurrentValidation() (ValidationKind, ValidationStatus) {
+	if d == nil || d.ValidatedHash == "" || d.ValidatedHash != d.CurrentHash {
+		return ValidationKindUnknown, ValidationUnknown
+	}
+	return d.ValidationKind, d.ValidationStatus
+}
+
+// Checkpoint ceilings. Stage-1 artifacts were 1.3-7.2 KiB and the largest
+// fenced payload observed live was 10.8 KiB, so 256 KiB is ~25x the worst
+// case while bounding a pathological file, and 2 MiB caps a session at
+// roughly eight such files. Over budget fails closed: the observation is
+// kept, the bytes are not, and the reason is recorded.
+// maxLedgerReadBytes bounds what the ledger will re-read to hash. A file above
+// it is not hashed at all, so its verdict reads as unknown rather than as a
+// stale claim about bytes nobody looked at.
+const (
+	maxCheckpointFileBytes    = 256 * 1024
+	maxCheckpointSessionBytes = 2 * 1024 * 1024
+	maxLedgerReadBytes        = 8 * 1024 * 1024
+)
+
 // AgentContext holds all state for a single agent loop execution.
 type AgentContext struct {
 	// Configuration
@@ -730,6 +785,14 @@ type AgentContext struct {
 	// realize mid-loop that app.py was a stub and needs rewriting
 	// (May 12 2026 /demo multi-file flask run — the entire wiring bug
 	// stemmed from the guard refusing the model's self-correction).
+	//
+	// Keyed on the RAW path the model supplied, so "solve.py" and
+	// "./solve.py" are two entries for one file and the overwrite guard can
+	// refuse the agent's own output under a second spelling. Recorded here
+	// rather than changed: every consumer above reads these keys, and
+	// canonicalising them is a behavioural change with its own evidence to
+	// gather. The Phase 3A ledger keys on the resolved path instead, so the
+	// two do not share this defect.
 	SessionWrites map[string]bool
 
 	// FencedFailures counts CONSECUTIVE zero-byte fenced resolutions per
@@ -740,6 +803,25 @@ type AgentContext struct {
 	// turn. Keyed by path so one file's failures cannot exhaust another's
 	// allowance. A successful resolution clears the entry.
 	FencedFailures map[string]int
+
+	// Ledger is the observational record of what this session has done to
+	// each declared/session-owned deliverable, keyed by CANONICAL
+	// workspace-relative path. Phase 3A only observes: nothing here changes
+	// what is written, refused, or reported.
+	//
+	// It exists because at a stall the server knows only which paths were
+	// touched -- not whether the current bytes are valid, and not what the
+	// last good version was. ValidationStatus never crosses the event
+	// boundary, so a finaliser had nothing true to say and nothing safe to
+	// leave behind.
+	Ledger   map[string]*DeliverableState
+	LedgerMu sync.Mutex
+
+	// WorkspaceHazard is set while a background job may be mutating the
+	// workspace. run_background raises it; stop_background does NOT clear it,
+	// because a signalled process may still be flushing. Only a confirmed
+	// exit clears it, and tracked paths must be rehashed afterwards.
+	WorkspaceHazard int
 
 	// ManifestAnnounced tracks which SessionWrites paths have been named
 	// in a session-file-manifest note (context.go) so each file

@@ -38,6 +38,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -2465,3 +2467,363 @@ func v3SwappedTheLanguage(path, original, improved string) string {
 // htmlTagRe matches any opening tag or doctype — the minimum structure an
 // HTML document cannot lack.
 var htmlTagRe = regexp.MustCompile(`(?i)<(?:!doctype|html|head|body|div|span|p|canvas|script|style|link|meta|h[1-6]|ul|table|form|button)\b`)
+
+// --- Phase 3A: observational deliverable ledger -----------------------------
+//
+// Records what happened to each session-owned deliverable. It observes only:
+// nothing here changes what is written, refused, restored, or reported.
+//
+// The lock is held for map and struct mutation ONLY. Reading the file,
+// hashing it and validating it all happen outside it, because a session mutex
+// held across a sandbox round-trip would serialise the agent loop behind the
+// network.
+
+func ledgerKey(ctx *AgentContext, path string) string {
+	return filepath.Clean(resolveAgentPath(ctx, path))
+}
+
+func hashBytes(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+// ledgerEntry returns the entry for a canonical key, creating it if absent.
+// Caller must hold LedgerMu.
+func ledgerEntry(ctx *AgentContext, key string) *DeliverableState {
+	if ctx.Ledger == nil {
+		ctx.Ledger = map[string]*DeliverableState{}
+	}
+	d := ctx.Ledger[key]
+	if d == nil {
+		d = &DeliverableState{Path: key}
+		ctx.Ledger[key] = d
+	}
+	return d
+}
+
+// ledgerSessionBytes sums checkpoint bytes held. Caller must hold LedgerMu.
+func ledgerSessionBytes(ctx *AgentContext) int {
+	n := 0
+	for _, d := range ctx.Ledger {
+		n += len(d.CheckpointBytes)
+	}
+	return n
+}
+
+// observeDeliverable records the CURRENT bytes of a path and, when the caller
+// supplies an explicit passed verdict bound to those exact bytes, promotes
+// them to the path's single checkpoint.
+//
+// Promotion happens ONLY from an explicit ValidationPassed whose hash matches
+// the bytes just read. Never from legacy Success, warning absence, extension,
+// error prose, not_run, not_applicable, failed, unknown, or a mismatch. A
+// syntax pass establishes syntax; it is not runtime success and never task
+// correctness.
+func observeDeliverable(ctx *AgentContext, path string, content []byte,
+	kind ValidationKind, status ValidationStatus, detail string) {
+	if ctx == nil {
+		return
+	}
+	key := ledgerKey(ctx, path)
+	h := hashBytes(content)
+
+	ctx.LedgerMu.Lock()
+	defer ctx.LedgerMu.Unlock()
+	d := ledgerEntry(ctx, key)
+	d.CurrentHash = h
+	d.CurrentSize = len(content)
+	d.Generation++
+	d.Tombstoned = false
+	d.TombstoneReason = ""
+	d.ValidationKind = kind
+	d.ValidationStatus = status
+	d.ValidationDetail = detail
+	d.ValidatedHash = h // the verdict describes exactly these bytes
+
+	if status != ValidationPassed {
+		return
+	}
+	// Same bytes already checkpointed: nothing to do.
+	if d.CheckpointHash == h {
+		return
+	}
+	if len(content) > maxCheckpointFileBytes {
+		d.CheckpointUnavailable = "exceeds the per-file checkpoint ceiling"
+		return
+	}
+	// Deterministic admission: the replacement's cost is its own size minus
+	// whatever this path already holds. Nothing else is evicted, so there is
+	// no map-order dependence.
+	projected := ledgerSessionBytes(ctx) - len(d.CheckpointBytes) + len(content)
+	if projected > maxCheckpointSessionBytes {
+		d.CheckpointUnavailable = "exceeds the per-session checkpoint ceiling"
+		return
+	}
+	d.CheckpointBytes = append([]byte(nil), content...)
+	d.CheckpointHash = h
+	d.CheckpointUnavailable = ""
+}
+
+// tombstoneDeliverable records a deliberate removal. Checkpoint bytes are
+// retained for a later policy decision, and automatic restoration is
+// prohibited outright: resurrecting a file the user asked to delete is worse
+// than losing a checkpoint.
+func tombstoneDeliverable(ctx *AgentContext, path, reason string) {
+	if ctx == nil {
+		return
+	}
+	key := ledgerKey(ctx, path)
+	ctx.LedgerMu.Lock()
+	defer ctx.LedgerMu.Unlock()
+	d := ledgerEntry(ctx, key)
+	d.Tombstoned = true
+	d.TombstoneReason = reason
+	d.RestoreProhibited = true
+	d.CurrentHash = ""
+	d.CurrentSize = 0
+	d.Generation++
+	// The verdict described bytes that are no longer there.
+	d.ValidationStatus = ValidationUnknown
+	d.ValidationKind = ValidationKindUnknown
+	d.ValidatedHash = ""
+}
+
+// raiseWorkspaceHazard marks the workspace concurrently mutable. Raised by
+// run_background. stop_background does NOT lower it: a signalled process may
+// still be flushing, so only a confirmed exit does.
+func raiseWorkspaceHazard(ctx *AgentContext) {
+	if ctx == nil {
+		return
+	}
+	ctx.LedgerMu.Lock()
+	defer ctx.LedgerMu.Unlock()
+	ctx.WorkspaceHazard++
+}
+
+// clearWorkspaceHazard lowers the hazard on a CONFIRMED process exit.
+func clearWorkspaceHazard(ctx *AgentContext) {
+	if ctx == nil {
+		return
+	}
+	ctx.LedgerMu.Lock()
+	defer ctx.LedgerMu.Unlock()
+	if ctx.WorkspaceHazard > 0 {
+		ctx.WorkspaceHazard--
+	}
+}
+
+func workspaceHazardous(ctx *AgentContext) bool {
+	if ctx == nil {
+		return false
+	}
+	ctx.LedgerMu.Lock()
+	defer ctx.LedgerMu.Unlock()
+	return ctx.WorkspaceHazard > 0
+}
+
+// invalidateTrackedValidation is what a shell effect does to the ledger: an
+// arbitrary command may have rewritten anything, so every tracked path's
+// verdict stops describing the current bytes unless a fresh rehash proves
+// they are unchanged. Reads happen outside the lock.
+func invalidateTrackedValidation(ctx *AgentContext) {
+	if ctx == nil {
+		return
+	}
+	ctx.LedgerMu.Lock()
+	keys := make([]string, 0, len(ctx.Ledger))
+	for k, d := range ctx.Ledger {
+		if !d.Tombstoned {
+			keys = append(keys, k)
+		}
+	}
+	ctx.LedgerMu.Unlock()
+
+	for _, k := range keys {
+		b, err := os.ReadFile(k)
+		if err != nil {
+			ctx.LedgerMu.Lock()
+			if d := ctx.Ledger[k]; d != nil {
+				d.CurrentHash = ""
+				d.ValidatedHash = ""
+				d.ValidationStatus = ValidationUnknown
+			}
+			ctx.LedgerMu.Unlock()
+			continue
+		}
+		h := hashBytes(b)
+		ctx.LedgerMu.Lock()
+		if d := ctx.Ledger[k]; d != nil && d.CurrentHash != h {
+			// The bytes moved under us: the verdict is historical now.
+			d.CurrentHash = h
+			d.CurrentSize = len(b)
+			d.Generation++
+			d.ValidatedHash = ""
+			d.ValidationStatus = ValidationUnknown
+			d.ValidationKind = ValidationKindUnknown
+		}
+		ctx.LedgerMu.Unlock()
+	}
+}
+
+// readLedgerBytes reads a canonical path for hashing, refusing anything past
+// the read ceiling. Returns (bytes, ok); ok=false means "cannot speak about
+// these bytes", which the caller turns into an unknown verdict, never a pass.
+func readLedgerBytes(key string) ([]byte, bool) {
+	fi, err := os.Stat(key)
+	if err != nil || fi.IsDir() || fi.Size() > maxLedgerReadBytes {
+		return nil, false
+	}
+	b, err := os.ReadFile(key)
+	if err != nil {
+		return nil, false
+	}
+	return b, true
+}
+
+// observePathFromDisk records what is ACTUALLY on disk after an effect, rather
+// than what the tool said it wrote. The two differ exactly when it matters --
+// a partial write, a refused edit, a command that rewrote the file afterwards
+// -- and the ledger's only claim is about the bytes that are there now.
+//
+// A path that cannot be read gets an entry only if it already had one, and
+// that entry's current hash is cleared so CurrentValidation fails closed.
+func observePathFromDisk(ctx *AgentContext, path string, kind ValidationKind,
+	status ValidationStatus, detail string) {
+	key := ledgerKey(ctx, path)
+	b, ok := readLedgerBytes(key)
+	if !ok {
+		ctx.LedgerMu.Lock()
+		if d := ctx.Ledger[key]; d != nil {
+			d.CurrentHash = ""
+			d.ValidatedHash = ""
+			d.ValidationStatus = ValidationUnknown
+			d.ValidationKind = ValidationKindUnknown
+		}
+		ctx.LedgerMu.Unlock()
+		return
+	}
+	observeDeliverable(ctx, path, b, kind, status, detail)
+}
+
+// ledgerTracks reports whether the session has already observed a path.
+func ledgerTracks(ctx *AgentContext, path string) bool {
+	key := ledgerKey(ctx, path)
+	ctx.LedgerMu.Lock()
+	defer ctx.LedgerMu.Unlock()
+	return ctx.Ledger[key] != nil
+}
+
+// ledgerArgPath pulls one string field out of a tool's raw args without
+// binding the ledger to any tool's input struct.
+func ledgerArgPath(args json.RawMessage, field string) string {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(args, &m) != nil {
+		return ""
+	}
+	var s string
+	if raw, present := m[field]; !present || json.Unmarshal(raw, &s) != nil {
+		return ""
+	}
+	return strings.TrimSpace(s)
+}
+
+// recordLedgerEffect is the ledger's single production entry point, called at
+// the shared tool boundary once a call has fully resolved.
+//
+// It observes; it decides nothing. It never inspects Success: a tool's own
+// MutationStatus/ValidationStatus and the filesystem are the only inputs, and
+// where they disagree the filesystem wins.
+func recordLedgerEffect(name string, args json.RawMessage, ctx *AgentContext, result *ToolResult) {
+	if ctx == nil || result == nil || ctx.WorkingDir == "" {
+		return
+	}
+	// A direct mutator that proved it mutated nothing -- a deny-list refusal,
+	// an unread-file refusal, a rejected gate -- has nothing to record. This
+	// is not an optimisation: without it a refused write to a path the
+	// session never owned would enter the ledger as a deliverable, and the
+	// bytes it was refused for would look like something this session put
+	// there. Unknown, unobserved and failed all fall through and are read
+	// from disk, because each of them can leave partial bytes behind.
+	if result.MutationStatus == MutationNone {
+		return
+	}
+
+	switch name {
+	// Content mutators: the verdict the tool produced describes the bytes it
+	// proposed, so it is admissible only if those bytes are what landed --
+	// which observeDeliverable enforces by hashing what it re-reads.
+	case "write_file", "edit_file", "structural_edit", "insert_after", "replace_lines":
+		if p := ledgerArgPath(args, "path"); p != "" {
+			observePathFromDisk(ctx, p, result.ValidationKind, result.ValidationStatus, name)
+		}
+
+	case "delete_file":
+		p := ledgerArgPath(args, "path")
+		if p == "" {
+			return
+		}
+		// A refused or failed delete leaves the file in place. Tombstone on
+		// the file being GONE, never on the call having been made.
+		if _, err := os.Stat(ledgerKey(ctx, p)); err == nil {
+			observePathFromDisk(ctx, p, ValidationKindUnknown, ValidationUnknown,
+				"delete_file did not remove the file")
+			return
+		}
+		// A path the ledger never observed and that the tool did not report
+		// removing is not this session's deliverable; inventing a tombstone
+		// for it would fabricate history from a failed call.
+		if ledgerTracks(ctx, p) || result.MutationStatus.Applied() {
+			tombstoneDeliverable(ctx, p, "deleted")
+		}
+
+	case "move_file":
+		src := ledgerArgPath(args, "source")
+		dst := ledgerArgPath(args, "destination")
+		// move_file accepts a directory as the destination, so take the path
+		// the tool actually resolved when it reported one.
+		var out MoveFileOutput
+		if len(result.Data) > 0 && json.Unmarshal(result.Data, &out) == nil && out.Destination != "" {
+			dst = out.Destination
+		}
+		if dst != "" {
+			// Fresh observation, unknown verdict: a syntax pass earned under
+			// the old name says nothing about this path, and inheriting it
+			// would let a rename manufacture evidence.
+			observePathFromDisk(ctx, dst, ValidationKindUnknown, ValidationUnknown, "move_file destination")
+		}
+		if src == "" {
+			return
+		}
+		if _, err := os.Stat(ledgerKey(ctx, src)); err == nil {
+			observePathFromDisk(ctx, src, ValidationKindUnknown, ValidationUnknown,
+				"move_file left the source in place")
+			return
+		}
+		if ledgerTracks(ctx, src) || result.MutationStatus.Applied() {
+			tombstoneDeliverable(ctx, src, "moved:"+ledgerKey(ctx, dst))
+		}
+
+	// Shell effects. An arbitrary command may have rewritten anything, so
+	// every tracked verdict is re-proved by rehash or dropped.
+	case "run_command":
+		invalidateTrackedValidation(ctx)
+
+	case "run_background":
+		// Conservative for the same reason MutationUnobserved is: once
+		// dispatch reached the handler a job may be running and writing, and
+		// a start that reported failure gives no job_id to confirm an exit
+		// with. The hazard stays raised.
+		raiseWorkspaceHazard(ctx)
+		invalidateTrackedValidation(ctx)
+
+	case "stop_background":
+		invalidateTrackedValidation(ctx)
+		// A reaped exit code is the only proof the writer is gone. SIGTERM
+		// sent, SIGKILL sent, and "stop returned" are all compatible with a
+		// process still flushing.
+		var out StopBackgroundOutput
+		if len(result.Data) > 0 && json.Unmarshal(result.Data, &out) == nil && out.ExitCode != nil {
+			clearWorkspaceHazard(ctx)
+		}
+	}
+}

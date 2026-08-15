@@ -1,8 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -221,4 +224,214 @@ func TestFallbackSyntaxComposites(t *testing.T) {
 			t.Errorf("aggregate = %q, want not_applicable", o.aggregate().Status)
 		}
 	})
+}
+
+// --- Phase 3A: observational deliverable ledger -----------------------------
+//
+// At a stall the server knows only which paths were touched — not whether the
+// current bytes are valid, and not what the last good version was.
+// ValidationStatus never crosses the event boundary, so a finaliser had
+// nothing true to say and nothing safe to leave behind. This records both.
+// Phase 3A observes only: no restoration, no behaviour change.
+
+func ledgerCtx(t *testing.T) *AgentContext {
+	t.Helper()
+	return NewAgentContext(t.TempDir(), Tier2Medium)
+}
+
+func TestFirstPassedObservationCreatesACheckpoint(t *testing.T) {
+	ctx := ledgerCtx(t)
+	body := []byte("x = 1\n")
+	observeDeliverable(ctx, "solve.py", body, ValidationKindSyntax, ValidationPassed, "")
+	d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
+	if d == nil || d.CheckpointHash != hashBytes(body) {
+		t.Fatalf("no checkpoint created: %+v", d)
+	}
+	if string(d.CheckpointBytes) != string(body) {
+		t.Errorf("checkpoint bytes wrong: %q", d.CheckpointBytes)
+	}
+	if k, s := d.CurrentValidation(); k != ValidationKindSyntax || s != ValidationPassed {
+		t.Errorf("current validation = %v/%v", k, s)
+	}
+}
+
+func TestALaterPassedHashReplacesTheCheckpoint(t *testing.T) {
+	ctx := ledgerCtx(t)
+	observeDeliverable(ctx, "solve.py", []byte("v1\n"), ValidationKindSyntax, ValidationPassed, "")
+	observeDeliverable(ctx, "solve.py", []byte("v2222\n"), ValidationKindSyntax, ValidationPassed, "")
+	d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
+	if string(d.CheckpointBytes) != "v2222\n" {
+		t.Errorf("newer passed bytes did not replace the checkpoint: %q", d.CheckpointBytes)
+	}
+	if d.CheckpointHash != hashBytes([]byte("v2222\n")) {
+		t.Error("checkpoint hash not updated")
+	}
+}
+
+func TestOnlyAnExplicitPassPromotes(t *testing.T) {
+	for _, st := range []ValidationStatus{
+		ValidationFailed, ValidationNotRun, ValidationNotApplicable, ValidationUnknown,
+	} {
+		ctx := ledgerCtx(t)
+		observeDeliverable(ctx, "solve.py", []byte("x\n"), ValidationKindSyntax, st, "")
+		d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
+		if d.CheckpointHash != "" {
+			t.Errorf("status %q promoted a checkpoint", st)
+		}
+		if _, s := d.CurrentValidation(); s != st {
+			t.Errorf("status %q not recorded faithfully (got %q)", st, s)
+		}
+	}
+}
+
+func TestBaselineBytesNeverPromoteWithoutTheirOwnPass(t *testing.T) {
+	ctx := ledgerCtx(t)
+	// A pre-mutation snapshot observed with no verdict of its own.
+	observeDeliverable(ctx, "solve.py", []byte("baseline\n"), ValidationKindUnknown,
+		ValidationUnknown, "pre-mutation snapshot")
+	if d := ctx.Ledger[ledgerKey(ctx, "solve.py")]; d.CheckpointHash != "" {
+		t.Error("baseline bytes were promoted without explicit passed evidence")
+	}
+}
+
+func TestCanonicalAliasesShareOneEntry(t *testing.T) {
+	ctx := ledgerCtx(t)
+	observeDeliverable(ctx, "solve.py", []byte("a\n"), ValidationKindSyntax, ValidationPassed, "")
+	observeDeliverable(ctx, "./solve.py", []byte("bb\n"), ValidationKindSyntax, ValidationPassed, "")
+	if len(ctx.Ledger) != 1 {
+		t.Fatalf("aliases created %d entries: %v", len(ctx.Ledger), ctx.Ledger)
+	}
+	if d := ctx.Ledger[ledgerKey(ctx, "solve.py")]; string(d.CheckpointBytes) != "bb\n" {
+		t.Errorf("alias write did not update the shared entry: %q", d.CheckpointBytes)
+	}
+}
+
+func TestStaleHashMakesValidationHistoricalNotCurrent(t *testing.T) {
+	ctx := ledgerCtx(t)
+	observeDeliverable(ctx, "solve.py", []byte("good\n"), ValidationKindSyntax, ValidationPassed, "")
+	d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
+	d.CurrentHash = hashBytes([]byte("something else\n")) // disk moved under us
+	k, s := d.CurrentValidation()
+	if s != ValidationUnknown || k != ValidationKindUnknown {
+		t.Errorf("stale verdict presented as current: %v/%v", k, s)
+	}
+	if d.ValidationStatus != ValidationPassed {
+		t.Error("historical evidence must be preserved, not erased")
+	}
+}
+
+func TestCommandRehashKeepsUnchangedAndInvalidatesMutated(t *testing.T) {
+	ctx := ledgerCtx(t)
+	quiet := filepath.Join(ctx.WorkingDir, "quiet.py")
+	noisy := filepath.Join(ctx.WorkingDir, "noisy.py")
+	os.WriteFile(quiet, []byte("q\n"), 0o644)
+	os.WriteFile(noisy, []byte("n\n"), 0o644)
+	observeDeliverable(ctx, "quiet.py", []byte("q\n"), ValidationKindSyntax, ValidationPassed, "")
+	observeDeliverable(ctx, "noisy.py", []byte("n\n"), ValidationKindSyntax, ValidationPassed, "")
+
+	// A shell effect rewrites one of them.
+	os.WriteFile(noisy, []byte("rewritten by a command\n"), 0o644)
+	invalidateTrackedValidation(ctx)
+
+	if _, s := ctx.Ledger[ledgerKey(ctx, "quiet.py")].CurrentValidation(); s != ValidationPassed {
+		t.Error("an unchanged file lost its verdict")
+	}
+	nd := ctx.Ledger[ledgerKey(ctx, "noisy.py")]
+	if _, s := nd.CurrentValidation(); s != ValidationUnknown {
+		t.Error("a command-mutated file kept a verdict about bytes that are gone")
+	}
+	if nd.CurrentHash != hashBytes([]byte("rewritten by a command\n")) {
+		t.Error("current hash not refreshed after the command")
+	}
+	if nd.CheckpointHash == "" {
+		t.Error("the checkpoint of previously-passed bytes should survive")
+	}
+}
+
+func TestBackgroundHazardOnlyClearsOnConfirmedExit(t *testing.T) {
+	ctx := ledgerCtx(t)
+	if workspaceHazardous(ctx) {
+		t.Fatal("hazard set before any background work")
+	}
+	raiseWorkspaceHazard(ctx)
+	if !workspaceHazardous(ctx) {
+		t.Fatal("run_background must mark the workspace concurrently mutable")
+	}
+	// stop_background does not clear it: a signalled process may still flush.
+	if !workspaceHazardous(ctx) {
+		t.Fatal("hazard cleared by a stop request")
+	}
+	clearWorkspaceHazard(ctx) // confirmed exit
+	if workspaceHazardous(ctx) {
+		t.Error("confirmed exit did not clear the hazard")
+	}
+}
+
+func TestDeleteTombstonesRetainsBytesAndProhibitsRestore(t *testing.T) {
+	ctx := ledgerCtx(t)
+	observeDeliverable(ctx, "solve.py", []byte("x\n"), ValidationKindSyntax, ValidationPassed, "")
+	tombstoneDeliverable(ctx, "solve.py", "deleted")
+	d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
+	if !d.Tombstoned || !d.RestoreProhibited {
+		t.Fatal("delete must tombstone and prohibit restoration")
+	}
+	if len(d.CheckpointBytes) == 0 {
+		t.Error("bytes should be retained for a later policy decision")
+	}
+	if _, s := d.CurrentValidation(); s != ValidationUnknown {
+		t.Error("a deleted file has no current validation")
+	}
+}
+
+func TestMoveTombstonesSourceAndDoesNotTransferTheVerdict(t *testing.T) {
+	ctx := ledgerCtx(t)
+	observeDeliverable(ctx, "old.py", []byte("x\n"), ValidationKindSyntax, ValidationPassed, "")
+	tombstoneDeliverable(ctx, "old.py", "moved:"+ledgerKey(ctx, "new.py"))
+	src := ctx.Ledger[ledgerKey(ctx, "old.py")]
+	if !src.Tombstoned || !strings.HasPrefix(src.TombstoneReason, "moved:") {
+		t.Fatal("source not tombstoned as moved")
+	}
+	if dst := ctx.Ledger[ledgerKey(ctx, "new.py")]; dst != nil {
+		t.Error("destination must be observed freshly, never inherited")
+	}
+}
+
+func TestCheckpointCeilingsAreDeterministicAndFailClosed(t *testing.T) {
+	ctx := ledgerCtx(t)
+	big := make([]byte, maxCheckpointFileBytes+1)
+	observeDeliverable(ctx, "big.py", big, ValidationKindSyntax, ValidationPassed, "")
+	d := ctx.Ledger[ledgerKey(ctx, "big.py")]
+	if d.CheckpointHash != "" {
+		t.Error("an over-ceiling file was checkpointed")
+	}
+	if d.CheckpointUnavailable == "" {
+		t.Error("checkpoint_unavailable must be recorded explicitly")
+	}
+	if _, s := d.CurrentValidation(); s != ValidationPassed {
+		t.Error("the observation must survive even when the bytes cannot")
+	}
+
+	// Session ceiling: fill it, then prove the NEXT path is rejected rather
+	// than some arbitrary existing entry being evicted.
+	ctx2 := ledgerCtx(t)
+	chunk := make([]byte, maxCheckpointFileBytes)
+	for i := 0; i < maxCheckpointSessionBytes/maxCheckpointFileBytes; i++ {
+		observeDeliverable(ctx2, fmt.Sprintf("f%d.py", i), chunk,
+			ValidationKindSyntax, ValidationPassed, "")
+	}
+	held := 0
+	for _, d := range ctx2.Ledger {
+		held += len(d.CheckpointBytes)
+	}
+	observeDeliverable(ctx2, "one_too_many.py", chunk, ValidationKindSyntax, ValidationPassed, "")
+	after := 0
+	for _, d := range ctx2.Ledger {
+		after += len(d.CheckpointBytes)
+	}
+	if after != held {
+		t.Errorf("session ceiling evicted an existing entry: %d -> %d", held, after)
+	}
+	if ctx2.Ledger[ledgerKey(ctx2, "one_too_many.py")].CheckpointUnavailable == "" {
+		t.Error("the rejected entry must say why")
+	}
 }
