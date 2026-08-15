@@ -4229,7 +4229,50 @@ func envDurationSec(key string, def int) time.Duration {
 // The sub-call is ephemeral: nothing is appended to ctx.Messages, so from
 // the main conversation's view the model wrote "@fenced" and the write
 // simply happened.
+// maxFencedFailuresPerPath is the whole-session allowance: one attempt plus
+// one constrained retry. Past that the model must change mutation strategy —
+// inlining the body in write_file, or editing instead of rewriting — because
+// a third resolution has never been observed to succeed where two failed and
+// each one costs a full generation.
+const maxFencedFailuresPerPath = 2
+
+// fencedBudgetExhausted reports whether this path has already spent its
+// session allowance. Checked BEFORE any generation starts.
+func fencedBudgetExhausted(ctx *AgentContext, path string) bool {
+	return ctx != nil && ctx.FencedFailures[path] >= maxFencedFailuresPerPath
+}
+
+// fencedReserve is the time held back for validating the write and sending an
+// honest terminal once a fetch returns.
+const fencedReserve = 20 * time.Second
+
+// fencedFitsRemainingBudget answers requirement (a): honour a deadline when
+// the context carries one, and say so plainly when it does not. Production
+// today builds ctx.Ctx with context.WithCancel and NO deadline, so this
+// returns true and the fetch is bounded by the progress watchdog alone —
+// session-budget reservation is unavailable in that configuration.
+func fencedFitsRemainingBudget(ctx *AgentContext) bool {
+	if ctx == nil || ctx.Ctx == nil {
+		return true
+	}
+	deadline, ok := ctx.Ctx.Deadline()
+	if !ok {
+		return true // no session budget exists to reserve from
+	}
+	need := fencedFirstContentTimeout() + fencedReserve
+	return time.Until(deadline) >= need
+}
+
 func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error) {
+	if fencedBudgetExhausted(ctx, path) {
+		return "", fmt.Errorf("fenced resolution for %s has already failed %d times "+
+			"this session; send the file inline or edit it instead", path,
+			ctx.FencedFailures[path])
+	}
+	if !fencedFitsRemainingBudget(ctx) {
+		return "", fmt.Errorf("not enough session budget left to resolve %s "+
+			"and still validate the result", path)
+	}
 	tag := fenceTagForPath(path)
 	note := AgentMessage{Role: "user", Content: fmt.Sprintf(
 		"[system note]: Now provide ONLY the complete contents of %s, as plain "+
@@ -4237,7 +4280,14 @@ func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error)
 			"commentary, no partial file.", path, tag)}
 	msgs := append(append([]AgentMessage{}, ctx.Messages...),
 		AgentMessage{Role: "assistant", Content: rawCall}, note)
-	for attempt := 0; attempt < 2; attempt++ {
+	// Attempts remaining are what the SESSION still allows for this path, not
+	// a fresh two. Requirement: a new write_file call must not restore the
+	// allowance a previous turn spent.
+	remaining := maxFencedFailuresPerPath - ctx.FencedFailures[path]
+	for attempt := 0; attempt < remaining; attempt++ {
+		if attempt > 0 && !fencedFitsRemainingBudget(ctx) {
+			break // a retry that cannot finish and still be validated
+		}
 		attemptStart := time.Now()
 		reply, tokens, err := callLLMOnceWithGrammar(ctx, msgs, 0.2, rawEmissionSentinel)
 		elapsed := time.Since(attemptStart)
@@ -4278,21 +4328,34 @@ func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error)
 			return "", err
 		}
 		if got {
+			// A successful resolution clears the consecutive-failure state:
+			// the path is healthy again and a later stall gets its own budget.
+			if ctx.FencedFailures != nil {
+				delete(ctx.FencedFailures, path)
+			}
 			return content, nil
 		}
+		// Charge the session, not the local loop, so the allowance survives
+		// into the next write_file call for this path.
+		if ctx.FencedFailures == nil {
+			ctx.FencedFailures = map[string]int{}
+		}
+		ctx.FencedFailures[path]++
 		// What the model sent instead is the whole diagnosis, and without it
 		// "no fenced block after 2 attempts" says only that something went
 		// wrong. Measured a 56% failure rate on this fetch with no way to see
 		// why: the same request reproduced in a short context returns a clean
 		// block every time, so the cause lives in the session context and
 		// cannot be found without the reply.
-		log.Printf("[agent] fenced attempt %d/2 for %s produced no block (%d chars, cut=%q): %q",
-			attempt+1, path, len(reply), ctx.LastStreamCut, truncateStr(reply, 400))
+		log.Printf("[agent] fenced attempt %d for %s produced no block (%d chars, cut=%q, session failures %d/%d): %q",
+			attempt+1, path, len(reply), ctx.LastStreamCut,
+			ctx.FencedFailures[path], maxFencedFailuresPerPath, truncateStr(reply, 400))
 		msgs = append(msgs, AgentMessage{Role: "assistant", Content: reply},
 			AgentMessage{Role: "user", Content: fmt.Sprintf(
 				"[system note]: That had no fenced block. Reply with ONE ```%s fenced block containing the complete file, nothing else.", tag)})
 	}
-	return "", fmt.Errorf("no fenced block after 2 attempts")
+	return "", fmt.Errorf("no fenced block after %d attempt(s) for %s this session; "+
+		"send the file inline or edit it instead", ctx.FencedFailures[path], path)
 }
 
 func extractModelResponse(raw string) (ModelResponse, error) {

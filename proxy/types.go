@@ -732,6 +732,15 @@ type AgentContext struct {
 	// stemmed from the guard refusing the model's self-correction).
 	SessionWrites map[string]bool
 
+	// FencedFailures counts CONSECUTIVE zero-byte fenced resolutions per
+	// target path, for the life of the session. It lives here and not in
+	// fetchFencedContent because that function's attempt counter is a local:
+	// a new write_file call re-entered it with a fresh budget, so a path that
+	// had already burned two ~300s attempts could burn two more on the next
+	// turn. Keyed by path so one file's failures cannot exhaust another's
+	// allowance. A successful resolution clears the entry.
+	FencedFailures map[string]int
+
 	// ManifestAnnounced tracks which SessionWrites paths have been named
 	// in a session-file-manifest note (context.go) so each file
 	// is announced to the model once.

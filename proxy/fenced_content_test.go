@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -424,5 +426,183 @@ func TestSessionCancellationAbortsTheFencedFetch(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 	if after := runtime.NumGoroutine(); after > before+4 {
 		t.Errorf("goroutines leaked: before=%d after=%d", before, after)
+	}
+}
+
+// --- Phase 2: session/path-scoped retry budget ------------------------------
+//
+// fetchFencedContent's attempt counter was a local, so a new write_file call
+// re-entered with a fresh allowance: a path that had already burned two ~300s
+// attempts could burn two more next turn. The budget now lives in session
+// state, keyed by path.
+
+func fencedFailStub(t *testing.T, calls *int, succeedOnCall int) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		i := *calls
+		*calls++
+		w.Header().Set("Content-Type", "text/event-stream")
+		body := "I am thinking about it."
+		if succeedOnCall >= 0 && i == succeedOnCall {
+			body = "```python\nx = 1\n```"
+		}
+		d, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"delta": map[string]string{"content": body}}},
+		})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+	}))
+}
+
+func fencedCtx(t *testing.T, url string) *AgentContext {
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	ctx.InferenceURL = url
+	ctx.Ctx = context.Background()
+	return ctx
+}
+
+func TestFencedRetryBudgetSurvivesANewWriteFileCall(t *testing.T) {
+	calls := 0
+	srv := fencedFailStub(t, &calls, -1)
+	defer srv.Close()
+	ctx := fencedCtx(t, srv.URL)
+
+	if _, err := fetchFencedContent(ctx, "raw", "solve.py"); err == nil {
+		t.Fatal("expected failure")
+	}
+	afterFirst := calls
+	if afterFirst != maxFencedFailuresPerPath {
+		t.Fatalf("first call should spend the whole allowance: %d generations", afterFirst)
+	}
+	// A brand-new write_file for the same path re-enters the function.
+	if _, err := fetchFencedContent(ctx, "raw", "solve.py"); err == nil {
+		t.Fatal("expected refusal")
+	}
+	if calls != afterFirst {
+		t.Errorf("a new write_file restarted the budget: %d generations after, want %d",
+			calls, afterFirst)
+	}
+	if ctx.FencedFailures["solve.py"] != maxFencedFailuresPerPath {
+		t.Errorf("session failure count = %d", ctx.FencedFailures["solve.py"])
+	}
+}
+
+func TestFencedBudgetIsPerPath(t *testing.T) {
+	calls := 0
+	srv := fencedFailStub(t, &calls, -1)
+	defer srv.Close()
+	ctx := fencedCtx(t, srv.URL)
+
+	fetchFencedContent(ctx, "raw", "a.py")
+	spent := calls
+	// A different path must have its own allowance.
+	if _, err := fetchFencedContent(ctx, "raw", "b.py"); err == nil {
+		t.Fatal("expected failure on b.py too")
+	}
+	if calls <= spent {
+		t.Errorf("b.py was denied a.py's budget: %d generations", calls-spent)
+	}
+	if ctx.FencedFailures["a.py"] != maxFencedFailuresPerPath ||
+		ctx.FencedFailures["b.py"] != maxFencedFailuresPerPath {
+		t.Errorf("per-path counts wrong: %v", ctx.FencedFailures)
+	}
+}
+
+func TestOneConstrainedRetryMayFollowAZeroByteFailure(t *testing.T) {
+	calls := 0
+	srv := fencedFailStub(t, &calls, 1) // first attempt empty, retry succeeds
+	defer srv.Close()
+	ctx := fencedCtx(t, srv.URL)
+
+	out, err := fetchFencedContent(ctx, "raw", "solve.py")
+	if err != nil {
+		t.Fatalf("the constrained retry should have succeeded: %v", err)
+	}
+	if !strings.Contains(out, "x = 1") {
+		t.Errorf("retry payload lost: %q", out)
+	}
+	if n := ctx.FencedFailures["solve.py"]; n != 0 {
+		t.Errorf("success must clear the consecutive-failure state, got %d", n)
+	}
+	if calls != 2 {
+		t.Errorf("expected one failure plus one retry, got %d generations", calls)
+	}
+}
+
+func TestSuccessRestoresTheFullAllowance(t *testing.T) {
+	calls := 0
+	srv := fencedFailStub(t, &calls, 1)
+	defer srv.Close()
+	ctx := fencedCtx(t, srv.URL)
+	fetchFencedContent(ctx, "raw", "solve.py") // fail then succeed -> cleared
+	if fencedBudgetExhausted(ctx, "solve.py") {
+		t.Fatal("a healthy path must not stay exhausted")
+	}
+}
+
+// Deadline present: a retry that cannot finish and still leave the reserve is
+// not started.
+func TestReserveAwareRetryAdmissionWithADeadline(t *testing.T) {
+	calls := 0
+	srv := fencedFailStub(t, &calls, -1)
+	defer srv.Close()
+	ctx := fencedCtx(t, srv.URL)
+	dctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	ctx.Ctx = dctx
+
+	if _, err := fetchFencedContent(ctx, "raw", "solve.py"); err == nil {
+		t.Fatal("expected failure")
+	}
+	// first-content bound (60s) + reserve (20s) cannot fit in 500ms, so the
+	// fetch is refused before any generation.
+	if calls != 0 {
+		t.Errorf("started %d generation(s) with no room to validate", calls)
+	}
+	if !strings.Contains(func() string {
+		_, err := fetchFencedContent(ctx, "raw", "other.py")
+		return err.Error()
+	}(), "session budget") {
+		t.Error("refusal should name the budget as the reason")
+	}
+}
+
+// Deadline absent — production today. Fetching is still bounded by the
+// progress watchdog; this makes no claim about total session duration.
+func TestNoDeadlineStillBoundsFetchingWithoutClaimingSessionBudget(t *testing.T) {
+	calls := 0
+	srv := fencedFailStub(t, &calls, -1)
+	defer srv.Close()
+	ctx := fencedCtx(t, srv.URL) // context.Background(): no deadline
+	if _, ok := ctx.Ctx.Deadline(); ok {
+		t.Fatal("fixture should have no deadline")
+	}
+	if !fencedFitsRemainingBudget(ctx) {
+		t.Error("with no deadline there is no budget to fail against")
+	}
+	if _, err := fetchFencedContent(ctx, "raw", "solve.py"); err == nil {
+		t.Fatal("expected failure")
+	}
+	// Bounded by the per-path allowance, not by any session budget.
+	if calls != maxFencedFailuresPerPath {
+		t.Errorf("unbounded: %d generations", calls)
+	}
+}
+
+// A failed resolution must not touch the file.
+func TestFailedFencedResolutionLeavesDiskBytesUnchanged(t *testing.T) {
+	calls := 0
+	srv := fencedFailStub(t, &calls, -1)
+	defer srv.Close()
+	ctx := fencedCtx(t, srv.URL)
+	target := filepath.Join(ctx.WorkingDir, "solve.py")
+	original := "original = True\n"
+	if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fetchFencedContent(ctx, "raw", "solve.py")
+	after, _ := os.ReadFile(target)
+	if string(after) != original {
+		t.Errorf("failed resolution modified disk: %q", string(after))
 	}
 }
