@@ -4206,11 +4206,18 @@ func fencedIdleTimeout() time.Duration {
 	return envDurationSec("ATLAS_FENCED_IDLE_SEC", defaultFencedIdleSec)
 }
 
+// maxFencedOverrideSec caps the override. A bound of hours is indistinguishable
+// from no bound, and the failure this exists to stop is a ~300s stall, so an
+// absurd value must fall back rather than quietly disable the safety net.
+const maxFencedOverrideSec = 600
+
 func envDurationSec(key string, def int) time.Duration {
 	if v := strings.TrimSpace(envOr(key, "")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= maxFencedOverrideSec {
 			return time.Duration(n) * time.Second
 		}
+		log.Printf("[agent] ignoring %s=%q (want 1..%d seconds) — using %ds",
+			key, v, maxFencedOverrideSec, def)
 	}
 	return time.Duration(def) * time.Second
 }
@@ -4239,7 +4246,29 @@ const maxFencedFailuresPerPath = 2
 // fencedBudgetExhausted reports whether this path has already spent its
 // session allowance. Checked BEFORE any generation starts.
 func fencedBudgetExhausted(ctx *AgentContext, path string) bool {
-	return ctx != nil && ctx.FencedFailures[path] >= maxFencedFailuresPerPath
+	return ctx != nil && ctx.FencedFailures[fencedKey(ctx, path)] >= maxFencedFailuresPerPath
+}
+
+// fencedKey canonicalises the target so equivalent spellings share one
+// allowance. Keying on raw model input let "solve.py" and "./solve.py" hold
+// separate budgets, which is the same restart-the-counter hole one level
+// down.
+func fencedKey(ctx *AgentContext, path string) string {
+	if ctx == nil {
+		return filepath.Clean(path)
+	}
+	return filepath.Clean(resolveAgentPath(ctx, path))
+}
+
+// charge records one consumed attempt against the path's session allowance.
+func charge(ctx *AgentContext, path string) {
+	if ctx == nil {
+		return
+	}
+	if ctx.FencedFailures == nil {
+		ctx.FencedFailures = map[string]int{}
+	}
+	ctx.FencedFailures[fencedKey(ctx, path)]++
 }
 
 // fencedReserve is the time held back for validating the write and sending an
@@ -4267,7 +4296,7 @@ func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error)
 	if fencedBudgetExhausted(ctx, path) {
 		return "", fmt.Errorf("fenced resolution for %s has already failed %d times "+
 			"this session; send the file inline or edit it instead", path,
-			ctx.FencedFailures[path])
+			ctx.FencedFailures[fencedKey(ctx, path)])
 	}
 	if !fencedFitsRemainingBudget(ctx) {
 		return "", fmt.Errorf("not enough session budget left to resolve %s "+
@@ -4283,7 +4312,8 @@ func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error)
 	// Attempts remaining are what the SESSION still allows for this path, not
 	// a fresh two. Requirement: a new write_file call must not restore the
 	// allowance a previous turn spent.
-	remaining := maxFencedFailuresPerPath - ctx.FencedFailures[path]
+	var lastErr error
+	remaining := maxFencedFailuresPerPath - ctx.FencedFailures[fencedKey(ctx, path)]
 	for attempt := 0; attempt < remaining; attempt++ {
 		if attempt > 0 && !fencedFitsRemainingBudget(ctx) {
 			break // a retry that cannot finish and still be validated
@@ -4325,22 +4355,33 @@ func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error)
 			},
 		})
 		if err != nil {
-			return "", err
+			// Every way this attempt can end WITHOUT a fenced block charges
+			// the session: watchdog cancellation, transport error, HTTP
+			// failure. Not charging here is how the black-box loop issued one
+			// unbounded fetch per turn — the allowance was only ever spent by
+			// a clean empty reply.
+			charge(ctx, path)
+			// The SESSION being cancelled ends everything; the watchdog
+			// cancelling its own child is a recoverable zero-byte failure and
+			// the one permitted retry may still follow, bounded by the
+			// allowance the loop already counted.
+			if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
+				return "", err
+			}
+			lastErr = err
+			continue
 		}
 		if got {
 			// A successful resolution clears the consecutive-failure state:
 			// the path is healthy again and a later stall gets its own budget.
 			if ctx.FencedFailures != nil {
-				delete(ctx.FencedFailures, path)
+				delete(ctx.FencedFailures, fencedKey(ctx, path))
 			}
 			return content, nil
 		}
 		// Charge the session, not the local loop, so the allowance survives
 		// into the next write_file call for this path.
-		if ctx.FencedFailures == nil {
-			ctx.FencedFailures = map[string]int{}
-		}
-		ctx.FencedFailures[path]++
+		charge(ctx, path)
 		// What the model sent instead is the whole diagnosis, and without it
 		// "no fenced block after 2 attempts" says only that something went
 		// wrong. Measured a 56% failure rate on this fetch with no way to see
@@ -4349,13 +4390,20 @@ func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error)
 		// cannot be found without the reply.
 		log.Printf("[agent] fenced attempt %d for %s produced no block (%d chars, cut=%q, session failures %d/%d): %q",
 			attempt+1, path, len(reply), ctx.LastStreamCut,
-			ctx.FencedFailures[path], maxFencedFailuresPerPath, truncateStr(reply, 400))
+			ctx.FencedFailures[fencedKey(ctx, path)], maxFencedFailuresPerPath,
+			truncateStr(reply, 400))
 		msgs = append(msgs, AgentMessage{Role: "assistant", Content: reply},
 			AgentMessage{Role: "user", Content: fmt.Sprintf(
 				"[system note]: That had no fenced block. Reply with ONE ```%s fenced block containing the complete file, nothing else.", tag)})
 	}
+	if lastErr != nil {
+		return "", fmt.Errorf("fenced resolution for %s was cut after %d attempt(s) "+
+			"this session (%v); send the file inline or edit it instead",
+			path, ctx.FencedFailures[fencedKey(ctx, path)], lastErr)
+	}
 	return "", fmt.Errorf("no fenced block after %d attempt(s) for %s this session; "+
-		"send the file inline or edit it instead", ctx.FencedFailures[path], path)
+		"send the file inline or edit it instead",
+		ctx.FencedFailures[fencedKey(ctx, path)], path)
 }
 
 func extractModelResponse(raw string) (ModelResponse, error) {

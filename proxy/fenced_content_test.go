@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -482,8 +484,8 @@ func TestFencedRetryBudgetSurvivesANewWriteFileCall(t *testing.T) {
 		t.Errorf("a new write_file restarted the budget: %d generations after, want %d",
 			calls, afterFirst)
 	}
-	if ctx.FencedFailures["solve.py"] != maxFencedFailuresPerPath {
-		t.Errorf("session failure count = %d", ctx.FencedFailures["solve.py"])
+	if n := ctx.FencedFailures[fencedKey(ctx, "solve.py")]; n != maxFencedFailuresPerPath {
+		t.Errorf("session failure count = %d", n)
 	}
 }
 
@@ -502,8 +504,8 @@ func TestFencedBudgetIsPerPath(t *testing.T) {
 	if calls <= spent {
 		t.Errorf("b.py was denied a.py's budget: %d generations", calls-spent)
 	}
-	if ctx.FencedFailures["a.py"] != maxFencedFailuresPerPath ||
-		ctx.FencedFailures["b.py"] != maxFencedFailuresPerPath {
+	if ctx.FencedFailures[fencedKey(ctx, "a.py")] != maxFencedFailuresPerPath ||
+		ctx.FencedFailures[fencedKey(ctx, "b.py")] != maxFencedFailuresPerPath {
 		t.Errorf("per-path counts wrong: %v", ctx.FencedFailures)
 	}
 }
@@ -521,7 +523,7 @@ func TestOneConstrainedRetryMayFollowAZeroByteFailure(t *testing.T) {
 	if !strings.Contains(out, "x = 1") {
 		t.Errorf("retry payload lost: %q", out)
 	}
-	if n := ctx.FencedFailures["solve.py"]; n != 0 {
+	if n := ctx.FencedFailures[fencedKey(ctx, "solve.py")]; n != 0 {
 		t.Errorf("success must clear the consecutive-failure state, got %d", n)
 	}
 	if calls != 2 {
@@ -604,5 +606,220 @@ func TestFailedFencedResolutionLeavesDiskBytesUnchanged(t *testing.T) {
 	after, _ := os.ReadFile(target)
 	if string(after) != original {
 		t.Errorf("failed resolution modified disk: %q", string(after))
+	}
+}
+
+// --- Phase 2: black-box proof through the production agent loop ------------
+//
+// Drives runAgentLoop against a model that answers every write_file with the
+// @fenced sentinel and then never emits a fence — the shape behind 17
+// zero-byte resolutions and 10 timeouts in the seed-20260901 run.
+//
+// Against the parent each write_file starts a fresh unbounded fetch, so the
+// generation count grows with the turn count. Against current the fetch is
+// bounded by progress and the allowance is spent once per path, so the loop
+// stops issuing generations and the file is untouched.
+//
+// Uses no symbol the fix introduced except the allowance constant, which is
+// read as a bound rather than asserted, so the same fixture compiles and runs
+// against the parent.
+func TestFencedHangIsBoundedThroughTheAgentLoop(t *testing.T) {
+	t.Setenv("ATLAS_FENCED_FIRST_CONTENT_SEC", "1")
+	dir := t.TempDir()
+	rel := "solve.py"
+	original := "untouched = True\n"
+	if err := os.WriteFile(filepath.Join(dir, rel), []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	fenceFetches := 0
+	stop := make(chan struct{})
+	defer close(stop)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v3/") || strings.HasPrefix(r.URL.Path, "/internal/") {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/syntax-check") {
+			json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/execute") {
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			if strings.Contains(in.Code, ".atlas-mount-probe") {
+				b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": true, "stdout": string(b), "exit_code": 0})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "stdout": "", "exit_code": 0})
+			return
+		}
+		if !strings.HasSuffix(r.URL.Path, "/v1/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl, _ := w.(http.Flusher)
+		if strings.Contains(string(raw), "single fenced block") {
+			mu.Lock()
+			fenceFetches++
+			mu.Unlock()
+			for {
+				select {
+				case <-r.Context().Done():
+					return
+				case <-stop:
+					return
+				default:
+				}
+				d, _ := json.Marshal(map[string]interface{}{
+					"choices": []map[string]interface{}{
+						{"delta": map[string]string{"reasoning_content": "thinking "}}},
+				})
+				fmt.Fprintf(w, "data: %s\n\n", d)
+				if fl != nil {
+					fl.Flush()
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+		}
+		call, _ := json.Marshal(map[string]interface{}{
+			"type": "tool_call", "name": "write_file",
+			"args": map[string]string{"path": rel, "content": "@fenced"},
+		})
+		d, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"delta": map[string]string{"content": string(call)}}},
+		})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+	}))
+	defer srv.Close()
+
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.InferenceURL = srv.URL
+	ctx.SandboxURL = srv.URL
+	ctx.V3URL = srv.URL
+	ctx.PermissionMode = PermissionYolo
+	ctx.MaxTurns = 8
+
+	start := time.Now()
+	if err := runAgentLoop(ctx, "Create solve.py."); err != nil {
+		t.Fatalf("agent loop error: %v", err)
+	}
+	elapsed := time.Since(start)
+
+	mu.Lock()
+	got := fenceFetches
+	mu.Unlock()
+
+	// The allowance is spent once for this path and never restored, however
+	// many write_file calls follow. The parent restarts it every turn, so its
+	// count scales with MaxTurns.
+	if got > 2 {
+		t.Errorf("fenced generations = %d across %d turns; the per-path session "+
+			"allowance is 2 and a new write_file must not restore it",
+			got, ctx.MaxTurns)
+	}
+	if elapsed > 60*time.Second {
+		t.Errorf("loop was not bounded: %v", elapsed)
+	}
+	after, _ := os.ReadFile(filepath.Join(dir, rel))
+	if string(after) != original {
+		t.Errorf("a failed fenced resolution must not touch disk: %q", string(after))
+	}
+	t.Logf("fenced_generations=%d turns<=%d elapsed=%v", got, ctx.MaxTurns, elapsed)
+}
+
+func TestFencedAllowanceIsKeyedOnTheCanonicalPath(t *testing.T) {
+	calls := 0
+	srv := fencedFailStub(t, &calls, -1)
+	defer srv.Close()
+	ctx := fencedCtx(t, srv.URL)
+
+	fetchFencedContent(ctx, "raw", "solve.py")
+	spent := calls
+	// Same file, different spelling: must share the allowance, not restart it.
+	if _, err := fetchFencedContent(ctx, "raw", "./solve.py"); err == nil {
+		t.Fatal("expected refusal for the equivalent spelling")
+	}
+	if calls != spent {
+		t.Errorf("./solve.py got a fresh allowance: %d extra generations", calls-spent)
+	}
+	if len(ctx.FencedFailures) != 1 {
+		t.Errorf("equivalent spellings created %d keys: %v",
+			len(ctx.FencedFailures), ctx.FencedFailures)
+	}
+	// A genuinely different path keeps its own.
+	if _, err := fetchFencedContent(ctx, "raw", "other.py"); err == nil {
+		t.Fatal("expected other.py to fail on its own budget")
+	}
+	if calls <= spent {
+		t.Error("other.py was denied its independent allowance")
+	}
+}
+
+func TestWatchdogCancelsOnlyTheChildAndChargesTheAllowance(t *testing.T) {
+	t.Setenv("ATLAS_FENCED_FIRST_CONTENT_SEC", "1")
+	stop := make(chan struct{})
+	defer close(stop)
+	srv := reasoningOnlyStub(t, stop)
+	defer srv.Close()
+
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	ctx.InferenceURL = srv.URL
+	parent, cancelParent := context.WithCancel(context.Background())
+	defer cancelParent()
+	ctx.Ctx = parent
+
+	fetchFencedContent(ctx, "raw", "solve.py")
+	// The agent session must survive its own watchdog.
+	if err := parent.Err(); err != nil {
+		t.Fatalf("watchdog killed the parent session context: %v", err)
+	}
+	// A cancelled zero-content attempt is a failure and must consume budget,
+	// or the loop restarts it on the next write_file.
+	if n := ctx.FencedFailures[fencedKey(ctx, "solve.py")]; n == 0 {
+		t.Error("watchdog cancellation consumed no allowance")
+	}
+	if !fencedBudgetExhausted(ctx, "solve.py") {
+		t.Error("two cancelled attempts should exhaust the path's allowance")
+	}
+}
+
+func TestEnvOverridesRejectUnsafeValues(t *testing.T) {
+	for _, bad := range []string{"0", "-5", "abc", "", "99999"} {
+		t.Setenv("ATLAS_FENCED_IDLE_SEC", bad)
+		if got := fencedIdleTimeout(); got != 30*time.Second {
+			t.Errorf("override %q produced %v; unsafe values must fall back to 30s",
+				bad, got)
+		}
+	}
+	t.Setenv("ATLAS_FENCED_IDLE_SEC", "45")
+	if got := fencedIdleTimeout(); got != 45*time.Second {
+		t.Errorf("a reasonable override was ignored: %v", got)
+	}
+}
+
+func TestNoPersistentStateOrWireFieldWasAdded(t *testing.T) {
+	types, err := os.ReadFile("types.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Session-scoped, in-memory only: no file, no DB, no wire field.
+	if !strings.Contains(string(types), "FencedFailures map[string]int") {
+		t.Fatal("the allowance is not session state")
+	}
+	for _, f := range []string{"types.go", "agent.go"} {
+		b, _ := os.ReadFile(f)
+		for _, leak := range []string{`json:"fenced_failures`, "os.WriteFile(fencedState"} {
+			if strings.Contains(string(b), leak) {
+				t.Errorf("%s: %q suggests a wire field or persistent state", f, leak)
+			}
+		}
 	}
 }
