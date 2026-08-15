@@ -1882,6 +1882,62 @@ func repeatedRefusalSummary(tool, path string, wrote bool) string {
 	return sb.String()
 }
 
+// repeatTerminalSummary is the terminal for the repeat detector, and the one
+// place that decides whether a run may say its change landed.
+//
+// `wrote` (madeProductiveChange) is a PROGRESS HINT. It records that some
+// mutation succeeded earlier in the run; it says nothing about the bytes on
+// disk now, and it may never authorize a completion claim. Measured on the
+// seed-20260901 confirmation, task debounce5: an accepted write set the hint,
+// the model then repeated a failing verification, and the terminal read "Made
+// your change ... the change is on disk" over a file containing a
+// SyntaxError. One false success in 50 sessions, and the only terminal in
+// that run which misreported its own outcome.
+//
+// Completion is therefore derived from a FRESH observation of the declared
+// deliverable's CURRENT bytes, through the same syntax contract the write
+// path uses. Existence is not validity, an earlier success is not this
+// content, and anything short of an explicit pass -- not_run, not_applicable,
+// unknown, unreadable, or nothing declared -- is undemonstrated and stops.
+func repeatTerminalSummary(ctx *AgentContext, expected []string, wrote bool) string {
+	if deliverablesDemonstrablyValid(ctx, expected) {
+		return "Made your change. The follow-up verification command kept " +
+			"repeating and failing (often a typo in the command, not the edit) " +
+			"-- the change is on disk; run it yourself to confirm."
+	}
+	var sb strings.Builder
+	sb.WriteString("Stopped: the same tool call kept repeating without making progress")
+	if wrote {
+		sb.WriteString(", and the file on disk is not in a state this run can " +
+			"vouch for -- earlier changes did land, but the current contents " +
+			"were not shown to be valid")
+	}
+	sb.WriteString(". Try a more specific instruction (e.g. name the file and " +
+		"the exact change).")
+	return sb.String()
+}
+
+// deliverablesDemonstrablyValid answers the completion question and nothing
+// else: does every declared deliverable, as it exists RIGHT NOW, pass the
+// syntax contract? With nothing declared there is nothing demonstrated, so
+// the answer is no.
+func deliverablesDemonstrablyValid(ctx *AgentContext, expected []string) bool {
+	if len(expected) == 0 {
+		return false
+	}
+	for _, rel := range expected {
+		resolved := resolveAgentPath(ctx, rel)
+		content, err := os.ReadFile(resolved)
+		if err != nil {
+			return false
+		}
+		if fallbackSyntaxOutcomeFor(ctx, resolved, string(content)).WholeFile.Status != ValidationPassed {
+			return false
+		}
+	}
+	return true
+}
+
 // inferenceFailureSummary is what the user reads when the model call itself
 // fails — the stream cannot continue, so this is the last thing they get.
 //

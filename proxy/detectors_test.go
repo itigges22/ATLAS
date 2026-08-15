@@ -766,3 +766,65 @@ func TestTheRetryRefusalDoesNotBlockLegitimateRetries(t *testing.T) {
 		t.Error("an identical re-send with no intervening success was allowed")
 	}
 }
+
+// A productive change earlier in the run does not mean the deliverable is
+// good now. Measured on the seed-20260901 confirmation, task debounce5: an
+// accepted write set madeProductiveChange, the model then repeated a failing
+// verification command, and the repeat detector terminated with "Made your
+// change ... the change is on disk; run it yourself to confirm." The bytes on
+// disk were a SyntaxError, and the final write never executed. One false
+// success in 50 sessions, and the only terminal in the run that misreported
+// its own outcome.
+//
+// madeProductiveChange is a progress hint. It may describe what happened; it
+// may never authorize a completion claim.
+func TestProductiveChangeCannotAuthorizeCompletionOverInvalidBytes(t *testing.T) {
+	dir := t.TempDir()
+	deliverable := filepath.Join(dir, "solve.py")
+	if err := os.WriteFile(deliverable, []byte("def solve():\n    return [1, 2]]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewAgentContext(dir, Tier2Medium)
+
+	summary := repeatTerminalSummary(ctx, []string{"solve.py"}, true)
+	if strings.Contains(summary, "Made your change") {
+		t.Errorf("a syntax-invalid deliverable must not be reported as a completed change:\n%s", summary)
+	}
+	if !strings.HasPrefix(summary, "Stopped:") {
+		t.Errorf("terminal must be an honest stop, got:\n%s", summary)
+	}
+}
+
+func TestProductiveChangeStillReportsAStopWhenValidityIsUnknown(t *testing.T) {
+	dir := t.TempDir()
+	ctx := NewAgentContext(dir, Tier2Medium)
+	// No deliverable on disk at all: validity is not demonstrated, so the
+	// terminal may not claim the change landed.
+	summary := repeatTerminalSummary(ctx, []string{"missing.py"}, true)
+	if !strings.HasPrefix(summary, "Stopped:") {
+		t.Errorf("unknown validity must stop honestly, got:\n%s", summary)
+	}
+	if strings.Contains(summary, "Made your change") {
+		t.Errorf("existence is not validity:\n%s", summary)
+	}
+}
+
+func TestNoDeclaredDeliverableCannotAuthorizeCompletion(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	if s := repeatTerminalSummary(ctx, nil, true); !strings.HasPrefix(s, "Stopped:") {
+		t.Errorf("with nothing declared, validity is undemonstrated:\n%s", s)
+	}
+}
+
+func TestAValidDeliverableMayStillReportTheChangeLanded(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "solve.py"),
+		[]byte("def solve():\n    return 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewAgentContext(dir, Tier2Medium)
+	summary := repeatTerminalSummary(ctx, []string{"solve.py"}, true)
+	if !strings.Contains(summary, "on disk") {
+		t.Errorf("a demonstrably valid deliverable may say the work landed:\n%s", summary)
+	}
+}

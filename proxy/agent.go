@@ -1522,13 +1522,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						pendingRepeatCorrective = expectedOutputMissingMessage(missing)
 						log.Printf("[agent] repeat loop at turn %d but named deliverable(s) %v not on disk — output-rescue steer instead of stopping", turn, logPaths(missing))
 					} else {
-						if st.madeProductiveChange {
-							log.Printf("[agent] second repetition after a productive change at turn %d — stopping (nudge ignored; work is on disk)", turn)
-							endStream("Made your change. The follow-up verification command kept repeating and failing (often a typo in the command, not the edit) — the change is on disk; run it yourself to confirm.")
-						} else {
-							log.Printf("[agent] second repetition detection at turn %d — breaking stuck loop", turn)
-							endStream("Stopped: the same tool call kept repeating without making progress. Try a more specific instruction (e.g. name the file and the exact change).")
-						}
+						log.Printf("[agent] second repetition detection at turn %d — stopping (productive_change_hint=%v)", turn, st.madeProductiveChange)
+						endStream(repeatTerminalSummary(ctx, st.expectedOutputs, st.madeProductiveChange))
 						return nil
 					}
 				}
