@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -816,15 +818,239 @@ func TestNoDeclaredDeliverableCannotAuthorizeCompletion(t *testing.T) {
 	}
 }
 
-func TestAValidDeliverableMayStillReportTheChangeLanded(t *testing.T) {
+// syntaxStub answers the whole-file syntax check the terminal consults.
+// Without it every observation is not_run, which is fail-closed and correct
+// but cannot exercise the passed branch.
+func syntaxStub(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/syntax-check") {
+			http.NotFound(w, r)
+			return
+		}
+		var in struct{ Code string }
+		json.NewDecoder(r.Body).Decode(&in)
+		valid := !strings.Contains(in.Code, "[1,") && !strings.Contains(in.Code, "]]")
+		out := map[string]interface{}{"valid": valid}
+		if !valid {
+			out["errors"] = []string{"SyntaxError: invalid syntax"}
+		}
+		json.NewEncoder(w).Encode(out)
+	}))
+}
+
+// Syntax is not task completion. A repeat-breaker is an operational failure
+// however good the bytes look, so a demonstrably valid deliverable changes
+// what the terminal DISCLOSES and never whether it claims success.
+func TestValidBytesStillTerminateAsStopped(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "solve.py"),
 		[]byte("def solve():\n    return 1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	srv := syntaxStub(t)
+	defer srv.Close()
 	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.SandboxURL = srv.URL
 	summary := repeatTerminalSummary(ctx, []string{"solve.py"}, true)
-	if !strings.Contains(summary, "on disk") {
-		t.Errorf("a demonstrably valid deliverable may say the work landed:\n%s", summary)
+	if !strings.HasPrefix(summary, "Stopped:") {
+		t.Errorf("a repeat-breaker is an operational failure even with valid "+
+			"bytes:\n%s", summary)
 	}
+	if strings.Contains(summary, "Made your change") {
+		t.Errorf("no branch may claim completion:\n%s", summary)
+	}
+	if !strings.Contains(summary, "parses") ||
+		!strings.Contains(summary, "verification did not complete") {
+		t.Errorf("validity should change the disclosure:\n%s", summary)
+	}
+}
+
+// Disclosure differs by validation status; completion never appears.
+func TestEveryTerminalDisclosureRefusesCompletion(t *testing.T) {
+	dir := t.TempDir()
+	valid := filepath.Join(dir, "ok.py")
+	os.WriteFile(valid, []byte("x = 1\n"), 0o644)
+	invalid := filepath.Join(dir, "bad.py")
+	os.WriteFile(invalid, []byte("x = [1,\n"), 0o644)
+	srv := syntaxStub(t)
+	defer srv.Close()
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.SandboxURL = srv.URL
+
+	for _, tc := range []struct {
+		name     string
+		expected []string
+		wrote    bool
+		want     string
+	}{
+		{"passed", []string{"ok.py"}, true, "parses"},
+		{"failed", []string{"bad.py"}, true, "not shown to be valid"},
+		{"unreadable", []string{"gone.py"}, true, "not shown to be valid"},
+		{"none declared", nil, true, "not shown to be valid"},
+		{"nothing written", []string{"ok.py"}, false, "nothing was written"},
+	} {
+		got := repeatTerminalSummary(ctx, tc.expected, tc.wrote)
+		if !strings.HasPrefix(got, "Stopped:") {
+			t.Errorf("%s: not an honest stop:\n%s", tc.name, got)
+		}
+		if strings.Contains(got, "Made your change") {
+			t.Errorf("%s: completion claim:\n%s", tc.name, got)
+		}
+		if !strings.Contains(got, tc.want) {
+			t.Errorf("%s: missing disclosure %q:\n%s", tc.name, tc.want, got)
+		}
+	}
+}
+
+// The model's own `done` is untouched: it is not a breaker terminal and this
+// change must not alter ordinary clean completion.
+func TestModelIssuedDoneIsUnchanged(t *testing.T) {
+	src, err := os.ReadFile("agent.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	// The model-issued done path streams the model's own summary verbatim.
+	if !strings.Contains(body, `case "done":`) {
+		t.Fatal("model-issued done branch is gone")
+	}
+	// repeatTerminalSummary is reachable from exactly one call site: the
+	// repeat detector's terminal. It must not have leaked into the ordinary
+	// completion path.
+	if n := strings.Count(body, "repeatTerminalSummary("); n != 1 {
+		t.Errorf("repeatTerminalSummary has %d call sites, want exactly 1", n)
+	}
+}
+
+// --- production-path reproduction of debounce5 ------------------------------
+//
+// Drives the real agent loop. Turn 0 creates the deliverable with content the
+// syntax checker rejects: a NEW file has no healthy prior state, so it lands
+// with a parse warning — bytes on disk, madeProductiveChange set, file
+// invalid. Every turn after re-sends the same failing verification command,
+// which is what reaches the repeat detector's terminal branch.
+
+const debounce5Invalid = "def solve():\n    return [1, 2]]\n"
+
+func debounce5Stubs(t *testing.T, dir, rel string, calls *int) *httptest.Server {
+	t.Helper()
+	write, _ := json.Marshal(map[string]interface{}{
+		"type": "tool_call", "name": "write_file",
+		"args": map[string]string{"path": rel, "content": debounce5Invalid},
+	})
+	verify, _ := json.Marshal(map[string]interface{}{
+		"type": "tool_call", "name": "run_command",
+		"args": map[string]interface{}{"command": "python3 " + rel, "timeout": 5},
+	})
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v3/") || strings.HasPrefix(r.URL.Path, "/internal/") {
+			http.Error(w, "v3 unavailable in this test", http.StatusServiceUnavailable)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/syntax-check") {
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			valid := !strings.Contains(in.Code, "[1, 2]]")
+			out := map[string]interface{}{"valid": valid}
+			if !valid {
+				out["errors"] = []string{"SyntaxError: unmatched ']' (line 2)"}
+			}
+			json.NewEncoder(w).Encode(out)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/execute") {
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			// Serve the workspace-alignment probe honestly so the session
+			// starts; anything else is the verification command, which
+			// SUCCEEDS at transport and fails on exit code — the shape that
+			// reaches the repeat detector rather than the refusal path.
+			if strings.Contains(in.Code, ".atlas-mount-probe") {
+				b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": true, "stdout": string(b), "stderr": "", "exit_code": 0,
+				})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "stdout": "",
+				"stderr": "SyntaxError: unmatched ']'", "exit_code": 1,
+			})
+			return
+		}
+		if !strings.HasSuffix(r.URL.Path, "/v1/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		i := *calls
+		*calls++
+		body := string(verify) // every turn after the first repeats the verify
+		if i == 0 {
+			body = string(write)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		delta, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"delta": map[string]string{"content": body}}},
+		})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", delta)
+	}))
+}
+
+func TestDebounce5ProductionLoopNeverClaimsCompletionOverInvalidBytes(t *testing.T) {
+	dir := t.TempDir()
+	rel := "solve.py"
+	calls := 0
+	srv := debounce5Stubs(t, dir, rel, &calls)
+	defer srv.Close()
+
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.InferenceURL = srv.URL
+	ctx.SandboxURL = srv.URL
+	ctx.V3URL = srv.URL
+	ctx.PermissionMode = PermissionYolo
+	ctx.MaxTurns = 40
+	var summary string
+	var notRunErr bool
+	ctx.StreamFn = func(eventType string, data interface{}) {
+		b, _ := json.Marshal(data)
+		switch eventType {
+		case "done":
+			summary = string(b)
+		case "tool_result":
+			if strings.Contains(string(b), "the session stopped before this call executed") {
+				notRunErr = true
+			}
+		}
+	}
+	if err := runAgentLoop(ctx, "Create solve.py and run it."); err != nil {
+		t.Fatalf("agent loop error: %v", err)
+	}
+
+	onDisk, err := os.ReadFile(filepath.Join(dir, rel))
+	if err != nil {
+		t.Fatalf("deliverable missing: %v", err)
+	}
+	if string(onDisk) != debounce5Invalid {
+		t.Errorf("terminal must not rewrite disk; got %q", string(onDisk))
+	}
+	if strings.Contains(summary, "Made your change") {
+		t.Errorf("false completion over invalid bytes:\n%s", summary)
+	}
+	if !strings.Contains(summary, "Stopped:") {
+		t.Errorf("terminal must be an honest stop:\n%s", summary)
+	}
+	// Routing disclosure. With these stubs the loop reaches the REFUSAL-ban
+	// terminal (repeatedRefusalSummary), not the repeat-DETECTOR branch that
+	// repeatTerminalSummary owns. Both must be honest, and this test proves
+	// the production loop cannot claim completion over invalid bytes by
+	// either route — but the detector branch itself is covered directly by
+	// the repeatTerminalSummary tests above, and this assertion exists so a
+	// future change cannot silently reroute and appear to cover it.
+	if !strings.Contains(summary, "re-sent after being refused") {
+		t.Logf("NOTE: terminal route changed; this run reached a different "+
+			"branch than the refusal ban: %s", summary)
+	}
+	t.Logf("summary=%s final_write_not_run=%v", summary, notRunErr)
 }

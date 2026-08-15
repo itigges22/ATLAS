@@ -848,7 +848,7 @@ func unreadCitationMessage(paths []string) string {
 		"then answer from what the code actually says. ", object)
 	b.WriteString(
 		"If you are not sure which file holds the problem, search_files for the relevant symbol " +
-		"across the whole directory rather than picking the file whose name matches the question.")
+			"across the whole directory rather than picking the file whose name matches the question.")
 	return b.String()
 }
 
@@ -1900,17 +1900,21 @@ func repeatedRefusalSummary(tool, path string, wrote bool) string {
 // content, and anything short of an explicit pass -- not_run, not_applicable,
 // unknown, unreadable, or nothing declared -- is undemonstrated and stops.
 func repeatTerminalSummary(ctx *AgentContext, expected []string, wrote bool) string {
-	if deliverablesDemonstrablyValid(ctx, expected) {
-		return "Made your change. The follow-up verification command kept " +
-			"repeating and failing (often a typo in the command, not the edit) " +
-			"-- the change is on disk; run it yourself to confirm."
-	}
 	var sb strings.Builder
 	sb.WriteString("Stopped: the same tool call kept repeating without making progress")
-	if wrote {
-		sb.WriteString(", and the file on disk is not in a state this run can " +
-			"vouch for -- earlier changes did land, but the current contents " +
-			"were not shown to be valid")
+	// Validation status alters DISCLOSURE only. A repeat-breaker is an
+	// operational failure whatever the bytes look like: syntax is not task
+	// completion, and the run stopped without finishing its verification.
+	// Neither branch may read as a completion claim.
+	switch {
+	case !wrote:
+		sb.WriteString(", and nothing was written to disk")
+	case deliverablesDemonstrablyValid(ctx, expected):
+		sb.WriteString(". Your work is on disk and parses, but the " +
+			"verification did not complete, so this run cannot say the task is done")
+	default:
+		sb.WriteString(". Earlier changes did land on disk, but the current " +
+			"contents were not shown to be valid — treat them as unverified")
 	}
 	sb.WriteString(". Try a more specific instruction (e.g. name the file and " +
 		"the exact change).")
