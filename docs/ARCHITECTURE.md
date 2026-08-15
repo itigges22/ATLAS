@@ -186,6 +186,24 @@ only on an explicit `passed` for that exact hash, under a 256 KiB per-file and
 2 MiB per-session ceiling. Over the ceiling the observation is kept, the bytes
 are not, and `checkpoint_unavailable` records why.
 
+Which mutators can leave a checkpoint follows from whether they produce an
+explicit pass for the bytes they wrote, measured by
+`TestWhichMutatorsCanEverPromoteACheckpoint`:
+
+| Tool | Reaches `passed` | Note |
+|------|------------------|------|
+| `write_file`, `edit_file`, `insert_after`, `replace_lines` | yes | via the syntax gate, when the sandbox is reachable |
+| `structural_edit` | no | the tree-sitter splice is v3-service's; this tool runs no check of its own on the bytes it writes, so it reports `syntax`/`not_run` |
+| `delete_file`, `move_file` | no | neither changes content, so neither has a verdict to give |
+
+Every branch of the seven mutators carries its own `MutationStatus`: the
+boundary is structurally forbidden from classifying a direct mutator, so an
+unclassified branch would be indistinguishable from a deliberate no-op.
+`noMutation` / `errNoMutation` mark a branch that formed no bytes to write,
+`refusedNoCheck` a guard that declined bytes that were ready, and
+`errFailedMutation` a write that was attempted and left the target
+indeterminate. `TestEvery*OutcomeIsClassified` covers the families.
+
 `SessionWrites` is a separate, older map keyed on the raw model-supplied path;
 `proxy/types.go` documents the aliasing that follows from that.
 

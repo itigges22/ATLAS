@@ -816,15 +816,12 @@ func writeFileTool() *ToolDef {
 		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
 			var input WriteFileInput
 			if err := json.Unmarshal(rawInput, &input); err != nil {
-				return nil, fmt.Errorf("invalid input: %w", err)
+				return nil, errNoMutation(fmt.Errorf("invalid input: %w", err))
 			}
 
 			// Reject empty path — same reasoning as read_file.
 			if strings.TrimSpace(input.Path) == "" {
-				return &ToolResult{
-					Success: false,
-					Error:   "write_file: path cannot be empty. Provide a relative path like \"snake_game.py\" or \"src/main.py\".",
-				}, nil
+				return noMutation("write_file: path cannot be empty. Provide a relative path like \"snake_game.py\" or \"src/main.py\"."), nil
 			}
 
 			path := resolveAgentPath(ctx, input.Path)
@@ -849,7 +846,7 @@ func writeFileTool() *ToolDef {
 			// tool result, not a hard reject — the model can ignore it
 			// if the content is clearly intentional.
 			if hint := patternMatchHint(path, ctx.SnapshotFilesRead()); hint != "" {
-				return &ToolResult{Success: false, Error: hint}, nil
+				return refusedNoCheck(hint), nil
 			}
 
 			// Echoed write: the content is the file that is already there.
@@ -861,8 +858,7 @@ func writeFileTool() *ToolDef {
 				if echoesExistingFile(string(existing), input.Content) {
 					log.Printf("[write_file] refusing an echoed write of %s (%d bytes on disk, %d incoming)",
 						logPath(input.Path), len(existing), len(input.Content))
-					return &ToolResult{Success: false,
-						Error: echoedWriteRejection(input.Path)}, nil
+					return refusedNoCheck(echoedWriteRejection(input.Path)), nil
 				}
 			}
 
@@ -875,7 +871,7 @@ func writeFileTool() *ToolDef {
 			// files might legitimately shrink to a stub via refactor.
 			if isNewWrite(path) {
 				if reason := looksLikeStub(input.Path, input.Content); reason != "" {
-					return &ToolResult{Success: false, Error: reason}, nil
+					return refusedNoCheck(reason), nil
 				}
 			}
 
@@ -2235,15 +2231,12 @@ func editFileTool() *ToolDef {
 		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
 			var input EditFileInput
 			if err := json.Unmarshal(rawInput, &input); err != nil {
-				return nil, fmt.Errorf("invalid input: %w", err)
+				return nil, errNoMutation(fmt.Errorf("invalid input: %w", err))
 			}
 
 			// Reject empty path — same reasoning as read_file.
 			if strings.TrimSpace(input.Path) == "" {
-				return &ToolResult{
-					Success: false,
-					Error:   "edit_file: path cannot be empty. Use read_file first on the target, then edit_file with the same path.",
-				}, nil
+				return noMutation("edit_file: path cannot be empty. Use read_file first on the target, then edit_file with the same path."), nil
 			}
 
 			// Malformed-args check, BEFORE the read-staleness check. Observed
@@ -2258,24 +2251,24 @@ func editFileTool() *ToolDef {
 				if bytes.Contains(rawInput, []byte(`"content"`)) {
 					hint = " You sent `content`, which is write_file's field — edit_file does not take it."
 				}
-				return &ToolResult{Success: false, Error: "edit_file: old_str is required and cannot be empty." + hint +
+				return noMutation("edit_file: old_str is required and cannot be empty." + hint +
 					" The call is edit_file {\"path\":..., \"old_str\":<one unique line copied from the file>, " +
 					"\"new_str\":<what replaces it>}. To ADD lines rather than replace any, use " +
 					"insert_after {\"path\":..., \"line\":<number from read_file>, \"content\":...} — that one does " +
-					"take `content`."}, nil
+					"take `content`."), nil
 			}
 
 			path := resolveAgentPath(ctx, input.Path)
 
 			// Require file was read first (staleness protection)
 			if !ctx.WasFileRead(path) {
-				return nil, fmt.Errorf("file not read yet — use read_file first before editing: %s", input.Path)
+				return nil, errNoMutation(fmt.Errorf("file not read yet — use read_file first before editing: %s", input.Path))
 			}
 
 			// Read current content
 			data, err := os.ReadFile(path)
 			if err != nil {
-				return nil, fmt.Errorf("cannot read %s: %w", input.Path, err)
+				return nil, errNoMutation(fmt.Errorf("cannot read %s: %w", input.Path, err))
 			}
 			content := string(data)
 
@@ -2286,7 +2279,7 @@ func editFileTool() *ToolDef {
 
 			info, err := os.Stat(path)
 			if err == nil && info.ModTime().After(lastRead) {
-				return nil, fmt.Errorf("file modified since last read — read it again before editing: %s", input.Path)
+				return nil, errNoMutation(fmt.Errorf("file modified since last read — read it again before editing: %s", input.Path))
 			}
 
 			// Find old_str with quote normalization
@@ -2384,26 +2377,26 @@ func editFileTool() *ToolDef {
 				// invisible next to a long old_str, and every other hint here
 				// sends the model to re-copy text it already copied right.
 				if bad := foreignRunes(input.OldStr, content); len(bad) > 0 {
-					return nil, fmt.Errorf("string to replace not found in file. Your `old_str` contains %s, "+
+					return nil, errNoMutation(fmt.Errorf("string to replace not found in file. Your `old_str` contains %s, "+
 						"which appears nowhere in %s. That is a corrupted character, not a mis-copy — most often "+
 						"an operator that decoded wrong (`&&`, `||`, `>=`, `->`). Re-read the line from the file "+
 						"and re-emit `old_str` with plain ASCII operators.\nSearched for: %s",
-						describeForeignRunes(bad), input.Path, truncateStr(input.OldStr, 200))
+						describeForeignRunes(bad), input.Path, truncateStr(input.OldStr, 200)))
 				}
 				// Checked next because it is the most specific remaining: the
 				// text is otherwise correct and only carries read_file's
 				// display prefix. Saying "not found" here sends the model back to
 				// re-copy a line it already copied right.
 				if n := lineNumberPrefixedLines(input.OldStr); n > 0 {
-					return nil, fmt.Errorf("string to replace not found in file. Your `old_str` still has "+
+					return nil, errNoMutation(fmt.Errorf("string to replace not found in file. Your `old_str` still has "+
 						"read_file's line-number prefix on %d line(s) — the \"12<tab>\" at the start is "+
 						"added for reference and is NOT in the file. Send the line text only, starting at "+
 						"the first real character. If you are ADDING lines rather than changing one, "+
 						"insert_after takes that number directly and needs no old_str at all.\nSearched for: %s",
-						n, truncateStr(input.OldStr, 200))
+						n, truncateStr(input.OldStr, 200)))
 				}
 				if lines := strings.Count(input.OldStr, "\n") + 1; lines >= 5 {
-					return nil, fmt.Errorf("string to replace not found in file. Your `old_str` is %d lines "+
+					return nil, errNoMutation(fmt.Errorf("string to replace not found in file. Your `old_str` is %d lines "+
 						"long — reproducing that much text byte-for-byte is where these edits go wrong. "+
 						"Use `replace_lines` instead: give the start and end line numbers read_file "+
 						"printed and assert only the FIRST and LAST line of that range, so there is no "+
@@ -2411,14 +2404,14 @@ func editFileTool() *ToolDef {
 						"appears exactly once and put the whole replacement in `new_str`. If you are "+
 						"ADDING code rather than replacing it, use insert_after with the line number "+
 						"read_file printed — it needs no old_str at all.\nSearched for: %s",
-						lines, truncateStr(input.OldStr, 200))
+						lines, truncateStr(input.OldStr, 200)))
 				}
 				if n := strayCarriageReturns(input.OldStr); n >= 3 {
-					return nil, fmt.Errorf("string to replace not found in file. Your `old_str` "+
+					return nil, errNoMutation(fmt.Errorf("string to replace not found in file. Your `old_str` "+
 						"contains %d stray carriage returns and looks corrupted rather than copied "+
 						"— long blocks tend to come out this way. Use `replace_lines` on the line "+
 						"range instead, or re-emit `old_str` as ONE short unique line taken from the "+
-						"file (the single line you are changing), not a multi-line block", n)
+						"file (the single line you are changing), not a multi-line block", n))
 				}
 				// Mismatch persists — return targeted error.
 				hasEntities := strings.Contains(input.OldStr, "&lt;") ||
@@ -2431,8 +2424,8 @@ func editFileTool() *ToolDef {
 					if hint := structuralSelectorHint(ext); hint != "" {
 						alt = " For whole-element rewrites, structural_edit is the cleaner option — it takes a selector (" + hint + ") and the new content body, no old_str needed."
 					}
-					return nil, fmt.Errorf("string to replace not found in file. Your `old_str` contains HTML-entity-encoded characters (`&lt;` / `&gt;` / `&amp;`) but the file on disk has literal `<` / `>` / `&`. Re-emit `old_str` with literal angle brackets — JSON strings should contain literal `<` not `&lt;`.%s\nSearched for: %s",
-						alt, truncateStr(input.OldStr, 200))
+					return nil, errNoMutation(fmt.Errorf("string to replace not found in file. Your `old_str` contains HTML-entity-encoded characters (`&lt;` / `&gt;` / `&amp;`) but the file on disk has literal `<` / `>` / `&`. Re-emit `old_str` with literal angle brackets — JSON strings should contain literal `<` not `&lt;`.%s\nSearched for: %s",
+						alt, truncateStr(input.OldStr, 200)))
 				}
 				// Generic mismatch — the model's old_str doesn't byte-match
 				// the file (whitespace, quotes, or paraphrase drift, which
@@ -2456,13 +2449,13 @@ func editFileTool() *ToolDef {
 				// from the same faulty memory. Quoting the closest actual
 				// line gives it real bytes to copy into the next attempt.
 				hint := closestLineHint(content, input.OldStr)
-				return nil, fmt.Errorf("string to replace not found in file. old_str must match the file byte-for-byte (whitespace and quotes included).%s%s\nSearched for: %s", astAlt, hint, truncateStr(input.OldStr, 200))
+				return nil, errNoMutation(fmt.Errorf("string to replace not found in file. old_str must match the file byte-for-byte (whitespace and quotes included).%s%s\nSearched for: %s", astAlt, hint, truncateStr(input.OldStr, 200)))
 			}
 
 			// Check uniqueness
 			count := strings.Count(content, actualOldStr)
 			if count > 1 && !input.ReplaceAll {
-				return nil, fmt.Errorf("found %d matches of the string to replace. Set replace_all=true to replace all, or provide more context to uniquely identify the instance", count)
+				return nil, errNoMutation(fmt.Errorf("found %d matches of the string to replace. Set replace_all=true to replace all, or provide more context to uniquely identify the instance", count))
 			}
 
 			// No-op check. The bare diagnosis was a dead end: the model
@@ -2479,12 +2472,12 @@ func editFileTool() *ToolDef {
 				if ext := strings.ToLower(filepath.Ext(input.Path)); ext == ".py" || ext == ".html" || ext == ".htm" {
 					alt = "`structural_edit` with a selector (e.g. `function:update`) and the new body — it needs no old_str at all, so there is nothing to copy"
 				}
-				return nil, fmt.Errorf(
+				return nil, errNoMutation(fmt.Errorf(
 					"old_str and new_str are identical, so this edit would change nothing. "+
 						"Re-sending it will not help. You are being asked to reproduce a span "+
 						"verbatim AND change it, which is what just failed — use %s. "+
 						"If you meant to REPLACE the whole file, use write_file with the "+
-						"complete new contents.", alt)
+						"complete new contents.", alt))
 			}
 
 			// Sanitise the replacement string before splicing it in. The
@@ -2513,7 +2506,8 @@ func editFileTool() *ToolDef {
 			if rejection := validateNotSuspiciouslyShrunk("edit_file", input.Path, len(actualOldStr), len(input.NewStr)); rejection != "" {
 				log.Printf("[edit_file] rejecting suspicious shrinkage: %s old_str=%dB new_str=%dB",
 					input.Path, len(actualOldStr), len(input.NewStr))
-				return &ToolResult{Success: false, Error: rejection}, nil
+				// The shrinkage heuristic declining bytes that were formed.
+				return refusedNoCheck(rejection), nil
 			}
 
 			// No-op guard — same rationale as structural_edit's. new_str identical
@@ -2522,8 +2516,8 @@ func editFileTool() *ToolDef {
 			// and moves on while the bug is still on disk.
 			if newContent == content {
 				log.Printf("[edit_file] no-op edit rejected for %s — file content unchanged", input.Path)
-				return &ToolResult{Success: false, Error: "edit_file: new_str is identical to old_str — nothing was changed and the bug is still there. " +
-					"Look at the current code again and emit a new_str that actually differs from the existing code."}, nil
+				return noMutation("edit_file: new_str is identical to old_str — nothing was changed and the bug is still there. " +
+					"Look at the current code again and emit a new_str that actually differs from the existing code."), nil
 			}
 
 			// Already-applied guard. The check above only catches an edit that
@@ -2537,10 +2531,10 @@ func editFileTool() *ToolDef {
 			editKey := input.Path + "\x00" + input.OldStr + "\x00" + input.NewStr
 			if ctx.AppliedEdits[editKey] {
 				log.Printf("[edit_file] duplicate edit rejected for %s — already applied this session", input.Path)
-				return &ToolResult{Success: false, Error: "edit_file: this exact edit already succeeded earlier in this " +
+				return refusedNoCheck("edit_file: this exact edit already succeeded earlier in this " +
 					"session, so applying it again would just repeat it — and when the change is whitespace-only, the " +
 					"old_str still matches afterwards, so it can repeat forever. The file already has this change. " +
-					"Read the file to see its current state, then either make a DIFFERENT edit or declare done."}, nil
+					"Read the file to see its current state, then either make a DIFFERENT edit or declare done."), nil
 			}
 
 			// Syntax gate — the edit_file counterpart of structural_edit's
@@ -2552,9 +2546,16 @@ func editFileTool() *ToolDef {
 			if strings.ToLower(filepath.Ext(input.Path)) == ".py" {
 				if ok, perr := pycheckViaV3(ctx, input.Path, newContent); !ok {
 					log.Printf("[edit_file] syntax gate rejected edit to %s: %s", input.Path, perr)
-					return &ToolResult{Success: false, Error: fmt.Sprintf(
-						"edit_file: this edit would make %s invalid Python — %s. The file was NOT modified. "+
-							"Check your quoting in new_str and try again.", input.Path, perr)}, nil
+					// A real verdict about the proposed bytes: they do not parse.
+					return &ToolResult{
+						Success: false,
+						Error: fmt.Sprintf(
+							"edit_file: this edit would make %s invalid Python — %s. The file was NOT modified. "+
+								"Check your quoting in new_str and try again.", input.Path, perr),
+						MutationStatus:   MutationRefused,
+						ValidationKind:   ValidationKindSyntax,
+						ValidationStatus: ValidationFailed,
+					}, nil
 				}
 			}
 
@@ -2693,25 +2694,23 @@ func structuralEditTool() *ToolDef {
 		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
 			var input StructuralEditInput
 			if err := json.Unmarshal(rawInput, &input); err != nil {
-				return nil, fmt.Errorf("invalid input: %w", err)
+				return nil, errNoMutation(fmt.Errorf("invalid input: %w", err))
 			}
 			if strings.TrimSpace(input.Path) == "" {
-				return &ToolResult{Success: false,
-					Error: "structural_edit: path cannot be empty. Read the file first then structural_edit with the same path."}, nil
+				return noMutation("structural_edit: path cannot be empty. Read the file first then structural_edit with the same path."), nil
 			}
 			if strings.TrimSpace(input.Selector) == "" {
-				return &ToolResult{Success: false,
-					Error: "structural_edit: selector cannot be empty. Examples: function:dashboard, class:UserModel, <body>"}, nil
+				return noMutation("structural_edit: selector cannot be empty. Examples: function:dashboard, class:UserModel, <body>"), nil
 			}
 
 			path := resolveAgentPath(ctx, input.Path)
 			if !ctx.WasFileRead(path) {
-				return nil, fmt.Errorf("file not read yet — use read_file first before structural_edit: %s", input.Path)
+				return nil, errNoMutation(fmt.Errorf("file not read yet — use read_file first before structural_edit: %s", input.Path))
 			}
 
 			data, err := os.ReadFile(path)
 			if err != nil {
-				return nil, fmt.Errorf("cannot read %s: %w", input.Path, err)
+				return nil, errNoMutation(fmt.Errorf("cannot read %s: %w", input.Path, err))
 			}
 			source := string(data)
 
@@ -2726,11 +2725,11 @@ func structuralEditTool() *ToolDef {
 			// body; an intentional removal is delete_file's job.
 			if strings.TrimSpace(input.Content) == "" {
 				log.Printf("[structural_edit] rejected empty content for %s selector=%q — would delete the node", input.Path, input.Selector)
-				return &ToolResult{Success: false, Error: fmt.Sprintf(
+				return noMutation(fmt.Sprintf(
 					"structural_edit: content is empty — that would DELETE `%s`, not fix it. "+
 						"Provide the full replacement body of the node (e.g. the corrected function definition). "+
 						"If you truly mean to remove code, use delete_file on the whole file instead.",
-					input.Selector)}, nil
+					input.Selector)), nil
 			}
 
 			// Runaway-content guard. structural_edit replaces ONE node, so the
@@ -2748,18 +2747,18 @@ func structuralEditTool() *ToolDef {
 			if len(input.Content) > 8000 && len(input.Content) > len(source)*4 {
 				log.Printf("[structural_edit] rejected runaway content for %s selector=%q: %d chars vs %d-byte file",
 					input.Path, input.Selector, len(input.Content), len(source))
-				return &ToolResult{Success: false, Error: fmt.Sprintf(
+				return noMutation(fmt.Sprintf(
 					"structural_edit: replacement content is %d characters — far larger than the entire %d-byte file. "+
 						"You only need to provide the new body of the single node `%s` (just the function/class/element itself), "+
 						"not the whole file and not your reasoning. Re-emit structural_edit with content set to ONLY the replacement node.",
-					len(input.Content), len(source), input.Selector)}, nil
+					len(input.Content), len(source), input.Selector)), nil
 			}
 
 			ctx.mu.Lock()
 			lastRead := ctx.FileReadTimes[path]
 			ctx.mu.Unlock()
 			if info, err := os.Stat(path); err == nil && info.ModTime().After(lastRead) {
-				return nil, fmt.Errorf("file modified since last read — read it again before structural_edit: %s", input.Path)
+				return nil, errNoMutation(fmt.Errorf("file modified since last read — read it again before structural_edit: %s", input.Path))
 			}
 
 			// Sanitise replacement content the same way edit_file does — the
@@ -2798,21 +2797,21 @@ func structuralEditTool() *ToolDef {
 			})
 			v3URL := ctx.V3URL
 			if v3URL == "" {
-				return nil, fmt.Errorf("structural_edit unavailable: V3 service URL not configured")
+				return nil, errNoMutation(fmt.Errorf("structural_edit unavailable: V3 service URL not configured"))
 			}
 			req, err := http.NewRequestWithContext(ctx.Ctx, "POST", v3URL+"/internal/structural_edit", bytes.NewReader(reqBody))
 			if err != nil {
-				return nil, fmt.Errorf("structural_edit: build request: %w", err)
+				return nil, errNoMutation(fmt.Errorf("structural_edit: build request: %w", err))
 			}
 			req.Header.Set("Content-Type", "application/json")
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
-				return nil, fmt.Errorf("structural_edit: v3-service unreachable: %w", err)
+				return nil, errNoMutation(fmt.Errorf("structural_edit: v3-service unreachable: %w", err))
 			}
 			defer resp.Body.Close()
 			respBytes, err := io.ReadAll(resp.Body)
 			if err != nil {
-				return nil, fmt.Errorf("structural_edit: read v3 response: %w", err)
+				return nil, errNoMutation(fmt.Errorf("structural_edit: read v3 response: %w", err))
 			}
 			var astResp struct {
 				Success    bool   `json:"success"`
@@ -2824,10 +2823,12 @@ func structuralEditTool() *ToolDef {
 				NewSize    int    `json:"new_size,omitempty"`
 			}
 			if err := json.Unmarshal(respBytes, &astResp); err != nil {
-				return nil, fmt.Errorf("structural_edit: parse v3 response: %w (body=%s)", err, truncateStr(string(respBytes), 200))
+				return nil, errNoMutation(fmt.Errorf("structural_edit: parse v3 response: %w (body=%s)", err, truncateStr(string(respBytes), 200)))
 			}
 			if !astResp.Success {
-				return &ToolResult{Success: false, Error: astResp.Error}, nil
+				// The selector matched nothing, or the splice would not parse:
+				// either way no replacement content came back to write.
+				return noMutation(astResp.Error), nil
 			}
 
 			// Shrinkage guard — catch the May 9 2026 destructive-stub bug
@@ -2840,7 +2841,7 @@ func structuralEditTool() *ToolDef {
 			if rejection := validateNotSuspiciouslyShrunk("structural_edit", input.Path, astResp.OldSize, astResp.NewSize); rejection != "" {
 				log.Printf("[structural_edit] rejecting suspicious shrinkage: %s old=%dB new=%dB selector=%q",
 					input.Path, astResp.OldSize, astResp.NewSize, input.Selector)
-				return &ToolResult{Success: false, Error: rejection}, nil
+				return refusedNoCheck(rejection), nil
 			}
 
 			// V3 quality-gate routing. History:
@@ -2878,10 +2879,10 @@ func structuralEditTool() *ToolDef {
 			// why. Fail loudly instead so the model re-derives the edit.
 			if finalContent == source {
 				log.Printf("[structural_edit] no-op edit rejected for %s selector=%q — replacement identical to existing code", input.Path, input.Selector)
-				return &ToolResult{Success: false, Error: fmt.Sprintf(
+				return noMutation(fmt.Sprintf(
 					"structural_edit: your replacement for `%s` is IDENTICAL to the code already in the file — nothing was changed and the bug is still there. "+
 						"Look at the current code again and emit a replacement that actually differs (for a swapped-operator bug, the operator itself must change).",
-					input.Selector)}, nil
+					input.Selector)), nil
 			}
 			v3Out := V3EditMetadata{}
 			oldTier := classifyFileTier(input.Path, source) // pre-edit content
@@ -2912,10 +2913,7 @@ func structuralEditTool() *ToolDef {
 					// was aborted, so nothing should land on disk.
 					if errors.Is(err, context.Canceled) || (ctx.Ctx != nil && ctx.Ctx.Err() != nil) {
 						log.Printf("[structural_edit] V3 aborted by cancellation — not writing %s", input.Path)
-						return &ToolResult{
-							Success: false,
-							Error:   "structural_edit cancelled — no content was written",
-						}, nil
+						return noMutation("structural_edit cancelled — no content was written"), nil
 					}
 					log.Printf("[structural_edit] V3 failed: %v — falling back to structurally edited content", err)
 				} else if drift := v3RewroteBeyondTheEdit(source, finalContent, improved); drift != "" {
@@ -2937,7 +2935,7 @@ func structuralEditTool() *ToolDef {
 			// alone for repair-in-progress. Fail-open when the check can't run.
 			if introduced := editIntroducesUnresolved(ctx, path, source, finalContent); len(introduced) > 0 {
 				log.Printf("[structural_edit] edit introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
-				return &ToolResult{Success: false, Error: structuralRejection(input.Path, introduced)}, nil
+				return structuralRefusal(structuralRejection(input.Path, introduced)), nil
 			}
 
 			// Embedded-script gate: the post-splice check in v3-service
@@ -2947,21 +2945,21 @@ func structuralEditTool() *ToolDef {
 			// Healthy->broken, fail-soft.
 			if msg := embeddedScriptGate(ctx, path, source, finalContent); msg != "" {
 				log.Printf("[structural_edit] edit breaks an embedded script in %s — rejecting", logPath(input.Path))
-				return &ToolResult{Success: false, Error: msg}, nil
+				return structuralRefusal(msg), nil
 			}
 			if msg := duplicateMainGuard(path, source, finalContent); msg != "" {
 				log.Printf("[structural_edit] edit duplicates the module entrypoint in %s — rejecting", logPath(input.Path))
-				return &ToolResult{Success: false, Error: msg}, nil
+				return structuralRefusal(msg), nil
 			}
 
 			// Atomic write — same pattern as edit_file/write_file.
 			tmpPath := path + ".atlas.tmp"
 			if err := os.WriteFile(tmpPath, []byte(finalContent), 0644); err != nil {
-				return nil, fmt.Errorf("cannot write %s: %w", input.Path, err)
+				return nil, errFailedMutationSyntaxUnrun(fmt.Errorf("cannot write %s: %w", input.Path, err))
 			}
 			if err := os.Rename(tmpPath, path); err != nil {
 				os.Remove(tmpPath)
-				return nil, fmt.Errorf("cannot rename temp file: %w", err)
+				return nil, errFailedMutationSyntaxUnrun(fmt.Errorf("cannot rename temp file: %w", err))
 			}
 			ctx.RecordFileRead(path, finalContent)
 			ctx.RecordBodySeen(path)
@@ -2977,7 +2975,16 @@ func structuralEditTool() *ToolDef {
 				BytesNew: len(finalContent),
 			}
 			outBytes, _ := json.Marshal(out)
-			result := &ToolResult{Success: true, Data: outBytes}
+			// The splice landed. Validation stays not_run deliberately: the
+			// tree-sitter transform proves v3-service could re-parse ITS
+			// output, and this tool runs no check of its own on the bytes it
+			// writes -- which may be a V3 replacement rather than the splice.
+			// Reading the service's ok boolean as a syntax pass is exactly
+			// the inference overlayValidation exists to prevent.
+			result := &ToolResult{Success: true, Data: outBytes,
+				MutationStatus:   MutationApplied,
+				ValidationKind:   ValidationKindSyntax,
+				ValidationStatus: ValidationNotRun}
 			if v3Out.Used {
 				result.V3Used = true
 				result.CandidatesTested = v3Out.CandidatesTested
@@ -3420,27 +3427,27 @@ func insertAfterTool() *ToolDef {
 		Execute: func(input json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
 			var in InsertAfterInput
 			if err := json.Unmarshal(input, &in); err != nil {
-				return nil, fmt.Errorf("invalid input: %w", err)
+				return nil, errNoMutation(fmt.Errorf("invalid input: %w", err))
 			}
 			if strings.TrimSpace(in.Path) == "" {
 				// Naming only the missing field sends the model back with a
 				// different field missing. Observed live: it sent
 				// {"line":0,"content":"..."} with no path, right after an
 				// edit_file that had also been malformed.
-				return &ToolResult{Success: false, Error: "insert_after: path is required. The call is " +
+				return noMutation("insert_after: path is required. The call is " +
 					"insert_after {\"path\":\"app.py\", \"line\":<1-based number from read_file, 0 for top of file>, " +
-					"\"content\":<the new lines>}."}, nil
+					"\"content\":<the new lines>}."), nil
 			}
 			if in.Content == "" {
-				return &ToolResult{Success: false, Error: "insert_after: content is empty — nothing would be inserted"}, nil
+				return noMutation("insert_after: content is empty — nothing would be inserted"), nil
 			}
 			path := resolveAgentPath(ctx, in.Path)
 			if !ctx.WasFileRead(path) {
-				return nil, fmt.Errorf("file not read yet — use read_file first so the line numbers are current: %s", in.Path)
+				return nil, errNoMutation(fmt.Errorf("file not read yet — use read_file first so the line numbers are current: %s", in.Path))
 			}
 			data, err := os.ReadFile(path)
 			if err != nil {
-				return &ToolResult{Success: false, Error: fmt.Sprintf("cannot read %s: %v", in.Path, err)}, nil
+				return noMutation(fmt.Sprintf("cannot read %s: %v", in.Path, err)), nil
 			}
 			original := string(data)
 			lines := strings.Split(original, "\n")
@@ -3451,9 +3458,9 @@ func insertAfterTool() *ToolDef {
 				limit--
 			}
 			if in.Line < 0 || in.Line > limit {
-				return &ToolResult{Success: false, Error: fmt.Sprintf(
+				return noMutation(fmt.Sprintf(
 					"insert_after: line %d is out of range for %s, which has %d lines. Use the numbers read_file showed you.",
-					in.Line, in.Path, limit)}, nil
+					in.Line, in.Path, limit)), nil
 			}
 			insert := strings.Split(strings.TrimSuffix(in.Content, "\n"), "\n")
 			merged := append([]string{}, lines[:in.Line]...)
@@ -3646,21 +3653,21 @@ func replaceLinesTool() *ToolDef {
 		Execute: func(input json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
 			var in ReplaceLinesInput
 			if err := json.Unmarshal(input, &in); err != nil {
-				return nil, fmt.Errorf("invalid input: %w", err)
+				return nil, errNoMutation(fmt.Errorf("invalid input: %w", err))
 			}
 			if strings.TrimSpace(in.Path) == "" {
-				return &ToolResult{Success: false, Error: "replace_lines: path is required. The call is " +
+				return noMutation("replace_lines: path is required. The call is " +
 					"replace_lines {\"path\":\"app.py\", \"start_line\":N, \"end_line\":M, " +
 					"\"expected_first_line\":<text of line N>, \"expected_last_line\":<text of line M>, " +
-					"\"content\":<the new lines>}."}, nil
+					"\"content\":<the new lines>}."), nil
 			}
 			path := resolveAgentPath(ctx, in.Path)
 			if !ctx.WasFileRead(path) {
-				return nil, fmt.Errorf("file not read yet — use read_file first so the line numbers are current: %s", in.Path)
+				return nil, errNoMutation(fmt.Errorf("file not read yet — use read_file first so the line numbers are current: %s", in.Path))
 			}
 			data, err := os.ReadFile(path)
 			if err != nil {
-				return &ToolResult{Success: false, Error: fmt.Sprintf("cannot read %s: %v", in.Path, err)}, nil
+				return noMutation(fmt.Sprintf("cannot read %s: %v", in.Path, err)), nil
 			}
 			original := string(data)
 			fileLines := strings.Split(original, "\n")
@@ -3669,13 +3676,14 @@ func replaceLinesTool() *ToolDef {
 				limit--
 			}
 			if in.StartLine < 1 || in.EndLine < in.StartLine || in.EndLine > limit {
-				return &ToolResult{Success: false, Error: fmt.Sprintf(
+				return noMutation(fmt.Sprintf(
 					"replace_lines: range %d-%d is invalid for %s, which has %d lines. Both bounds are 1-based and "+
 						"inclusive, and start_line must not exceed end_line. Use the numbers read_file showed you.",
-					in.StartLine, in.EndLine, in.Path, limit)}, nil
+					in.StartLine, in.EndLine, in.Path, limit)), nil
 			}
 			if span := in.EndLine - in.StartLine + 1; span > replaceLinesMaxSpan {
-				return &ToolResult{Success: false, Error: fmt.Sprintf(
+				// A size policy declining a replacement it never formed.
+				return noMutation(fmt.Sprintf(
 					"replace_lines: %d lines is too large a range (limit %d). A replacement that size is a rewrite rather "+
 						"than an edit. Split it into consecutive replace_lines calls of at most %d lines, working from "+
 						"the BOTTOM of the file upward so the earlier line numbers stay valid. For a whole Python "+
@@ -3683,7 +3691,7 @@ func replaceLinesTool() *ToolDef {
 						"call — but only for real Python nodes: code inside a string literal (a <script> block in an "+
 						"HTML template, say) is one string to the Python grammar and no selector reaches into it, so "+
 						"there the split is the way.",
-					span, replaceLinesMaxSpan, replaceLinesMaxSpan)}, nil
+					span, replaceLinesMaxSpan, replaceLinesMaxSpan)), nil
 			}
 			// A stale range that simply moved is relocated rather than
 			// refused: the numbers go stale as soon as an earlier edit
@@ -3698,11 +3706,12 @@ func replaceLinesTool() *ToolDef {
 					in.StartLine, in.EndLine = moved, moved+span-1
 				}
 			}
+			// The anchors did not match, so no replacement was ever formed.
 			if msg := lineAssertionMismatch(in.ExpectedFirstLine, fileLines[in.StartLine-1], in.StartLine, in.Path, fileLines); msg != "" {
-				return &ToolResult{Success: false, Error: msg}, nil
+				return noMutation(msg), nil
 			}
 			if msg := lineAssertionMismatch(in.ExpectedLastLine, fileLines[in.EndLine-1], in.EndLine, in.Path, fileLines); msg != "" {
-				return &ToolResult{Success: false, Error: msg}, nil
+				return noMutation(msg), nil
 			}
 
 			replacement := strings.Split(strings.TrimSuffix(in.Content, "\n"), "\n")
@@ -3712,8 +3721,8 @@ func replaceLinesTool() *ToolDef {
 			updated := strings.Join(merged, "\n")
 
 			if updated == original {
-				return &ToolResult{Success: false, Error: "replace_lines: the replacement is identical to what is already on " +
-					"those lines — nothing changed and the bug is still there."}, nil
+				return noMutation("replace_lines: the replacement is identical to what is already on " +
+					"those lines — nothing changed and the bug is still there."), nil
 			}
 
 			// Same gate chain as insert_after and edit_file, healthy->broken
@@ -3781,41 +3790,46 @@ func deleteFileTool() *ToolDef {
 		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
 			var input DeleteFileInput
 			if err := json.Unmarshal(rawInput, &input); err != nil {
-				return nil, fmt.Errorf("invalid input: %w", err)
+				return nil, errNoMutation(fmt.Errorf("invalid input: %w", err))
 			}
 
 			// Reject empty path — same reasoning as read_file.
 			if strings.TrimSpace(input.Path) == "" {
-				return &ToolResult{
-					Success: false,
-					Error:   "delete_file: path cannot be empty. Provide the path of the file you want to delete.",
-				}, nil
+				return noMutation("delete_file: path cannot be empty. Provide the path of the file you want to delete."), nil
 			}
 
 			path := resolveAgentPath(ctx, input.Path)
 			info, err := os.Stat(path)
 			if err != nil {
-				return nil, fmt.Errorf("file not found: %s", input.Path)
+				return nil, errNoMutation(fmt.Errorf("file not found: %s", input.Path))
 			}
 			if info.IsDir() {
 				entries, _ := os.ReadDir(path)
 				if len(entries) > 0 {
-					return &ToolResult{
-						Success: false,
-						Error:   fmt.Sprintf("directory not empty: %s (%d entries) — delete_file only removes files or empty directories", input.Path, len(entries)),
-					}, nil
+					// A guard declining a target it could otherwise remove.
+					return refusedNoCheck(fmt.Sprintf("directory not empty: %s (%d entries) — delete_file only removes files or empty directories", input.Path, len(entries))), nil
 				}
 			}
 			if rmErr := os.Remove(path); rmErr != nil {
+				// The removal was attempted and the entry may or may not
+				// still be there, so the producer says failed, not none.
 				return &ToolResult{
-					Success: false,
-					Error:   fmt.Sprintf("delete_file: %v", rmErr),
+					Success:          false,
+					Error:            fmt.Sprintf("delete_file: %v", rmErr),
+					MutationStatus:   MutationFailed,
+					ValidationKind:   ValidationKindNone,
+					ValidationStatus: ValidationNotApplicable,
 				}, nil
 			}
 
 			out := DeleteFileOutput{Deleted: true}
 			outBytes, _ := json.Marshal(out)
-			result := &ToolResult{Success: true, Data: outBytes}
+			// Removal demonstrated. A delete validates nothing: there are no
+			// bytes left to have an opinion about.
+			result := &ToolResult{Success: true, Data: outBytes,
+				MutationStatus:   MutationApplied,
+				ValidationKind:   ValidationKindNone,
+				ValidationStatus: ValidationNotApplicable}
 			// Signal the agent loop to stop after deletion — prevents the model
 			// from generating follow-up text that would render as a noisy edit
 			// suggestion in chat after a destructive operation.
@@ -3847,22 +3861,16 @@ func moveFileTool() *ToolDef {
 		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (*ToolResult, error) {
 			var input MoveFileInput
 			if err := json.Unmarshal(rawInput, &input); err != nil {
-				return nil, fmt.Errorf("invalid input: %w", err)
+				return nil, errNoMutation(fmt.Errorf("invalid input: %w", err))
 			}
 			if strings.TrimSpace(input.Source) == "" || strings.TrimSpace(input.Destination) == "" {
-				return &ToolResult{
-					Success: false,
-					Error:   `move_file: both source and destination are required. Call with {"source":"<current path>","destination":"<new path>"}.`,
-				}, nil
+				return noMutation(`move_file: both source and destination are required. Call with {"source":"<current path>","destination":"<new path>"}.`), nil
 			}
 
 			src := resolveAgentPath(ctx, input.Source)
 			srcInfo, err := os.Stat(src)
 			if err != nil {
-				return &ToolResult{
-					Success: false,
-					Error:   fmt.Sprintf("move_file: source %s not found. Use list_directory or find_file to confirm the path before moving.", input.Source),
-				}, nil
+				return noMutation(fmt.Sprintf("move_file: source %s not found. Use list_directory or find_file to confirm the path before moving.", input.Source)), nil
 			}
 
 			// Resolve destination. If it names an existing directory (or ends
@@ -3880,39 +3888,46 @@ func moveFileTool() *ToolDef {
 			}
 
 			if src == dst {
-				return &ToolResult{
-					Success: false,
-					Error:   "move_file: source and destination are the same path — nothing to do.",
-				}, nil
+				return noMutation("move_file: source and destination are the same path — nothing to do."), nil
 			}
 
 			// Never clobber an existing destination file: a relocation must not
 			// silently destroy data. Tell the model to pick another name or
 			// delete_file the destination first if the overwrite is intended.
 			if _, err := os.Stat(dst); err == nil {
-				return &ToolResult{
-					Success: false,
-					Error:   fmt.Sprintf("move_file: destination %s already exists. Pick a different name, or delete_file the destination first if you mean to replace it.", relDest),
-				}, nil
+				// The clobber guard declining a move it could otherwise make.
+				return refusedNoCheck(fmt.Sprintf("move_file: destination %s already exists. Pick a different name, or delete_file the destination first if you mean to replace it.", relDest)), nil
 			}
 
 			if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
-				return nil, fmt.Errorf("move_file: cannot create destination dir: %w", err)
+				// The source is untouched, but MkdirAll can leave part of the
+				// tree behind, so this is an attempted mutation that errored.
+				return nil, errFailedMutation(
+					fmt.Errorf("move_file: cannot create destination dir: %w", err),
+					ValidationKindNone, ValidationNotApplicable)
 			}
 
 			// os.Rename is atomic on the same filesystem; fall back to
 			// copy+remove across devices (bind mounts can straddle filesystems).
 			if err := os.Rename(src, dst); err != nil {
+				// Rename is all-or-nothing: a failure leaves the source where
+				// it was and the destination absent.
 				if srcInfo.IsDir() {
-					return nil, fmt.Errorf("move_file: cannot move directory across filesystems: %w", err)
+					return nil, errNoMutation(fmt.Errorf("move_file: cannot move directory across filesystems: %w", err))
 				}
 				data, rerr := os.ReadFile(src)
 				if rerr != nil {
-					return nil, fmt.Errorf("move_file: cannot read source: %w", rerr)
+					return nil, errNoMutation(fmt.Errorf("move_file: cannot read source: %w", rerr))
 				}
 				if werr := os.WriteFile(dst, data, srcInfo.Mode().Perm()); werr != nil {
-					return nil, fmt.Errorf("move_file: cannot write destination: %w", werr)
+					// The destination may hold a partial copy.
+					return nil, errFailedMutation(
+						fmt.Errorf("move_file: cannot write destination: %w", werr),
+						ValidationKindNone, ValidationNotApplicable)
 				}
+				// A failure here leaves BOTH copies on disk. The move still
+				// happened, so it is applied; the ledger sees the surviving
+				// source and declines to tombstone it.
 				os.Remove(src)
 			}
 			log.Printf("[move_file] %s → %s", input.Source, relDest)
@@ -3934,7 +3949,13 @@ func moveFileTool() *ToolDef {
 
 			out := MoveFileOutput{Moved: true, Source: input.Source, Destination: relDest}
 			outBytes, _ := json.Marshal(out)
-			return &ToolResult{Success: true, Data: outBytes}, nil
+			// Relocation demonstrated. A move preserves content exactly, so
+			// this tool checks nothing: any verdict the bytes had was earned
+			// under the old name and does not travel with them.
+			return &ToolResult{Success: true, Data: outBytes,
+				MutationStatus:   MutationApplied,
+				ValidationKind:   ValidationKindNone,
+				ValidationStatus: ValidationNotApplicable}, nil
 		},
 	}
 }
@@ -5330,6 +5351,63 @@ func editSyntaxObservation(ctx *AgentContext, tool, checkPath, relPath, original
 // the content parses, and something about its structure does not. Syntax ran
 // first and did not fail on these bytes, so the structural failure is the
 // decisive one and recording it as syntax/failed would assert the opposite.
+// noMutation classifies a branch that ran, formed no bytes to write, and
+// returned -- a malformed argument, an unmet precondition, an anchor that
+// matched nothing, a replacement identical to what is already there. Disk is
+// provably untouched and nothing was checked.
+//
+// Deliberately distinct from MutationRefused, which is a gate DECLINING bytes
+// that were fully formed and could have landed. The difference is what a
+// later policy needs: refused means a candidate existed and was judged;
+// none means there was never anything to write.
+func noMutation(msg string) *ToolResult {
+	return &ToolResult{
+		Success:          false,
+		Error:            msg,
+		MutationStatus:   MutationNone,
+		ValidationKind:   ValidationKindNone,
+		ValidationStatus: ValidationNotApplicable,
+	}
+}
+
+// errNoMutation carries the same fact on the (nil, error) return shape, which
+// the boundary turns into a failed ToolResult while preserving the producer's
+// classification.
+func errNoMutation(err error) error {
+	return &classifiedError{err: err, mutationStatus: MutationNone,
+		validationKind: ValidationKindNone, validationStatus: ValidationNotApplicable}
+}
+
+// refusedNoCheck classifies a guard that declined fully-formed bytes on a
+// policy the guard can decide without reading them as code -- a shrinkage
+// heuristic, a duplicate-edit guard. Nothing was validated, so the validation
+// fields say so rather than borrowing the refusal as a verdict.
+func refusedNoCheck(msg string) *ToolResult {
+	return &ToolResult{
+		Success:          false,
+		Error:            msg,
+		MutationStatus:   MutationRefused,
+		ValidationKind:   ValidationKindNone,
+		ValidationStatus: ValidationNotApplicable,
+	}
+}
+
+// errFailedMutationSyntaxUnrun is the post-write failure of a tool whose file
+// types all have a syntax checker that this tool never runs. The target may
+// hold the new bytes, the old bytes, or a temp file, so the mutation is
+// failed and no verdict is offered.
+func errFailedMutationSyntaxUnrun(err error) error {
+	return errFailedMutation(err, ValidationKindSyntax, ValidationNotRun)
+}
+
+// errFailedMutation is failedMutation without the extension lookup, for a
+// producer that knows a write was attempted and left the target in an
+// indeterminate state.
+func errFailedMutation(err error, kind ValidationKind, status ValidationStatus) error {
+	return &classifiedError{err: err, mutationStatus: MutationFailed,
+		validationKind: kind, validationStatus: status}
+}
+
 func structuralRefusal(msg string) *ToolResult {
 	return &ToolResult{
 		Success:          false,

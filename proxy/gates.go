@@ -2737,14 +2737,16 @@ func recordLedgerEffect(name string, args json.RawMessage, ctx *AgentContext, re
 	if ctx == nil || result == nil || ctx.WorkingDir == "" {
 		return
 	}
-	// A direct mutator that proved it mutated nothing -- a deny-list refusal,
-	// an unread-file refusal, a rejected gate -- has nothing to record. This
-	// is not an optimisation: without it a refused write to a path the
-	// session never owned would enter the ledger as a deliverable, and the
-	// bytes it was refused for would look like something this session put
-	// there. Unknown, unobserved and failed all fall through and are read
-	// from disk, because each of them can leave partial bytes behind.
-	if result.MutationStatus == MutationNone {
+	// Two producers assert that disk did not change: none (there was never
+	// anything to write) and refused (a gate declined bytes that were ready).
+	// Neither has anything to record. This is not an optimisation: without it
+	// a refused write to a path the session never owned would enter the
+	// ledger as a deliverable, and the bytes it was refused for would look
+	// like something this session put there.
+	//
+	// Unknown, unobserved and failed all fall through and are read from disk,
+	// because each of them is compatible with partial bytes having landed.
+	if result.MutationStatus == MutationNone || result.MutationStatus == MutationRefused {
 		return
 	}
 

@@ -211,9 +211,12 @@ func TestDirectMutatorStillMutatesWhileUnclassified(t *testing.T) {
 	}
 }
 
-// The same for a direct mutator that legitimately fails: still no boundary
-// classification, still the real error, still no invented facts.
-func TestDirectMutatorFailurePassesThroughUnclassified(t *testing.T) {
+// The same for a direct mutator that legitimately fails: the classification
+// is the PRODUCER's, the error is the real one, and the boundary invented
+// nothing. delete_file now says none for a target that was never there; what
+// must stay true is that the answer came from the handler, since the boundary
+// is structurally forbidden from answering for a direct mutator at all.
+func TestDirectMutatorFailureCarriesItsProducersClassification(t *testing.T) {
 	dir := t.TempDir()
 	ctx := NewAgentContext(dir, Tier2Medium)
 	ctx.PermissionMode = PermissionYolo
@@ -224,9 +227,15 @@ func TestDirectMutatorFailurePassesThroughUnclassified(t *testing.T) {
 	if res.Success {
 		t.Fatal("deleting a missing file unexpectedly succeeded")
 	}
-	if res.MutationStatus != MutationUnknown {
-		t.Errorf("boundary classified a failing direct mutator as %q",
+	if ToolEffectDirectMutation.BoundaryClassifiable() {
+		t.Fatal("the boundary must never be able to classify a direct mutator")
+	}
+	if res.MutationStatus != MutationNone {
+		t.Errorf("MutationStatus = %q, want none: nothing was removed",
 			res.MutationStatus)
+	}
+	if !res.Classified() {
+		t.Errorf("producer left the result unclassified: %+v", res)
 	}
 	if res.Error == "" {
 		t.Error("the real error was suppressed")
@@ -765,9 +774,9 @@ func TestDirectMutatorOutcomeTable(t *testing.T) {
 			t.Logf("mutation=%-10q validation=%s/%-14q ledger[%s]",
 				res.MutationStatus, res.ValidationKind, res.ValidationStatus, state)
 
-			// (3) proven non-mutation records nothing new.
-			if res.MutationStatus == MutationNone && d != nil {
-				t.Errorf("a branch that mutated nothing created a ledger entry: %+v", d)
+			// (3) a producer that asserts disk did not change records nothing.
+			if (res.MutationStatus == MutationNone || res.MutationStatus == MutationRefused) && d != nil {
+				t.Errorf("a branch that did not change disk created a ledger entry: %+v", d)
 			}
 			// (4) a producer that has not been migrated yet. Recorded, not
 			// judged: this phase reports which branches still guess.
@@ -790,8 +799,12 @@ func TestDirectMutatorOutcomeTable(t *testing.T) {
 			}
 		})
 	}
+	// Phase 3A.1 migrated every branch reachable here. A new one arriving
+	// unclassified is a producer defect, not a note.
 	if len(unknownMutators) > 0 {
-		t.Logf("branches still reporting MutationUnknown: %v", unknownMutators)
+		t.Errorf("branches reporting MutationUnknown: %v — a direct mutator "+
+			"owes a local classification; the boundary will not invent one",
+			unknownMutators)
 	}
 }
 
@@ -1047,10 +1060,20 @@ func TestCheckpointPromotionThroughTheWriteRoute(t *testing.T) {
 		t.Fatalf("passing bytes were not checkpointed: %+v", d)
 	}
 
-	// A later failing write is recorded but must not become the checkpoint.
-	bad := "def broken(\n"
-	args2, _ := json.Marshal(map[string]string{"path": "solve.py", "content": bad})
-	executeToolCall("write_file", args2, ctx)
+	// The syntax gate refuses a broken rewrite outright, so disk and the
+	// checkpoint both stand.
+	args2, _ := json.Marshal(map[string]string{"path": "solve.py", "content": "def broken(\n"})
+	if r := executeToolCall("write_file", args2, ctx); r.MutationStatus != MutationRefused {
+		t.Fatalf("expected the gate to refuse the broken rewrite, got %q", r.MutationStatus)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "solve.py")); string(got) != good {
+		t.Fatalf("a refused write reached disk: %q", got)
+	}
+
+	// Bytes that DO land without a verdict -- a shell rewrite -- are recorded
+	// and must not become the checkpoint either.
+	cmd, _ := json.Marshal(map[string]string{"command": "printf 'x = (\\n' > solve.py"})
+	executeToolCall("run_command", cmd, ctx)
 	d = ledgerOf(t, ctx, "solve.py")
 	if d.CheckpointHash != hashBytes([]byte(good)) {
 		t.Errorf("a failing write displaced the checkpoint: %+v", d)
@@ -1058,10 +1081,472 @@ func TestCheckpointPromotionThroughTheWriteRoute(t *testing.T) {
 	if string(d.CheckpointBytes) != good {
 		t.Errorf("checkpoint bytes = %q", d.CheckpointBytes)
 	}
+	if d.CurrentHash == d.CheckpointHash {
+		t.Error("the shell rewrite was not recorded as the current bytes")
+	}
 	if d.CurrentHash != diskHash(t, filepath.Join(dir, "solve.py")) {
 		t.Error("current hash does not describe the bytes on disk")
 	}
 	if _, s := d.CurrentValidation(); s == ValidationPassed {
 		t.Error("the failing bytes read as passed")
+	}
+}
+
+// --- Phase 3A.1: family-complete direct-mutator classification --------------
+//
+// Every branch of the seven direct mutators that a session can reach, driven
+// through the real boundary. A direct mutator owes a local classification --
+// the boundary refuses to invent one -- so an unclassified branch is a
+// producer that has not spoken, and the ledger downstream cannot tell it
+// apart from one that deliberately did nothing.
+//
+// Each row states what the branch PROVES about disk, and the test checks that
+// claim against the filesystem rather than against the tool's own words.
+
+type mutatorCase struct {
+	name string
+	tool string
+	// seed files written before the call; read lists files to read_file first.
+	seed map[string]string
+	read []string
+	args string
+	// setup runs last, after seeding, and may break the filesystem.
+	setup func(t *testing.T, dir string)
+	// v3 answers structural_edit's splice request when non-nil.
+	v3 func(w http.ResponseWriter, r *http.Request)
+
+	wantMutation MutationStatus
+	// the deliverable this row is about, and its bytes afterwards. An empty
+	// want means "must not exist".
+	path string
+	want string
+	// skip records a branch that exists in production and cannot be reached
+	// from a test process, with the reason.
+	skip string
+}
+
+func runMutatorCase(t *testing.T, c mutatorCase) {
+	t.Helper()
+	if c.skip != "" {
+		t.Skip(c.skip)
+	}
+	dir := t.TempDir()
+	for f, body := range c.seed {
+		full := filepath.Join(dir, f)
+		os.MkdirAll(filepath.Dir(full), 0o755)
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := ledgerToolCtx(t, dir)
+	if c.v3 != nil {
+		srv := httptest.NewServer(http.HandlerFunc(c.v3))
+		defer srv.Close()
+		ctx.V3URL = srv.URL
+		ctx.SandboxURL = srv.URL
+	}
+	for _, f := range c.read {
+		r, _ := json.Marshal(map[string]string{"path": f})
+		executeToolCall("read_file", r, ctx)
+	}
+	if c.setup != nil {
+		c.setup(t, dir)
+	}
+
+	res := executeToolCall(c.tool, json.RawMessage(c.args), ctx)
+
+	ledgerNote := "not recorded"
+	if c.path != "" {
+		if d := ledgerOf(t, ctx, c.path); d != nil {
+			k, st := d.CurrentValidation()
+			ledgerNote = fmt.Sprintf("gen=%d tomb=%v ckpt=%v current=%s/%s",
+				d.Generation, d.Tombstoned, d.CheckpointHash != "", k, st)
+		}
+	}
+	t.Logf("%-15s | %-9s | %-10s | %-14s | %s", c.name,
+		res.MutationStatus, res.ValidationKind, res.ValidationStatus, ledgerNote)
+
+	if !res.Classified() {
+		t.Errorf("unclassified branch: mutation=%q kind=%q status=%q err=%q",
+			res.MutationStatus, res.ValidationKind, res.ValidationStatus, res.Error)
+	}
+	if res.MutationStatus != c.wantMutation {
+		t.Errorf("MutationStatus = %q, want %q (err=%q)",
+			res.MutationStatus, c.wantMutation, res.Error)
+	}
+	// The claim is checked against disk, not against the result.
+	if c.path != "" {
+		full := filepath.Join(dir, c.path)
+		got, err := os.ReadFile(full)
+		switch {
+		case c.want == "" && err == nil:
+			t.Errorf("%s still exists with %q", c.path, got)
+		case c.want != "" && err != nil:
+			t.Errorf("%s missing: %v", c.path, err)
+		case c.want != "" && string(got) != c.want:
+			t.Errorf("%s = %q, want %q", c.path, got, c.want)
+		}
+	}
+	// A passed verdict must name the bytes that are there.
+	if res.ValidationStatus == ValidationPassed && c.path != "" {
+		if d := ledgerOf(t, ctx, c.path); d != nil {
+			if k, s := d.CurrentValidation(); s != ValidationPassed || k == ValidationKindUnknown {
+				t.Errorf("a pass did not survive into the ledger: %v/%v", k, s)
+			}
+		}
+	}
+}
+
+// v3SpliceStub answers /internal/structural_edit by replacing the named
+// function's body, and /syntax-check as valid, so structural_edit's branches
+// are reachable without the real service.
+func v3SpliceStub(t *testing.T, newContent string, ok bool, errMsg string) func(http.ResponseWriter, *http.Request) {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/internal/structural_edit"):
+			var in struct{ Source, Selector, Content string }
+			json.NewDecoder(r.Body).Decode(&in)
+			body := map[string]interface{}{"success": ok, "error": errMsg,
+				"language": "python", "old_size": len(in.Source), "new_size": len(newContent)}
+			if ok {
+				out := newContent
+				if out == "\x00same" {
+					out = in.Source
+				}
+				body["new_content"] = out
+				body["new_size"] = len(out)
+			}
+			json.NewEncoder(w).Encode(body)
+		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
+		default:
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		}
+	}
+}
+
+func TestEveryDeleteFileOutcomeIsClassified(t *testing.T) {
+	for _, c := range []mutatorCase{
+		{name: "malformed args", tool: "delete_file", args: `{"path":123}`,
+			wantMutation: MutationNone},
+		{name: "empty path", tool: "delete_file", args: `{"path":"  "}`,
+			wantMutation: MutationNone},
+		{name: "target absent", tool: "delete_file", args: `{"path":"gone.py"}`,
+			wantMutation: MutationNone, path: "gone.py"},
+		{name: "directory not empty", tool: "delete_file",
+			seed: map[string]string{"pkg/a.py": "A = 1\n"}, args: `{"path":"pkg"}`,
+			wantMutation: MutationRefused, path: "pkg/a.py", want: "A = 1\n"},
+		{name: "removal fails", tool: "delete_file",
+			seed: map[string]string{"locked/a.py": "A = 1\n"}, args: `{"path":"locked/a.py"}`,
+			setup: func(t *testing.T, dir string) {
+				if err := os.Chmod(filepath.Join(dir, "locked"), 0o555); err != nil {
+					t.Skip("cannot make a directory read-only here")
+				}
+				t.Cleanup(func() { os.Chmod(filepath.Join(dir, "locked"), 0o755) })
+			},
+			wantMutation: MutationFailed, path: "locked/a.py", want: "A = 1\n"},
+		{name: "removed", tool: "delete_file",
+			seed: map[string]string{"a.py": "A = 1\n"}, args: `{"path":"a.py"}`,
+			wantMutation: MutationApplied, path: "a.py"},
+		{name: "empty directory removed", tool: "delete_file",
+			setup: func(t *testing.T, dir string) { os.Mkdir(filepath.Join(dir, "empty"), 0o755) },
+			args:  `{"path":"empty"}`, wantMutation: MutationApplied, path: "empty"},
+	} {
+		t.Run(c.name, func(t *testing.T) { runMutatorCase(t, c) })
+	}
+}
+
+func TestEveryMoveFileOutcomeIsClassified(t *testing.T) {
+	for _, c := range []mutatorCase{
+		{name: "malformed args", tool: "move_file", args: `{"source":123}`,
+			wantMutation: MutationNone},
+		{name: "missing destination", tool: "move_file", args: `{"source":"a.py","destination":" "}`,
+			wantMutation: MutationNone},
+		{name: "source absent", tool: "move_file", args: `{"source":"gone.py","destination":"new.py"}`,
+			wantMutation: MutationNone, path: "new.py"},
+		{name: "same path", tool: "move_file",
+			seed: map[string]string{"a.py": "A = 1\n"}, args: `{"source":"a.py","destination":"./a.py"}`,
+			wantMutation: MutationNone, path: "a.py", want: "A = 1\n"},
+		{name: "destination occupied", tool: "move_file",
+			seed:         map[string]string{"a.py": "A = 1\n", "b.py": "B = 2\n"},
+			args:         `{"source":"a.py","destination":"b.py"}`,
+			wantMutation: MutationRefused, path: "b.py", want: "B = 2\n"},
+		{name: "cannot create destination dir", tool: "move_file",
+			seed: map[string]string{"a.py": "A = 1\n", "ro/keep": "x"},
+			setup: func(t *testing.T, dir string) {
+				if err := os.Chmod(filepath.Join(dir, "ro"), 0o555); err != nil {
+					t.Skip("cannot make a directory read-only here")
+				}
+				t.Cleanup(func() { os.Chmod(filepath.Join(dir, "ro"), 0o755) })
+			},
+			args:         `{"source":"a.py","destination":"ro/sub/a.py"}`,
+			wantMutation: MutationFailed, path: "a.py", want: "A = 1\n"},
+		{name: "renamed", tool: "move_file",
+			seed: map[string]string{"a.py": "A = 1\n"}, args: `{"source":"a.py","destination":"new.py"}`,
+			wantMutation: MutationApplied, path: "new.py", want: "A = 1\n"},
+		{name: "moved into a directory", tool: "move_file",
+			seed: map[string]string{"a.py": "A = 1\n"},
+			setup: func(t *testing.T, dir string) {
+				os.Mkdir(filepath.Join(dir, "sub"), 0o755)
+			},
+			args: `{"source":"a.py","destination":"sub"}`,
+			// The tool resolves the directory to sub/a.py.
+			wantMutation: MutationApplied, path: "sub/a.py", want: "A = 1\n"},
+		{name: "cross-device copy path", tool: "move_file",
+			skip: "os.Rename only fails across filesystems; one temp dir cannot straddle two"},
+	} {
+		t.Run(c.name, func(t *testing.T) { runMutatorCase(t, c) })
+	}
+}
+
+func TestEveryInsertAfterOutcomeIsClassified(t *testing.T) {
+	seed := map[string]string{"m.py": "A = 1\n"}
+	for _, c := range []mutatorCase{
+		{name: "malformed args", tool: "insert_after", args: `{"line":"x"}`,
+			wantMutation: MutationNone},
+		{name: "path missing", tool: "insert_after", args: `{"line":1,"content":"B = 2"}`,
+			wantMutation: MutationNone},
+		{name: "content empty", tool: "insert_after", seed: seed, read: []string{"m.py"},
+			args:         `{"path":"m.py","line":1,"content":""}`,
+			wantMutation: MutationNone, path: "m.py", want: "A = 1\n"},
+		{name: "file not read", tool: "insert_after", seed: seed,
+			args:         `{"path":"m.py","line":1,"content":"B = 2"}`,
+			wantMutation: MutationNone, path: "m.py", want: "A = 1\n"},
+		{name: "file vanished after the read", tool: "insert_after", seed: seed, read: []string{"m.py"},
+			setup:        func(t *testing.T, dir string) { os.Remove(filepath.Join(dir, "m.py")) },
+			args:         `{"path":"m.py","line":1,"content":"B = 2"}`,
+			wantMutation: MutationNone, path: "m.py"},
+		{name: "line past end", tool: "insert_after", seed: seed, read: []string{"m.py"},
+			args:         `{"path":"m.py","line":99,"content":"B = 2"}`,
+			wantMutation: MutationNone, path: "m.py", want: "A = 1\n"},
+		{name: "inserted", tool: "insert_after", seed: seed, read: []string{"m.py"},
+			args:         `{"path":"m.py","line":1,"content":"B = 2"}`,
+			wantMutation: MutationApplied, path: "m.py", want: "A = 1\nB = 2\n"},
+		{name: "inserted at the top", tool: "insert_after", seed: seed, read: []string{"m.py"},
+			args:         `{"path":"m.py","line":0,"content":"B = 2"}`,
+			wantMutation: MutationApplied, path: "m.py", want: "B = 2\nA = 1\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) { runMutatorCase(t, c) })
+	}
+}
+
+func TestEveryReplaceLinesOutcomeIsClassified(t *testing.T) {
+	seed := map[string]string{"m.py": "A = 1\nB = 2\n"}
+	big := map[string]string{"m.py": strings.Repeat("X = 0\n", 100)}
+	for _, c := range []mutatorCase{
+		{name: "malformed args", tool: "replace_lines", args: `{"start_line":"x"}`,
+			wantMutation: MutationNone},
+		{name: "path missing", tool: "replace_lines", args: `{"start_line":1,"end_line":1}`,
+			wantMutation: MutationNone},
+		{name: "file not read", tool: "replace_lines", seed: seed,
+			args:         `{"path":"m.py","start_line":1,"end_line":1,"expected_first_line":"A = 1","expected_last_line":"A = 1","content":"A = 9"}`,
+			wantMutation: MutationNone, path: "m.py", want: "A = 1\nB = 2\n"},
+		{name: "file vanished after the read", tool: "replace_lines", seed: seed, read: []string{"m.py"},
+			setup:        func(t *testing.T, dir string) { os.Remove(filepath.Join(dir, "m.py")) },
+			args:         `{"path":"m.py","start_line":1,"end_line":1,"expected_first_line":"A = 1","expected_last_line":"A = 1","content":"A = 9"}`,
+			wantMutation: MutationNone, path: "m.py"},
+		{name: "range invalid", tool: "replace_lines", seed: seed, read: []string{"m.py"},
+			args:         `{"path":"m.py","start_line":5,"end_line":9,"expected_first_line":"A = 1","expected_last_line":"A = 1","content":"A = 9"}`,
+			wantMutation: MutationNone, path: "m.py", want: "A = 1\nB = 2\n"},
+		{name: "span too large", tool: "replace_lines", seed: big, read: []string{"m.py"},
+			args:         `{"path":"m.py","start_line":1,"end_line":99,"expected_first_line":"X = 0","expected_last_line":"X = 0","content":"X = 1"}`,
+			wantMutation: MutationNone, path: "m.py", want: strings.Repeat("X = 0\n", 100)},
+		{name: "anchor mismatch", tool: "replace_lines", seed: seed, read: []string{"m.py"},
+			args:         `{"path":"m.py","start_line":1,"end_line":1,"expected_first_line":"WRONG","expected_last_line":"WRONG","content":"A = 9"}`,
+			wantMutation: MutationNone, path: "m.py", want: "A = 1\nB = 2\n"},
+		{name: "replacement identical", tool: "replace_lines", seed: seed, read: []string{"m.py"},
+			args:         `{"path":"m.py","start_line":1,"end_line":1,"expected_first_line":"A = 1","expected_last_line":"A = 1","content":"A = 1"}`,
+			wantMutation: MutationNone, path: "m.py", want: "A = 1\nB = 2\n"},
+		{name: "replaced", tool: "replace_lines", seed: seed, read: []string{"m.py"},
+			args:         `{"path":"m.py","start_line":1,"end_line":1,"expected_first_line":"A = 1","expected_last_line":"A = 1","content":"A = 9"}`,
+			wantMutation: MutationApplied, path: "m.py", want: "A = 9\nB = 2\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) { runMutatorCase(t, c) })
+	}
+}
+
+func TestEveryEditFileOutcomeIsClassified(t *testing.T) {
+	seed := map[string]string{"m.py": "A = 1\nB = 2\n"}
+	for _, c := range []mutatorCase{
+		{name: "malformed args", tool: "edit_file", args: `{"path":123}`,
+			wantMutation: MutationNone},
+		{name: "empty path", tool: "edit_file", args: `{"path":" ","old_str":"a","new_str":"b"}`,
+			wantMutation: MutationNone},
+		{name: "old_str empty", tool: "edit_file", seed: seed, read: []string{"m.py"},
+			args:         `{"path":"m.py","old_str":"","new_str":"b"}`,
+			wantMutation: MutationNone, path: "m.py", want: "A = 1\nB = 2\n"},
+		{name: "file not read", tool: "edit_file", seed: seed,
+			args:         `{"path":"m.py","old_str":"A = 1","new_str":"A = 9"}`,
+			wantMutation: MutationNone, path: "m.py", want: "A = 1\nB = 2\n"},
+		{name: "file vanished after the read", tool: "edit_file", seed: seed, read: []string{"m.py"},
+			setup:        func(t *testing.T, dir string) { os.Remove(filepath.Join(dir, "m.py")) },
+			args:         `{"path":"m.py","old_str":"A = 1","new_str":"A = 9"}`,
+			wantMutation: MutationNone, path: "m.py"},
+		{name: "old_str absent", tool: "edit_file", seed: seed, read: []string{"m.py"},
+			args:         `{"path":"m.py","old_str":"ZZZ","new_str":"A = 9"}`,
+			wantMutation: MutationNone, path: "m.py", want: "A = 1\nB = 2\n"},
+		{name: "ambiguous match", tool: "edit_file",
+			seed: map[string]string{"m.py": "A = 1\nA = 1\n"}, read: []string{"m.py"},
+			args:         `{"path":"m.py","old_str":"A = 1","new_str":"A = 9"}`,
+			wantMutation: MutationNone, path: "m.py", want: "A = 1\nA = 1\n"},
+		{name: "no-op edit", tool: "edit_file", seed: seed, read: []string{"m.py"},
+			args:         `{"path":"m.py","old_str":"A = 1","new_str":"A = 1"}`,
+			wantMutation: MutationNone, path: "m.py", want: "A = 1\nB = 2\n"},
+		{name: "applied", tool: "edit_file", seed: seed, read: []string{"m.py"},
+			args:         `{"path":"m.py","old_str":"A = 1","new_str":"A = 9"}`,
+			wantMutation: MutationApplied, path: "m.py", want: "A = 9\nB = 2\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) { runMutatorCase(t, c) })
+	}
+}
+
+func TestEveryStructuralEditOutcomeIsClassified(t *testing.T) {
+	src := "def f():\n    return 1\n"
+	seed := map[string]string{"m.py": src}
+	spliced := "def f():\n    return 2\n"
+	for _, c := range []mutatorCase{
+		{name: "malformed args", tool: "structural_edit", args: `{"path":123}`,
+			wantMutation: MutationNone},
+		{name: "empty path", tool: "structural_edit", args: `{"path":" ","selector":"function:f","content":"x"}`,
+			wantMutation: MutationNone},
+		{name: "empty selector", tool: "structural_edit", seed: seed, read: []string{"m.py"},
+			args:         `{"path":"m.py","selector":" ","content":"x"}`,
+			wantMutation: MutationNone, path: "m.py", want: src},
+		{name: "file not read", tool: "structural_edit", seed: seed,
+			args:         `{"path":"m.py","selector":"function:f","content":"def f():\n    return 2\n"}`,
+			wantMutation: MutationNone, path: "m.py", want: src},
+		{name: "empty content deletes the node", tool: "structural_edit", seed: seed, read: []string{"m.py"},
+			args:         `{"path":"m.py","selector":"function:f","content":"   "}`,
+			wantMutation: MutationNone, path: "m.py", want: src},
+		{name: "runaway content", tool: "structural_edit", seed: seed, read: []string{"m.py"},
+			args:         `{"path":"m.py","selector":"function:f","content":"` + strings.Repeat("x", 9000) + `"}`,
+			wantMutation: MutationNone, path: "m.py", want: src},
+		{name: "v3 unreachable", tool: "structural_edit", seed: seed, read: []string{"m.py"},
+			args:         `{"path":"m.py","selector":"function:f","content":"def f():\n    return 2\n"}`,
+			wantMutation: MutationNone, path: "m.py", want: src},
+		{name: "selector matched nothing", tool: "structural_edit", seed: seed, read: []string{"m.py"},
+			v3:           v3SpliceStub(t, "", false, "selector function:nope not found"),
+			args:         `{"path":"m.py","selector":"function:nope","content":"def nope():\n    pass\n"}`,
+			wantMutation: MutationNone, path: "m.py", want: src},
+		{name: "splice is a no-op", tool: "structural_edit", seed: seed, read: []string{"m.py"},
+			v3:           v3SpliceStub(t, "\x00same", true, ""),
+			args:         `{"path":"m.py","selector":"function:f","content":"def f():\n    return 1\n"}`,
+			wantMutation: MutationNone, path: "m.py", want: src},
+		{name: "spliced", tool: "structural_edit", seed: seed, read: []string{"m.py"},
+			v3:           v3SpliceStub(t, spliced, true, ""),
+			args:         `{"path":"m.py","selector":"function:f","content":"def f():\n    return 2\n"}`,
+			wantMutation: MutationApplied, path: "m.py", want: spliced},
+	} {
+		t.Run(c.name, func(t *testing.T) { runMutatorCase(t, c) })
+	}
+}
+
+func TestEveryWriteFileOutcomeIsClassified(t *testing.T) {
+	for _, c := range []mutatorCase{
+		{name: "malformed args", tool: "write_file", args: `{"path":123}`,
+			wantMutation: MutationNone},
+		{name: "empty path", tool: "write_file", args: `{"path":" ","content":"x"}`,
+			wantMutation: MutationNone},
+		{name: "deny-list target", tool: "write_file",
+			seed: map[string]string{".env": "S=1\n"}, args: `{"path":".env","content":"S=2\n"}`,
+			wantMutation: MutationNone, path: ".env", want: "S=1\n"},
+		{name: "escapes the workspace", tool: "write_file",
+			args: `{"path":"../out.py","content":"A = 1\n"}`, wantMutation: MutationNone},
+		{name: "echoed write", tool: "write_file",
+			seed:         map[string]string{"m.py": strings.Repeat("A = 1\n", 40)},
+			args:         `{"path":"m.py","content":"` + strings.Repeat("A = 1\\n", 40) + `"}`,
+			wantMutation: MutationRefused, path: "m.py", want: strings.Repeat("A = 1\n", 40)},
+		{name: "written", tool: "write_file",
+			args:         `{"path":"m.py","content":"A = 1\n"}`,
+			wantMutation: MutationApplied, path: "m.py", want: "A = 1\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) { runMutatorCase(t, c) })
+	}
+}
+
+// A refusal asserts the bytes did not land, so the path it names is not this
+// session's deliverable. Recording it would let any file the model was
+// refused a write to look like something the session produced.
+func TestARefusedWriteDoesNotEnterTheLedger(t *testing.T) {
+	body := strings.Repeat("A = 1\n", 40)
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "fixture.py"), []byte(body), 0o644)
+	ctx := ledgerToolCtx(t, dir)
+
+	args, _ := json.Marshal(map[string]string{"path": "fixture.py", "content": body})
+	res := executeToolCall("write_file", args, ctx)
+	if res.MutationStatus != MutationRefused {
+		t.Fatalf("expected the echoed-write guard to refuse, got %q: %v",
+			res.MutationStatus, res.Error)
+	}
+	if d := ledgerOf(t, ctx, "fixture.py"); d != nil {
+		t.Errorf("a refusal created a ledger entry: %+v", d)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "fixture.py")); string(got) != body {
+		t.Error("the refusal touched disk")
+	}
+}
+
+// Which mutators can reach an explicit pass at all, and therefore which ones
+// can ever leave a checkpoint behind. Phase 3B needs this answered per tool
+// rather than assumed: a tool that structurally cannot produce a pass is
+// restoration-ineligible no matter how the policy is written.
+func TestWhichMutatorsCanEverPromoteACheckpoint(t *testing.T) {
+	src := "def f():\n    return 1\n"
+	sandbox := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
+		case strings.HasSuffix(r.URL.Path, "/internal/structural_edit"):
+			var in struct{ Source string }
+			json.NewDecoder(r.Body).Decode(&in)
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": true,
+				"language": "python", "new_content": "def f():\n    return 2\n",
+				"old_size": len(in.Source), "new_size": 22})
+		default:
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		}
+	}
+	for _, c := range []struct {
+		tool, args string
+		read       bool
+	}{
+		{"write_file", `{"path":"m.py","content":"def f():\n    return 9\n"}`, false},
+		{"edit_file", `{"path":"m.py","old_str":"return 1","new_str":"return 2"}`, true},
+		{"insert_after", `{"path":"m.py","line":2,"content":"G = 1"}`, true},
+		{"replace_lines", `{"path":"m.py","start_line":2,"end_line":2,"expected_first_line":"    return 1","expected_last_line":"    return 1","content":"    return 2"}`, true},
+		{"structural_edit", `{"path":"m.py","selector":"function:f","content":"def f():\n    return 2\n"}`, true},
+		{"delete_file", `{"path":"m.py"}`, false},
+		{"move_file", `{"source":"m.py","destination":"n.py"}`, false},
+	} {
+		t.Run(c.tool, func(t *testing.T) {
+			dir := t.TempDir()
+			os.WriteFile(filepath.Join(dir, "m.py"), []byte(src), 0o644)
+			srv := httptest.NewServer(http.HandlerFunc(sandbox))
+			defer srv.Close()
+			ctx := ledgerToolCtx(t, dir)
+			ctx.SandboxURL = srv.URL
+			ctx.V3URL = srv.URL
+			ctx.BypassV3 = true
+			if c.read {
+				r, _ := json.Marshal(map[string]string{"path": "m.py"})
+				executeToolCall("read_file", r, ctx)
+			}
+			res := executeToolCall(c.tool, json.RawMessage(c.args), ctx)
+			promoted := false
+			for _, d := range ctx.Ledger {
+				if d.CheckpointHash != "" {
+					promoted = true
+				}
+			}
+			t.Logf("%-16s validation=%s/%-14s checkpoint=%v", c.tool,
+				res.ValidationKind, res.ValidationStatus, promoted)
+			// The invariant, whatever the answer: a checkpoint exists only
+			// where the producer said passed for the bytes that landed.
+			if promoted != (res.ValidationStatus == ValidationPassed) {
+				t.Errorf("checkpoint=%v but validation=%q", promoted, res.ValidationStatus)
+			}
+		})
 	}
 }
