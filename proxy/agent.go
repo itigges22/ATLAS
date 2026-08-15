@@ -181,8 +181,8 @@ type runState struct {
 	// verification ran the program without a redirect. Both are needed: only
 	// a run that ONLY ever verified through a redirect has failed to check
 	// the artifact the way the caller will use it.
-	verifiedByRedirect  string
-	verifiedStandalone  bool
+	verifiedByRedirect string
+	verifiedStandalone bool
 	// verifiedHashes binds the verification to the BYTES it verified: the
 	// sha256 of every session-written file, snapshotted when a verifying run
 	// succeeds. The exit re-hashes; any drift means the final artifact is not
@@ -2911,6 +2911,25 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 	if reqCtx == nil {
 		reqCtx = context.Background()
 	}
+	// Progress watchdog for the fenced sub-call. Cancelling reqCtx aborts the
+	// HTTP request, which ends the scanner loop and closes the slot
+	// server-side -- the same path a client disconnect already takes, so no
+	// request or goroutine outlives it. Ordinary turns are untouched.
+	progress := func() {}
+	if grammar == rawEmissionSentinel {
+		var cancel context.CancelFunc
+		reqCtx, cancel = context.WithCancel(reqCtx)
+		defer cancel()
+		idle := fencedIdleTimeout()
+		var mu sync.Mutex
+		timer := time.AfterFunc(fencedFirstContentTimeout(), cancel)
+		defer timer.Stop()
+		progress = func() {
+			mu.Lock()
+			defer mu.Unlock()
+			timer.Reset(idle)
+		}
+	}
 	httpReq, err := http.NewRequestWithContext(reqCtx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
 		return "", 0, fmt.Errorf("create request: %w", err)
@@ -3072,6 +3091,9 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 			if c.Delta.Content == "" {
 				continue
 			}
+			// Useful progress, and the only kind: bytes of the file itself.
+			// Reasoning deltas above deliberately do not reach here.
+			progress()
 			if !firstTokenSent {
 				stopProgressFn() // prompt eval done — kill the poller
 				ctx.Stream("llm_first_token", map[string]interface{}{
@@ -4150,6 +4172,47 @@ func fenceTagForPath(path string) string {
 	default:
 		return ""
 	}
+}
+
+// Fenced-fetch progress bounds. The sub-call asks for ONE fenced block and
+// nothing else, so the only useful output is CONTENT: a model that streams
+// reasoning to max_tokens and never opens a fence is the zero-byte failure,
+// and reasoning must not look like progress.
+//
+// Measured on the seed-20260901 run: 9 of 17 zero-byte failures ran 175-311s
+// each, and two attempts can consume ~10 minutes. These bounds are NOT
+// derived from whole-fetch duration -- a successful fetch legitimately ran
+// 217s while producing content the whole way, and cutting on total elapsed
+// would have killed it.
+//
+// They are conservative defaults over the quantities that DO discriminate:
+// observed time-to-first-token is p50 378ms, p90 2.9s, p99 4.4s, max 11.8s
+// across 540 calls, so 60s to first CONTENT is ~5x the worst observed start
+// with headroom for a reasoning preamble; and at the ~25 tok/s decode rate
+// this deployment sustains, 30s of complete silence mid-file is ~750 tokens
+// of nothing, which is not generation in progress. Both are env-overridable
+// on the existing envOr pattern and are pending real-model canary validation
+// before Phase 2 is declared complete.
+const (
+	defaultFencedFirstContentSec = 60
+	defaultFencedIdleSec         = 30
+)
+
+func fencedFirstContentTimeout() time.Duration {
+	return envDurationSec("ATLAS_FENCED_FIRST_CONTENT_SEC", defaultFencedFirstContentSec)
+}
+
+func fencedIdleTimeout() time.Duration {
+	return envDurationSec("ATLAS_FENCED_IDLE_SEC", defaultFencedIdleSec)
+}
+
+func envDurationSec(key string, def int) time.Duration {
+	if v := strings.TrimSpace(envOr(key, "")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return time.Duration(def) * time.Second
 }
 
 // fetchFencedContent asks the model for a file's contents in its native

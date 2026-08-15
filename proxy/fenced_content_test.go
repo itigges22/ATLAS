@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Code emitted inside a JSON string pays escaping pressure on every dense
@@ -220,5 +223,206 @@ func TestSentinelOnlyFenceIsNotContent(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Fatalf("expected a retry after the sentinel-only fence, got %d calls", calls)
+	}
+}
+
+// --- Phase 2: progress-aware fenced-fetch bounds ---------------------------
+//
+// The zero-byte failure is a model that streams reasoning to max_tokens and
+// never opens a fence. Measured on the seed-20260901 run: 9 of 17 zero-byte
+// failures ran 175-311s, two attempts can consume ~10 minutes, and
+// P(timeout | >=1 hang) was 8/11. The bound is on PROGRESS, not on total
+// elapsed: a successful fetch legitimately ran 217s while producing content
+// throughout.
+
+func TestProductionFencedBoundsUseTheRealDefaults(t *testing.T) {
+	t.Setenv("ATLAS_FENCED_FIRST_CONTENT_SEC", "")
+	t.Setenv("ATLAS_FENCED_IDLE_SEC", "")
+	if got := fencedFirstContentTimeout(); got != 60*time.Second {
+		t.Errorf("first-content default = %v, want 60s", got)
+	}
+	if got := fencedIdleTimeout(); got != 30*time.Second {
+		t.Errorf("idle default = %v, want 30s", got)
+	}
+	// The seam is internal and opt-in; production reads the real clock.
+	t.Setenv("ATLAS_FENCED_IDLE_SEC", "2")
+	if got := fencedIdleTimeout(); got != 2*time.Second {
+		t.Errorf("override ignored: %v", got)
+	}
+	t.Setenv("ATLAS_FENCED_IDLE_SEC", "-1")
+	if got := fencedIdleTimeout(); got != 30*time.Second {
+		t.Errorf("invalid override must fall back to the default, got %v", got)
+	}
+}
+
+// reasoningOnlyStub streams reasoning forever and never emits content: the
+// exact zero-byte shape that ran to max_tokens in production.
+func reasoningOnlyStub(t *testing.T, stop <-chan struct{}) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl, _ := w.(http.Flusher)
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-stop:
+				return
+			default:
+			}
+			d, _ := json.Marshal(map[string]interface{}{
+				"choices": []map[string]interface{}{
+					{"delta": map[string]string{"reasoning_content": "thinking "}}},
+			})
+			fmt.Fprintf(w, "data: %s\n\n", d)
+			if fl != nil {
+				fl.Flush()
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}))
+}
+
+func TestZeroByteFencedStreamIsCutAtTheFirstContentBound(t *testing.T) {
+	t.Setenv("ATLAS_FENCED_FIRST_CONTENT_SEC", "1")
+	stop := make(chan struct{})
+	defer close(stop)
+	srv := reasoningOnlyStub(t, stop)
+	defer srv.Close()
+
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	ctx.InferenceURL = srv.URL
+	ctx.Ctx = context.Background()
+
+	start := time.Now()
+	out, _, err := callLLMOnceWithGrammar(ctx, []AgentMessage{{Role: "user", Content: "x"}},
+		0.2, rawEmissionSentinel)
+	elapsed := time.Since(start)
+	if elapsed > 20*time.Second {
+		t.Fatalf("stream was not bounded: %v", elapsed)
+	}
+	if extractFencedContent(out) != "" {
+		t.Errorf("a reasoning-only stream must not yield content: %q", out)
+	}
+	t.Logf("bounded in %v (err=%v)", elapsed, err)
+}
+
+// A slow but continuously progressing payload must survive: each content
+// chunk resets the idle timer, so total elapsed far exceeding the idle bound
+// is fine as long as the gaps do not.
+func TestSlowButProgressingFencedPayloadSurvives(t *testing.T) {
+	t.Setenv("ATLAS_FENCED_FIRST_CONTENT_SEC", "2")
+	t.Setenv("ATLAS_FENCED_IDLE_SEC", "1")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl, _ := w.(http.Flusher)
+		parts := []string{"```python\n", "x = 1\n", "y = 2\n", "z = 3\n", "```"}
+		for _, p := range parts {
+			d, _ := json.Marshal(map[string]interface{}{
+				"choices": []map[string]interface{}{
+					{"delta": map[string]string{"content": p}}},
+			})
+			fmt.Fprintf(w, "data: %s\n\n", d)
+			if fl != nil {
+				fl.Flush()
+			}
+			// Well inside the idle bound, but five gaps sum past it.
+			time.Sleep(300 * time.Millisecond)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	ctx.InferenceURL = srv.URL
+	ctx.Ctx = context.Background()
+	out, _, err := callLLMOnceWithGrammar(ctx, []AgentMessage{{Role: "user", Content: "x"}},
+		0.2, rawEmissionSentinel)
+	if err != nil {
+		t.Fatalf("progressing stream was cut: %v", err)
+	}
+	if body := extractFencedContent(out); !strings.Contains(body, "z = 3") {
+		t.Errorf("payload truncated: %q", out)
+	}
+}
+
+// Reasoning is not progress. A stream that reasons past the idle bound and
+// only then emits content is still cut, because the first-content bound
+// governs until real bytes arrive.
+func TestReasoningDoesNotResetTheProgressTimer(t *testing.T) {
+	t.Setenv("ATLAS_FENCED_FIRST_CONTENT_SEC", "1")
+	t.Setenv("ATLAS_FENCED_IDLE_SEC", "30")
+	stop := make(chan struct{})
+	defer close(stop)
+	srv := reasoningOnlyStub(t, stop)
+	defer srv.Close()
+
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	ctx.InferenceURL = srv.URL
+	ctx.Ctx = context.Background()
+	start := time.Now()
+	callLLMOnceWithGrammar(ctx, []AgentMessage{{Role: "user", Content: "x"}}, 0.2, rawEmissionSentinel)
+	if el := time.Since(start); el > 20*time.Second {
+		t.Fatalf("reasoning kept the stream alive past the first-content bound: %v", el)
+	}
+}
+
+// Ordinary turns are untouched: the watchdog exists only for the fenced
+// sub-call, so a normal grammar stream with no content and slow reasoning is
+// governed by the pre-existing reasoning budget, not by these bounds.
+func TestOrdinaryTurnsAreNotBoundedByTheFencedWatchdog(t *testing.T) {
+	t.Setenv("ATLAS_FENCED_FIRST_CONTENT_SEC", "1")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl, _ := w.(http.Flusher)
+		time.Sleep(1500 * time.Millisecond) // past the fenced bound
+		d, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"delta": map[string]string{"content": `{"type":"done"}`}}},
+		})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+		if fl != nil {
+			fl.Flush()
+		}
+	}))
+	defer srv.Close()
+
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	ctx.InferenceURL = srv.URL
+	ctx.Ctx = context.Background()
+	out, _, err := callLLMOnceWithGrammar(ctx, []AgentMessage{{Role: "user", Content: "x"}}, 0.2, "")
+	if err != nil {
+		t.Fatalf("ordinary turn was cut by the fenced watchdog: %v", err)
+	}
+	if !strings.Contains(out, "done") {
+		t.Errorf("ordinary turn lost its payload: %q", out)
+	}
+}
+
+// Session cancellation still wins, and leaves nothing running.
+func TestSessionCancellationAbortsTheFencedFetch(t *testing.T) {
+	t.Setenv("ATLAS_FENCED_FIRST_CONTENT_SEC", "60")
+	stop := make(chan struct{})
+	defer close(stop)
+	srv := reasoningOnlyStub(t, stop)
+	defer srv.Close()
+
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	ctx.InferenceURL = srv.URL
+	cctx, cancel := context.WithCancel(context.Background())
+	ctx.Ctx = cctx
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+	}()
+	before := runtime.NumGoroutine()
+	start := time.Now()
+	callLLMOnceWithGrammar(ctx, []AgentMessage{{Role: "user", Content: "x"}}, 0.2, rawEmissionSentinel)
+	if el := time.Since(start); el > 10*time.Second {
+		t.Fatalf("cancellation did not propagate: %v", el)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if after := runtime.NumGoroutine(); after > before+4 {
+		t.Errorf("goroutines leaked: before=%d after=%d", before, after)
 	}
 }
