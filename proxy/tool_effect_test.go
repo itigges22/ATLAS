@@ -1008,3 +1008,60 @@ func TestSessionWritesKeyingIsRawWhileTheLedgerIsCanonical(t *testing.T) {
 			len(ctx.Ledger), ctx.Ledger)
 	}
 }
+
+// Checkpoint promotion on a production route rather than a direct call. A new
+// code file routes through the syntax gate, so with a sandbox answering the
+// write earns an explicit pass and those exact bytes become the path's
+// checkpoint. The follow-up write is deliberately broken: it must be recorded
+// and must NOT displace the checkpoint the passing bytes hold.
+func TestCheckpointPromotionThroughTheWriteRoute(t *testing.T) {
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/syntax-check") {
+			http.NotFound(w, r)
+			return
+		}
+		var in struct {
+			Code string `json:"code"`
+		}
+		json.NewDecoder(r.Body).Decode(&in)
+		bodies = append(bodies, in.Code)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"valid": !strings.Contains(in.Code, "def broken(")})
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	ctx := ledgerToolCtx(t, dir)
+	ctx.SandboxURL = srv.URL
+
+	good := "def f():\n    return 1\n"
+	args, _ := json.Marshal(map[string]string{"path": "solve.py", "content": good})
+	res := executeToolCall("write_file", args, ctx)
+	if res.ValidationStatus != ValidationPassed {
+		t.Fatalf("the write route did not produce a pass (%s/%s); this test "+
+			"proves nothing without one", res.ValidationKind, res.ValidationStatus)
+	}
+	d := ledgerOf(t, ctx, "solve.py")
+	if d.CheckpointHash != hashBytes([]byte(good)) {
+		t.Fatalf("passing bytes were not checkpointed: %+v", d)
+	}
+
+	// A later failing write is recorded but must not become the checkpoint.
+	bad := "def broken(\n"
+	args2, _ := json.Marshal(map[string]string{"path": "solve.py", "content": bad})
+	executeToolCall("write_file", args2, ctx)
+	d = ledgerOf(t, ctx, "solve.py")
+	if d.CheckpointHash != hashBytes([]byte(good)) {
+		t.Errorf("a failing write displaced the checkpoint: %+v", d)
+	}
+	if string(d.CheckpointBytes) != good {
+		t.Errorf("checkpoint bytes = %q", d.CheckpointBytes)
+	}
+	if d.CurrentHash != diskHash(t, filepath.Join(dir, "solve.py")) {
+		t.Error("current hash does not describe the bytes on disk")
+	}
+	if _, s := d.CurrentValidation(); s == ValidationPassed {
+		t.Error("the failing bytes read as passed")
+	}
+}
