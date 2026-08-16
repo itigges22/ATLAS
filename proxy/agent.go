@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -798,8 +799,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 		if ctx.Ctx != nil {
 			select {
 			case <-ctx.Ctx.Done():
-				log.Printf("[agent] cancelled at turn %d: %v", turn, ctx.Ctx.Err())
-				return ctx.Ctx.Err()
+				return finishCancelledRun(ctx, st, turn)
 			default:
 			}
 		}
@@ -878,6 +878,12 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			Emit(NewEnvelope(EvtError, "llm",
 				map[string]interface{}{"message": err.Error()}))
 			ctx.Stream("error", map[string]string{"error": err.Error()})
+			// A call that failed BECAUSE the work context ended is not an
+			// inference failure: the deadline is ours, and reporting the
+			// symptom would hide the cause and skip finalisation.
+			if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
+				return finishCancelledRun(ctx, st, turn)
+			}
 			// An `error` event is not an outcome. This exit streamed one and
 			// returned, so the client saw a tool call, an error, and then
 			// nothing — aoc_sonar died here in BOTH reps on a context-size
@@ -1636,6 +1642,11 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			}
 			if result == nil {
 				result = executeToolCall(parsed.Name, parsed.Args, ctx)
+				// The deadline can land in the middle of a tool call. Stop
+				// here rather than starting another turn on a dead context.
+				if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
+					return finishCancelledRun(ctx, st, turn)
+				}
 			}
 			elapsed := time.Since(startTime)
 
@@ -3815,7 +3826,22 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 	// abort even when the TCP disconnect is buffered upstream.
 	reqCtx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	ctx.Ctx = reqCtx
+
+	// Two lifetimes, deliberately separate.
+	//
+	// reqCtx is the RESPONSE lifetime: it lives until the client goes away or
+	// the handler returns, and finalisation -- reaping, rehashing, restoring,
+	// and the terminal event itself -- runs on it. workCtx is the WORK
+	// lifetime: everything that costs time (LLM calls, tools, gates, V3, the
+	// sandbox) hangs off it, and it ends one reserve before the session
+	// budget does. Without the split, the deadline that stops the work also
+	// kills the channel that would explain why it stopped.
+	total, reserve := sessionBudget()
+	workCtx, cancelWork := context.WithTimeout(reqCtx, total-reserve)
+	defer cancelWork()
+	ctx.RequestCtx = reqCtx
+	ctx.Ctx = workCtx
+	ctx.cancelWork = cancelWork
 	ctx.PassID = req.SessionID
 	if req.SessionID != "" {
 		entry := &sessionCancel{cancel: cancel}
@@ -5795,4 +5821,160 @@ func sessionHasTombstones(ctx *AgentContext) bool {
 		}
 	}
 	return false
+}
+
+// --- Phase 2B: the server-owned session budget ------------------------------
+//
+// The proxy had no clock of its own. A session ran until the model stopped,
+// the client gave up, or a detector fired, and a client that timed out
+// mid-stream took the only explanation with it -- the Stage-1 sessions that
+// reached 590s did so against the HARNESS cap, not a server one, and the
+// server never got to say what it had.
+//
+// The budget is owned here, and it is split: work stops one reserve early so
+// the reserve can be spent on stopping cleanly and saying so.
+
+const (
+	defaultSessionTotalSec = 600
+	sessionReserve         = 30 * time.Second
+	minSessionTotalSec     = 120
+	maxSessionTotalSec     = 3600
+)
+
+// sessionBudget returns the total session limit and the reserve held back for
+// finalisation. ATLAS_AGENT_SESSION_TIMEOUT_SEC overrides the total within
+// conservative bounds; anything malformed, zero, negative or out of range
+// falls back to the default and says so, because a silently ignored operator
+// setting is worse than no setting.
+func sessionBudget() (total, reserve time.Duration) {
+	total = defaultSessionTotalSec * time.Second
+	raw := strings.TrimSpace(os.Getenv("ATLAS_AGENT_SESSION_TIMEOUT_SEC"))
+	if raw == "" {
+		return total, sessionReserve
+	}
+	n, err := strconv.Atoi(raw)
+	switch {
+	case err != nil:
+		log.Printf("[agent] ATLAS_AGENT_SESSION_TIMEOUT_SEC=%q is not a number — using %ds",
+			raw, defaultSessionTotalSec)
+	case n < minSessionTotalSec:
+		log.Printf("[agent] ATLAS_AGENT_SESSION_TIMEOUT_SEC=%d is below the %ds floor — using %ds",
+			n, minSessionTotalSec, defaultSessionTotalSec)
+	case n > maxSessionTotalSec:
+		log.Printf("[agent] ATLAS_AGENT_SESSION_TIMEOUT_SEC=%d is above the %ds ceiling — using %ds",
+			n, maxSessionTotalSec, defaultSessionTotalSec)
+	default:
+		total = time.Duration(n) * time.Second
+	}
+	return total, sessionReserve
+}
+
+// finalizeOnWorkDeadline is what the reserve is for. It runs after the work
+// context is done and before the handler returns, on the response lifetime.
+//
+// Order matters: nothing may look at the workspace until the things that
+// could still be writing to it have been confirmed gone.
+func finalizeOnWorkDeadline(ctx *AgentContext, st *runState) {
+	// 1. Stop anything still running on the work context.
+	if ctx.cancelWork != nil {
+		ctx.cancelWork()
+	}
+	// 2. Reap this session's background jobs and confirm they exited. Only
+	// this session's -- another session's server is not ours to kill.
+	reapSessionBackgroundJobs(ctx)
+	// 3. Now the workspace is quiet, so a hash means something. Re-read every
+	// tracked path: a job killed mid-write leaves bytes nobody validated.
+	invalidateTrackedValidation(ctx)
+	// 4. Decide restoration per path, under the Phase 3B rules. A timeout
+	// does not relax any of them.
+	recovered := restoreSaferDeliverables(ctx)
+	// 5. One terminal, on the response lifetime, inside the reserve. A
+	// timeout never claims completion, whatever is on disk afterwards.
+	wrote := st != nil && st.madeProductiveChange
+	emitTerminal(ctx, st, TerminalTimedOut, "work_deadline",
+		sessionTimeoutSummary(ctx, wrote, recovered))
+}
+
+// reapSessionBackgroundJobs stops the jobs THIS session started and waits for
+// each to be confirmed gone. A job that cannot be confirmed leaves the
+// workspace hazard raised, which is what keeps restoration from touching a
+// file something may still be writing.
+func reapSessionBackgroundJobs(ctx *AgentContext) {
+	if ctx == nil || len(ctx.BackgroundJobs) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(ctx.BackgroundJobs))
+	for id := range ctx.BackgroundJobs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		out, err := sandboxStopBackground(ctx, id)
+		delete(ctx.BackgroundJobs, id)
+		if err != nil {
+			log.Printf("[agent] could not stop background job %s: %v", id, err)
+			continue
+		}
+		if out.ExitCode != nil {
+			clearWorkspaceHazard(ctx)
+			continue
+		}
+		log.Printf("[agent] background job %s did not report an exit code — "+
+			"the workspace stays marked as possibly still being written", id)
+	}
+}
+
+// sessionTimeoutSummary is the terminal a timed-out session ends on. It says
+// the run ran out of time and what state the files are in; it never says the
+// work is done, and a successful restore does not change that.
+func sessionTimeoutSummary(ctx *AgentContext, wrote bool, recovered []restoreDecision) string {
+	var sb strings.Builder
+	sb.WriteString("Stopped: the session ran out of time before the work finished")
+	switch {
+	case !wrote:
+		sb.WriteString(", and nothing was written to disk")
+	default:
+		sb.WriteString(". Anything already written is still on disk, unverified")
+	}
+	sb.WriteString(". Try a smaller, more specific request.")
+	sb.WriteString(restorationDisclosure(recovered))
+	sb.WriteString(liveBackgroundJobNote(ctx))
+	return sb.String()
+}
+
+// finishCancelledRun tells apart the two ways a run can stop early, because
+// they are not the same event and must not be reported as one.
+//
+// The work deadline is OURS: the client is still there, the reserve is
+// unspent, and the session owes an explanation. A client disconnect is not a
+// server timeout -- the response channel is gone, so there is nobody to tell,
+// and claiming timed_out into a closed socket would put a fact in the record
+// that nothing observed.
+//
+// Either way the work stops and this session's background jobs are reaped.
+func finishCancelledRun(ctx *AgentContext, st *runState, turn int) error {
+	clientGone := ctx.RequestCtx != nil && ctx.RequestCtx.Err() != nil
+	if clientGone {
+		log.Printf("[agent] client disconnected at turn %d — cancelling work and reaping jobs", turn)
+		if ctx.cancelWork != nil {
+			ctx.cancelWork()
+		}
+		reapSessionBackgroundJobs(ctx)
+		return ctx.Ctx.Err()
+	}
+	if errors.Is(ctx.Ctx.Err(), context.DeadlineExceeded) {
+		log.Printf("[agent] work deadline reached at turn %d — finalising within the reserve", turn)
+		finalizeOnWorkDeadline(ctx, st)
+		return nil
+	}
+	// An explicit POST /cancel: the caller asked to stop, so the run ends
+	// incomplete rather than pretending it ran out of time.
+	log.Printf("[agent] cancelled at turn %d: %v", turn, ctx.Ctx.Err())
+	if ctx.cancelWork != nil {
+		ctx.cancelWork()
+	}
+	reapSessionBackgroundJobs(ctx)
+	emitTerminal(ctx, st, TerminalIncomplete, "cancelled",
+		"Stopped: the run was cancelled before the work finished."+liveBackgroundJobNote(ctx))
+	return nil
 }

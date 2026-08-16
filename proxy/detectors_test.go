@@ -1286,16 +1286,22 @@ func TestRestorationIsWiredToExactlyOneTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(src)
-	if n := strings.Count(body, "restoreSaferDeliverables("); n != 1 {
-		t.Errorf("restoration has %d call sites, want exactly 1", n)
+	// Two sites, both deliberate: the repeat detector's terminal (Phase 3B)
+	// and the work-deadline finaliser (Phase 2B), which reuses the same
+	// eligibility rules rather than relaxing them for a timeout.
+	if n := strings.Count(body, "restoreSaferDeliverables("); n != 2 {
+		t.Errorf("restoration has %d call sites, want exactly 2", n)
 	}
-	// And that one site is the repeat detector's terminal.
 	i := strings.Index(body, "restoreSaferDeliverables(")
 	if i < 0 {
 		t.Fatal("restoration call site not found")
 	}
 	if !strings.Contains(body[i:min(len(body), i+400)], "repeatTerminalSummary(") {
 		t.Error("restoration is no longer adjacent to the repeat-detector terminal")
+	}
+	j := strings.LastIndex(body, "restoreSaferDeliverables(")
+	if !strings.Contains(body[max(0, j-900):j], "finalizeOnWorkDeadline") {
+		t.Error("the second restoration site is not the work-deadline finaliser")
 	}
 	// The other terminal producers must not have gained it. They all route
 	// through the one emitter now, so the count to hold is theirs.

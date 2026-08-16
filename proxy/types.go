@@ -898,6 +898,13 @@ type AgentContext struct {
 	// allowance. A successful resolution clears the entry.
 	FencedFailures map[string]int
 
+	// RequestCtx is the RESPONSE lifetime: alive for finalisation after the
+	// work context has been cancelled. Ctx is the WORK lifetime -- LLM calls,
+	// tools, gates, V3 and the sandbox all hang off it -- and it ends one
+	// reserve before the session budget does.
+	RequestCtx context.Context
+	cancelWork context.CancelFunc
+
 	// The session's single terminal outcome, set by the one emitter. Read by
 	// the deferred broker envelope so the two cannot disagree.
 	TerminalStatus TerminalStatus

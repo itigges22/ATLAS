@@ -259,6 +259,36 @@ stopped run into a completed one — the summary discloses per path which files
 were put back, which were left alone and why, and which could not be restored,
 with no implication that they moved together.
 
+#### Terminal contract and the session budget
+
+Every session ends in exactly one terminal event, from one emitter. It carries
+the legacy `summary` unchanged plus an additive `status` — `completed`,
+`incomplete`, `stopped`, `timed_out`, `failed` — and a stable machine-readable
+`reason`. Consumers read absent, malformed or unrecognised as `incomplete`,
+never as completion (`NormalizeTerminalStatus` in Go, `terminal_status` in
+`atlas/events.py`). The broker's `done`/`stage_end` envelopes report the same
+outcome instead of asserting `success: true`.
+
+A model-issued `done` is `completed` only when the run's file obligation —
+what it declared plus what it wrote — is demonstrably satisfied right now,
+through the same syntax contract the write path uses. If anything was deleted
+or moved, completion is refused with `delete_intent_unestablished`: whether
+removal was the task is not knowable here.
+
+The session budget is server-owned: 600 s total, 30 s reserve, so work stops
+at 570 s. `ATLAS_AGENT_SESSION_TIMEOUT_SEC` overrides the total within
+[120, 3600]; anything malformed, zero, negative or out of range falls back to
+the default with a log. Two lifetimes are kept separate — the response context
+survives for finalisation while the work context (LLM, tools, gates, V3,
+sandbox) ends one reserve early — so the deadline that stops the work does not
+kill the channel that explains it. On the deadline the server cancels work,
+reaps only this session's background jobs, rehashes tracked paths, runs the
+Phase 3B restoration decision unchanged, and emits one `timed_out` terminal
+inside the reserve. A client disconnect is not a timeout: work stops and jobs
+are reaped, but nothing is claimed into a closed response. Phase 2 fenced
+admission observes the work deadline automatically, since it already reserves
+against `ctx.Ctx`'s deadline.
+
 For the later reproducibility pass, not fixed here: the system prompt renders
 tool descriptions in Go map order, so two runs of identical code produce
 different prompt bytes. It affects prompt reproducibility only, not behaviour;
