@@ -2483,3 +2483,215 @@ func TestC5RecoverySkippedWhenTheBudgetIsGone(t *testing.T) {
 		t.Errorf("status %q", terminal["status"])
 	}
 }
+
+// --- The turn-level fenced loop ---------------------------------------------
+//
+// debounce2 in the frozen run made 149 main-loop LLM calls and 147 identical
+// write_file attempts for one path, and opened only 4 fenced sub-generations:
+// the session/path allowance worked, refusing 144 of them before any
+// generation. What nothing bounded was the TURNS. The refusal at the fenced
+// bounce continues past the failed-call counters, the retry ban and the
+// repetition window, so no breaker ever saw the resend and the run spent its
+// whole budget on it.
+//
+// The same defect was found twice before, at the per-path tool ban and at the
+// retry ban; both branches were repaired by counting the bounce as the failure
+// it is. This is the third instance.
+
+// fencedLoopFixture drives the real loop with MaxTurns=0, as production runs
+// it. The server itself enforces the bound, so nothing here sleeps.
+func fencedLoopFixture(t *testing.T, dir string, maxTurns int,
+	plan func(i int, prompt string) map[string]interface{}) (*AgentContext, *int, *int, map[string]int, map[string]string) {
+	t.Helper()
+	turns, subcalls := 0, 0
+	census := map[string]int{}
+	terminal := map[string]string{}
+	var mu sync.Mutex
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			valid := !strings.Contains(in.Code, "]]")
+			out := map[string]interface{}{"valid": valid}
+			if !valid {
+				out["errors"] = []string{"SyntaxError: unmatched ']'"}
+			}
+			json.NewEncoder(w).Encode(out)
+			return
+		case strings.HasSuffix(r.URL.Path, "/execute"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			if strings.Contains(in.Code, ".atlas-mount-probe") {
+				b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": true, "stdout": string(b), "exit_code": 0})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "stdout": "", "exit_code": 0})
+			return
+		case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
+			http.NotFound(w, r)
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		if strings.Contains(string(raw), "single fenced block") {
+			// The exact production shape: a fast reply with NO fenced block.
+			mu.Lock()
+			subcalls++
+			mu.Unlock()
+			d, _ := json.Marshal(map[string]interface{}{
+				"choices": []map[string]interface{}{
+					{"delta": map[string]string{"content": "Sure, here is the file."}}}})
+			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+			return
+		}
+		mu.Lock()
+		i := turns
+		turns++
+		mu.Unlock()
+		if i >= maxTurns {
+			// The bound lives in the server so the test never sleeps: past it
+			// the loop is unbounded and the fixture says so immediately.
+			http.Error(w, "turn ceiling exceeded", http.StatusInsufficientStorage)
+			return
+		}
+		call, _ := json.Marshal(plan(i, string(raw)))
+		d, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"delta": map[string]string{"content": string(call)}}}})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+	}))
+	t.Cleanup(srv.Close)
+
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
+	ctx.PermissionMode = PermissionYolo
+	ctx.TrustMode = trustFullyTrusted
+	ctx.VerifyOnHost = true
+	ctx.MaxTurns = 0 // production
+	ctx.StreamFn = func(et string, data interface{}) {
+		b, _ := json.Marshal(data)
+		mu.Lock()
+		defer mu.Unlock()
+		census[et]++
+		if et == "gate" || et == "tool_result" {
+			census["_text:"+string(b[:min(len(b), 0)])] += 0
+		}
+		if et == "done" {
+			var m map[string]string
+			json.Unmarshal(b, &m)
+			for k, v := range m {
+				terminal[k] = v
+			}
+		}
+	}
+	return ctx, &turns, &subcalls, census, terminal
+}
+
+const fencedTurnCeiling = 30
+
+func TestRepeatedFencedFailureReachesABoundedTerminal(t *testing.T) {
+	dir := t.TempDir()
+	ctx, turns, subcalls, census, terminal := fencedLoopFixture(t, dir, fencedTurnCeiling,
+		func(i int, _ string) map[string]interface{} {
+			return map[string]interface{}{"type": "tool_call", "name": "write_file",
+				"args": map[string]string{"path": "solve.py", "content": "@fenced"}}
+		})
+	if err := runAgentLoop(ctx, "Write solve.py."); err != nil {
+		t.Fatalf("loop error: %v", err)
+	}
+	t.Logf("main-loop turns=%d fenced sub-generations=%d (ctx.FencedCalls=%d) status=%q reason=%q",
+		*turns, *subcalls, ctx.FencedCalls, terminal["status"], terminal["reason"])
+
+	if *turns >= fencedTurnCeiling {
+		t.Fatalf("the loop consumed %d main-loop turns without a terminal; production "+
+			"runs uncapped and would spend the whole session budget here", *turns)
+	}
+	if census["done"] != 1 {
+		t.Fatalf("%d terminal events", census["done"])
+	}
+	st := NormalizeTerminalStatus(terminal["status"])
+	if st != TerminalStopped && st != TerminalIncomplete {
+		t.Errorf("terminal status = %q, want an honest stop", terminal["status"])
+	}
+	if st.Completed() {
+		t.Error("a run that wrote nothing reported completion")
+	}
+	// The allowance is untouched by the fix: still at most two sub-generations.
+	if ctx.FencedCalls > maxFencedFailuresPerPath {
+		t.Errorf("%d fenced sub-generations, allowance is %d",
+			ctx.FencedCalls, maxFencedFailuresPerPath)
+	}
+	if census["tool_call"] != census["tool_result"] {
+		t.Errorf("call/result invariant broken: %d vs %d",
+			census["tool_call"], census["tool_result"])
+	}
+	if _, err := os.Stat(filepath.Join(dir, "solve.py")); err == nil {
+		t.Error("a run whose every resolution failed still mutated the target")
+	}
+}
+
+// Two spellings of one file are one failure identity.
+func TestFencedFailureAliasesShareOneIdentity(t *testing.T) {
+	dir := t.TempDir()
+	spellings := []string{"solve.py", "./solve.py"}
+	ctx, turns, _, census, terminal := fencedLoopFixture(t, dir, fencedTurnCeiling,
+		func(i int, _ string) map[string]interface{} {
+			return map[string]interface{}{"type": "tool_call", "name": "write_file",
+				"args": map[string]string{
+					"path": spellings[i%len(spellings)], "content": "@fenced"}}
+		})
+	if err := runAgentLoop(ctx, "Write solve.py."); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("alias run: turns=%d status=%q reason=%q", *turns, terminal["status"], terminal["reason"])
+	if *turns >= fencedTurnCeiling {
+		t.Errorf("alternating spellings evaded the bound: %d turns", *turns)
+	}
+	if census["done"] != 1 || NormalizeTerminalStatus(terminal["status"]).Completed() {
+		t.Errorf("terminal: %d events, status=%q", census["done"], terminal["status"])
+	}
+}
+
+// Distinct targets keep independent budgets and must not be collapsed.
+func TestFencedFailurePathsStayIndependent(t *testing.T) {
+	dir := t.TempDir()
+	paths := []string{"a.py", "b.py", "c.py", "d.py"}
+	ctx, turns, subcalls, _, terminal := fencedLoopFixture(t, dir, fencedTurnCeiling,
+		func(i int, _ string) map[string]interface{} {
+			if i >= len(paths) {
+				return map[string]interface{}{"type": "done", "summary": "gave up"}
+			}
+			return map[string]interface{}{"type": "tool_call", "name": "write_file",
+				"args": map[string]string{"path": paths[i], "content": "@fenced"}}
+		})
+	if err := runAgentLoop(ctx, "Write four files."); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("independent paths: turns=%d sub-generations=%d status=%q",
+		*turns, *subcalls, terminal["status"])
+	// Each distinct path is entitled to its own allowance, so four paths must
+	// not be stopped as if they were one target repeated.
+	if *turns < len(paths) {
+		t.Errorf("only %d turns for %d distinct targets — the paths were collapsed",
+			*turns, len(paths))
+	}
+	// Each path is entitled to its own allowance: four targets, two
+	// sub-generations each, and no target starved by another's failures.
+	if *subcalls != len(paths)*maxFencedFailuresPerPath {
+		t.Errorf("%d sub-generations for %d paths, want %d",
+			*subcalls, len(paths), len(paths)*maxFencedFailuresPerPath)
+	}
+	// The terminal here is whatever the existing completion policy decides for
+	// a run that declared nothing and wrote nothing; this slice does not
+	// touch that rule, so it is logged rather than asserted.
+	t.Logf("terminal for the four-path run: status=%q reason=%q",
+		terminal["status"], terminal["reason"])
+}

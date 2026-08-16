@@ -1287,6 +1287,40 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 								log.Printf("[agent] fenced-content fetch failed for %s: %v", wfInput.Path, ferr)
 								st.bounceToolCall(ctx, "write_file",
 									"You wrote \"content\": \"@fenced\" but no fenced block followed. Either reply with the complete file in one fenced code block when asked, or re-issue write_file with the full content inline.")
+								// A refusal here is a failed call like any
+								// other, and this branch returned before every
+								// mechanism that counts one. The same defect
+								// was found at the per-path ban and at the
+								// retry ban; this is the third instance, and
+								// the one the frozen run paid for: debounce2
+								// re-sent this call 147 times over 570s with
+								// the allowance correctly refusing all but
+								// four generations and nothing bounding the
+								// TURNS.
+								//
+								// A run that ended because the client left, or
+								// because the work deadline fired, is not a
+								// model repeating itself, and those paths keep
+								// their own terminals.
+								if ctx.Ctx == nil || ctx.Ctx.Err() == nil {
+									// The intent, not the resolved args: this
+									// call is byte-identical every time the
+									// model sends it, and the resolved body is
+									// what made it look different.
+									recordFailedToolCall(ctx, parsed.Name, intentArgs, ferr.Error())
+									consecutiveErrors++
+									totalFailures++
+									failPath := fencedKey(ctx, wfInput.Path)
+									ctx.RecentFailurePaths = appendRecentFailurePath(ctx.RecentFailurePaths, failPath)
+									if shouldStopForFailures(totalFailures, consecutiveErrors, ctx.RecentFailurePaths) {
+										log.Printf("[agent] breaking at turn %d: %d refused/failed calls, %d consecutive on %q",
+											turn, totalFailures, consecutiveErrors, failPath)
+										endStream(TerminalStopped, "repeated_refusal",
+											repeatedRefusalSummary("write_file", wfInput.Path, st.madeProductiveChange)+
+												liveBackgroundJobNote(ctx))
+										return nil
+									}
+								}
 								continue
 							}
 							wfInput.Content = fetched
