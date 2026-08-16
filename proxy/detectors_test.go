@@ -3028,3 +3028,331 @@ func TestDebtRecoveryBoundsAndRefusals(t *testing.T) {
 		}
 	})
 }
+
+// --- Live workspace hazards at completion ------------------------------------
+//
+// run_background raises the hazard and only a confirmed exit lowers it, but the
+// completion decision never asked. A server started mid-run could keep
+// rewriting a tracked deliverable while the run reported completed over a hash
+// taken at one instant.
+
+// bgSandbox stands in for the sandbox's job endpoints. `state` decides what
+// /jobs/{id}/output reports, and `onStop` records reaping.
+type bgSandbox struct {
+	mu       sync.Mutex
+	running  bool
+	started  int
+	exitCode *int
+	tailed   int
+	stopped  []string
+	// mutate rewrites the deliverable when the job is observed as exited,
+	// standing in for a process that changed the file on its way out.
+	mutate func()
+}
+
+func newBgSandbox(t *testing.T, dir string, bg *bgSandbox) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			valid := !strings.Contains(in.Code, "]]")
+			out := map[string]interface{}{"valid": valid}
+			if !valid {
+				out["errors"] = []string{"SyntaxError: unmatched ']'"}
+			}
+			json.NewEncoder(w).Encode(out)
+		case strings.HasSuffix(r.URL.Path, "/execute"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			if strings.Contains(in.Code, ".atlas-mount-probe") {
+				b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": true, "stdout": string(b), "exit_code": 0})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "stdout": "", "exit_code": 0})
+		case strings.HasSuffix(r.URL.Path, "/jobs/start"):
+			// Unique per start, as the real sandbox does: the hazard is
+			// raised per start and lowered per reaped job, so a stub reusing
+			// one id would manufacture a mismatch production does not have.
+			bg.mu.Lock()
+			bg.started++
+			id := fmt.Sprintf("job%d", bg.started)
+			bg.mu.Unlock()
+			json.NewEncoder(w).Encode(map[string]interface{}{"job_id": id, "pid": 4242})
+		case strings.Contains(r.URL.Path, "/output"):
+			bg.mu.Lock()
+			bg.tailed++
+			running, code, mutate := bg.running, bg.exitCode, bg.mutate
+			bg.mu.Unlock()
+			if !running && code != nil && mutate != nil {
+				mutate() // the process changed the file on its way out
+			}
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/jobs/"), "/output")
+			out := map[string]interface{}{"job_id": id, "running": running,
+				"stdout": []string{}, "stderr": []string{}, "elapsed_sec": 1.0,
+				"command": "python app.py"}
+			if code != nil {
+				out["exit_code"] = *code
+			}
+			json.NewEncoder(w).Encode(out)
+		case strings.HasSuffix(r.URL.Path, "/stop"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/jobs/"), "/stop")
+			bg.mu.Lock()
+			bg.stopped = append(bg.stopped, id)
+			code := bg.exitCode
+			bg.mu.Unlock()
+			out := map[string]interface{}{"job_id": id, "killed": true,
+				"stdout": []string{}, "stderr": []string{}}
+			if code != nil {
+				out["exit_code"] = *code
+			}
+			json.NewEncoder(w).Encode(out)
+		default:
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func bgCtx(t *testing.T, dir, url string) *AgentContext {
+	t.Helper()
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.SandboxURL = url
+	ctx.PermissionMode = PermissionYolo
+	ctx.StreamFn = func(string, interface{}) {}
+	return ctx
+}
+
+func TestLiveBackgroundWorkBlocksCompletion(t *testing.T) {
+	const good = "def solve():\n    return 1\n"
+	zero := 0
+
+	t.Run("live job blocks", func(t *testing.T) {
+		dir := t.TempDir()
+		bg := &bgSandbox{running: true}
+		srv := newBgSandbox(t, dir, bg)
+		ctx := bgCtx(t, dir, srv.URL)
+		w, _ := json.Marshal(map[string]string{"path": "solve.py", "content": good})
+		executeToolCall("write_file", w, ctx)
+		start, _ := json.Marshal(map[string]string{"command": "python app.py"})
+		executeToolCall("run_background", start, ctx)
+		if !workspaceHazardous(ctx) {
+			t.Fatal("run_background did not raise the hazard")
+		}
+		st := &runState{madeProductiveChange: true, expectedOutputs: []string{"solve.py"}}
+		status, reason := finalizeCompletion(ctx, st, "Create solve.py.", "")
+		t.Logf("live: status=%q reason=%q tails=%d stops=%v",
+			status, reason, bg.tailed, bg.stopped)
+		if status.Completed() {
+			t.Fatalf("completed with a live background job: reason=%q", reason)
+		}
+		if reason != "background_work_unresolved" {
+			t.Errorf("reason = %q", reason)
+		}
+		// Nothing was killed to make a decision.
+		if len(bg.stopped) != 0 {
+			t.Errorf("a live job was stopped during ordinary completion: %v", bg.stopped)
+		}
+		if len(ctx.BackgroundJobs) != 1 {
+			t.Errorf("the live job stopped being tracked")
+		}
+	})
+
+	t.Run("exited and unchanged: reaped, may complete", func(t *testing.T) {
+		dir := t.TempDir()
+		// The job must be LIVE when it starts, or run_background treats it as
+		// a job that died at startup and never tracks it.
+		bg := &bgSandbox{running: true}
+		srv := newBgSandbox(t, dir, bg)
+		ctx := bgCtx(t, dir, srv.URL)
+		w, _ := json.Marshal(map[string]string{"path": "solve.py", "content": good})
+		executeToolCall("write_file", w, ctx)
+		start, _ := json.Marshal(map[string]string{"command": "python app.py"})
+		executeToolCall("run_background", start, ctx)
+		bg.mu.Lock()
+		bg.running, bg.exitCode = false, &zero // it has since exited
+		bg.mu.Unlock()
+
+		t.Logf("jobs tracked before: %v hazard=%v", ctx.BackgroundJobs, workspaceHazardous(ctx))
+		st := &runState{madeProductiveChange: true, expectedOutputs: []string{"solve.py"}}
+		status, reason := finalizeCompletion(ctx, st, "Create solve.py.", "")
+		t.Logf("exited: status=%q reason=%q stops=%v tails=%d jobs=%v hazard=%v",
+			status, reason, bg.stopped, bg.tailed, ctx.BackgroundJobs, workspaceHazardous(ctx))
+		if !status.Completed() {
+			t.Fatalf("an exited, reaped job blocked completion: reason=%q", reason)
+		}
+		if len(bg.stopped) != 1 {
+			t.Errorf("the exited job was not reaped: %v", bg.stopped)
+		}
+		if workspaceHazardous(ctx) {
+			t.Error("the hazard survived a confirmed exit")
+		}
+		d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
+		if _, s := d.CurrentValidation(); s != ValidationPassed {
+			t.Errorf("an untouched file lost its verdict: %v", s)
+		}
+	})
+
+	t.Run("exited after changing the file: old verdict cannot authorize", func(t *testing.T) {
+		dir := t.TempDir()
+		bg := &bgSandbox{running: true}
+		srv := newBgSandbox(t, dir, bg)
+		ctx := bgCtx(t, dir, srv.URL)
+		w, _ := json.Marshal(map[string]string{"path": "solve.py", "content": good})
+		executeToolCall("write_file", w, ctx)
+		before := ctx.Ledger[ledgerKey(ctx, "solve.py")].CurrentHash
+		start, _ := json.Marshal(map[string]string{"command": "python app.py"})
+		executeToolCall("run_background", start, ctx)
+		// It has since exited, and rewrote the file on its way out.
+		bg.mu.Lock()
+		bg.running, bg.exitCode = false, &zero
+		bg.mutate = func() {
+			os.WriteFile(filepath.Join(dir, "solve.py"), []byte("def solve():\n    return [1]]\n"), 0o644)
+		}
+		bg.mu.Unlock()
+
+		st := &runState{madeProductiveChange: true, expectedOutputs: []string{"solve.py"}}
+		status, reason := finalizeCompletion(ctx, st, "Create solve.py.", "")
+		d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
+		_, s := d.CurrentValidation()
+		t.Logf("changed-on-exit: status=%q reason=%q hash_moved=%v current=%v",
+			status, reason, d.CurrentHash != before, s)
+		if d.CurrentHash == before {
+			t.Fatal("the rehash did not notice the change")
+		}
+		if s == ValidationPassed {
+			t.Error("a verdict about the old bytes survived")
+		}
+		if status.Completed() {
+			t.Errorf("completed over bytes a background job changed: reason=%q", reason)
+		}
+	})
+
+	t.Run("unconfirmed exit stays blocking", func(t *testing.T) {
+		dir := t.TempDir()
+		bg := &bgSandbox{running: true}
+		srv := newBgSandbox(t, dir, bg)
+		ctx := bgCtx(t, dir, srv.URL)
+		w, _ := json.Marshal(map[string]string{"path": "solve.py", "content": good})
+		executeToolCall("write_file", w, ctx)
+		start, _ := json.Marshal(map[string]string{"command": "python app.py"})
+		executeToolCall("run_background", start, ctx)
+		// Signalled but never reaped: no exit code to confirm it is gone.
+		bg.mu.Lock()
+		bg.running, bg.exitCode = false, nil
+		bg.mu.Unlock()
+		st := &runState{madeProductiveChange: true, expectedOutputs: []string{"solve.py"}}
+		status, reason := finalizeCompletion(ctx, st, "Create solve.py.", "")
+		t.Logf("unconfirmed: status=%q reason=%q", status, reason)
+		if status.Completed() {
+			t.Errorf("an unconfirmed exit completed: reason=%q", reason)
+		}
+		if reason != "background_work_unresolved" {
+			t.Errorf("reason = %q", reason)
+		}
+	})
+
+	t.Run("unobservable job stays blocking", func(t *testing.T) {
+		dir := t.TempDir()
+		ctx := bgCtx(t, dir, "http://127.0.0.1:1")
+		ctx.BackgroundJobs = map[string]string{"job1": "python app.py"}
+		raiseWorkspaceHazard(ctx)
+		st := &runState{madeProductiveChange: true}
+		status, reason := finalizeCompletion(ctx, st, "Create solve.py.", "")
+		if status.Completed() || reason != "background_work_unresolved" {
+			t.Errorf("status=%q reason=%q", status, reason)
+		}
+	})
+
+	t.Run("sessions do not share hazards", func(t *testing.T) {
+		dir := t.TempDir()
+		bg := &bgSandbox{running: true}
+		srv := newBgSandbox(t, dir, bg)
+		busy := bgCtx(t, dir, srv.URL)
+		start, _ := json.Marshal(map[string]string{"command": "python app.py"})
+		executeToolCall("run_background", start, busy)
+		if !workspaceHazardous(busy) {
+			t.Fatal("no hazard on the busy session")
+		}
+		other := bgCtx(t, t.TempDir(), srv.URL)
+		if workspaceHazardous(other) {
+			t.Error("a second session inherited the hazard")
+		}
+		if live := settleBackgroundHazard(other); len(live) != 0 {
+			t.Errorf("a session with no jobs of its own saw %v", live)
+		}
+	})
+
+	t.Run("foreground-only work is unchanged", func(t *testing.T) {
+		dir := t.TempDir()
+		bg := &bgSandbox{}
+		srv := newBgSandbox(t, dir, bg)
+		ctx := bgCtx(t, dir, srv.URL)
+		w, _ := json.Marshal(map[string]string{"path": "solve.py", "content": good})
+		executeToolCall("write_file", w, ctx)
+		st := &runState{madeProductiveChange: true, expectedOutputs: []string{"solve.py"}}
+		status, reason := finalizeCompletion(ctx, st, "Create solve.py.", "")
+		if !status.Completed() {
+			t.Errorf("a run with no background work stopped completing: reason=%q", reason)
+		}
+		if bg.tailed != 0 {
+			t.Errorf("the sandbox was polled for jobs that do not exist (%d)", bg.tailed)
+		}
+	})
+}
+
+// The hazard counter and the job map must never disagree about whether work is
+// outstanding. Both are mutated only from the agent-loop goroutine -- the one
+// `go func` in the loop is the prompt-progress poller and touches neither --
+// so this exercises the production sequence rather than manufacturing a
+// concurrency pattern production does not have. Run under -race.
+func TestHazardAndJobReapingStayConsistent(t *testing.T) {
+	zero := 0
+	dir := t.TempDir()
+	bg := &bgSandbox{running: true}
+	srv := newBgSandbox(t, dir, bg)
+	ctx := bgCtx(t, dir, srv.URL)
+	w, _ := json.Marshal(map[string]string{"path": "solve.py", "content": "def s():\n    return 1\n"})
+	executeToolCall("write_file", w, ctx)
+
+	start, _ := json.Marshal(map[string]string{"command": "python app.py"})
+	for i := 0; i < 3; i++ {
+		executeToolCall("run_background", start, ctx)
+	}
+	st := &runState{madeProductiveChange: true, expectedOutputs: []string{"solve.py"}}
+
+	// While anything is live, the two views agree that work is outstanding.
+	for i := 0; i < 3; i++ {
+		live := settleBackgroundHazard(ctx)
+		if len(live) == 0 || !workspaceHazardous(ctx) {
+			t.Fatalf("live=%v hazardous=%v — the two views disagree", live, workspaceHazardous(ctx))
+		}
+		if status, _ := finalizeCompletion(ctx, st, "Create solve.py.", ""); status.Completed() {
+			t.Fatal("completed while a job was live")
+		}
+	}
+	// Once the job is confirmed gone, both views agree it is settled, and
+	// repeating the settle does not double-count.
+	bg.mu.Lock()
+	bg.running, bg.exitCode = false, &zero
+	bg.mu.Unlock()
+	for i := 0; i < 3; i++ {
+		if live := settleBackgroundHazard(ctx); len(live) != 0 {
+			t.Errorf("settle %d still reports %v", i, live)
+		}
+	}
+	if workspaceHazardous(ctx) {
+		t.Error("the hazard outlived every confirmed exit")
+	}
+	if len(ctx.BackgroundJobs) != 0 {
+		t.Errorf("%d jobs still tracked", len(ctx.BackgroundJobs))
+	}
+	if status, reason := finalizeCompletion(ctx, st, "Create solve.py.", ""); !status.Completed() {
+		t.Errorf("a fully reaped session did not complete: reason=%q", reason)
+	}
+}

@@ -6517,6 +6517,10 @@ func fencedChannelRecovery(ctx *AgentContext, st *runState, relPath string) stri
 // completedReason lets an exit name its own reason for a genuine completion
 // (the text exit says text_reply); empty keeps the deliverable evidence's.
 func finalizeCompletion(ctx *AgentContext, st *runState, userMessage, completedReason string) (TerminalStatus, string) {
+	// Settle what can be settled FIRST, so the evidence the rest of this
+	// function reads is about a workspace nothing is still writing to.
+	liveJobs := settleBackgroundHazard(ctx)
+
 	ok, why := terminalCompletionAllowed(ctx, st.expectedOutputs)
 	if !ok {
 		return TerminalIncomplete, why
@@ -6526,6 +6530,12 @@ func finalizeCompletion(ctx *AgentContext, st *runState, userMessage, completedR
 	}
 	if st.verificationDemandedAndUnmet() {
 		return TerminalIncomplete, "verification_demanded_unmet"
+	}
+	// Something may still be writing. A hash taken now describes an instant,
+	// not a result, and nothing here can tell a quiet process from a finished
+	// one -- only a confirmed exit can.
+	if len(liveJobs) > 0 || workspaceHazardous(ctx) {
+		return TerminalIncomplete, "background_work_unresolved"
 	}
 	// Work the model asked for, that the system permitted, and that never
 	// reached a state anything could check. A success elsewhere does not
@@ -6844,4 +6854,63 @@ func offerDebtRecovery(ctx *AgentContext, st *runState) string {
 		"its absence can be confirmed. Saying you no longer need it is not enough. " +
 		"Finishing another file does not settle this one.")
 	return sb.String()
+}
+
+// --- Live workspace hazards at completion ------------------------------------
+//
+// run_background raises the workspace hazard and only a confirmed exit lowers
+// it, but the completion decision never asked. A server started mid-run could
+// keep rewriting a tracked deliverable while the run reported completed over a
+// hash taken at one instant.
+//
+// This asks the sandbox what is actually true, without changing anything the
+// model did not ask for: a job that has ALREADY exited is reaped and its
+// hazard lowered, and a job that is still running is left alone and blocks.
+// Nothing is killed to make a completion possible.
+
+// settleBackgroundHazard returns the ids of this session's jobs that are still
+// running. Exited jobs are reaped through the existing session-owned path, and
+// every tracked deliverable is rehashed afterwards so a verdict about bytes a
+// job changed on its way out cannot survive.
+func settleBackgroundHazard(ctx *AgentContext) []string {
+	if ctx == nil || len(ctx.BackgroundJobs) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(ctx.BackgroundJobs))
+	for id := range ctx.BackgroundJobs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	var live []string
+	reaped := false
+	for _, id := range ids {
+		out, err := sandboxTailBackground(ctx, id, 1)
+		if err != nil {
+			// Unobservable is not the same as finished. The hazard stands.
+			log.Printf("[agent] cannot establish whether background job %s has exited: %v", id, err)
+			live = append(live, id)
+			continue
+		}
+		if out.Running || out.ExitCode == nil {
+			live = append(live, id)
+			continue
+		}
+		// Already gone. Reaping is bookkeeping at this point, not a kill.
+		if _, err := sandboxStopBackground(ctx, id); err != nil {
+			log.Printf("[agent] could not reap the exited background job %s: %v", id, err)
+			live = append(live, id)
+			continue
+		}
+		delete(ctx.BackgroundJobs, id)
+		clearWorkspaceHazard(ctx)
+		reaped = true
+		log.Printf("[agent] background job %s had already exited — reaped at completion", id)
+	}
+	if reaped {
+		// A job can change a file on its way out. Rehash every tracked path:
+		// unchanged files keep their verdicts, changed ones lose them.
+		invalidateTrackedValidation(ctx)
+	}
+	return live
 }
