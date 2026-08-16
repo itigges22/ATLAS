@@ -827,9 +827,11 @@ func TestDirectMutatorOutcomeTable(t *testing.T) {
 // dumps the transcript so the identical fixture can be run on the parent tree
 // and diffed; the hash below is that transcript, pinned.
 //
-// Verified by running this fixture unchanged on the parent commit 5676e49:
-// the same 52 events, 3795 bytes, same sha256.
-const ledgerLoopTranscriptHash = "c56a9406a0491e6572e6a1427f425d897d0ea21bf93e0e3974f133b36576cb80"
+// Verified against parent 5676e49 when Phase 3A landed: the same 52 events,
+// byte-identical. Phase 2B changed exactly ONE of those lines -- the terminal
+// gained the additive `status` and `reason` keys -- and the other 51 are still
+// byte-for-byte the parent's, with the terminal's own `summary` unchanged.
+const ledgerLoopTranscriptHash = "681a6ecf3835b6617c862553ca781a0e007d8d37fecdf6e31e5f1f51586653ca"
 
 // prompt_tokens is elided for a fixture reason rather than a timing one: the
 // workspace path is part of the system prompt and t.TempDir() varies in

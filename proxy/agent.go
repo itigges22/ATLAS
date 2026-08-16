@@ -569,6 +569,14 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 		// sees EvtDone (overall finish) and the agent row is stuck in
 		// Running() forever — visually misleading after the turn ended.
 		dur := time.Since(loopStart).Milliseconds()
+		// The broker said "success": true on every terminal, including every
+		// stop. It now reports the session's actual outcome, from the same
+		// field the SSE terminal used, so the two streams cannot disagree.
+		// `success` keeps its key and its type for existing readers.
+		status := ctx.TerminalStatus
+		if !status.Classified() {
+			status = TerminalIncomplete
+		}
 		Emit(Envelope{
 			EventID:    NewEventID(),
 			Timestamp:  float64(time.Now().UnixNano()) / 1e9,
@@ -576,7 +584,9 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			Stage:      "agent",
 			DurationMS: dur,
 			Payload: map[string]interface{}{
-				"success":       true,
+				"success":       status.Completed(),
+				"status":        string(status),
+				"reason":        ctx.TerminalReason,
 				"total_tokens":  ctx.TotalTokens,
 				"fenced_calls":  ctx.FencedCalls,
 				"fenced_tokens": ctx.FencedTokens,
@@ -589,7 +599,9 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			Stage:      "agent",
 			DurationMS: dur,
 			Payload: map[string]interface{}{
-				"success":           true,
+				"success":           status.Completed(),
+				"status":            string(status),
+				"reason":            ctx.TerminalReason,
 				"total_duration_ms": dur,
 				"total_tokens":      ctx.TotalTokens,
 				"fenced_calls":      ctx.FencedCalls,
@@ -630,7 +642,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	// TTL, so this is one probe per session at most.
 	if problem := verifyWorkspaceAlignment(ctx); problem != "" {
 		log.Printf("[agent] refusing to start — proxy and sandbox workspaces are not aligned")
-		ctx.Stream("done", map[string]string{"summary": problem})
+		emitTerminal(ctx, nil, TerminalFailed, "workspace_misaligned", problem)
 		return nil
 	}
 
@@ -758,18 +770,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	// endStream answers the outstanding call before the summary, so the
 	// invariant holds at every exit rather than at each one that
 	// remembered to.
-	endStream := func(summary string) {
-		if st.pendingToolCall != "" {
-			ctx.Stream("tool_result", map[string]interface{}{
-				"tool":    st.pendingToolCall,
-				"success": false,
-				"data":    json.RawMessage("null"),
-				"error":   "not run — the session stopped before this call executed",
-				"elapsed": "0s",
-			})
-			st.pendingToolCall = ""
-		}
-		ctx.Stream("done", map[string]string{"summary": summary})
+	endStream := func(status TerminalStatus, reason, summary string) {
+		emitTerminal(ctx, st, status, reason, summary)
 	}
 
 	for turn := 0; ctx.MaxTurns <= 0 || turn < ctx.MaxTurns; turn++ {
@@ -882,9 +884,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// 400 and the user got silence. Every other exit in this loop
 			// authors a `done`; this one has to as well, or the failure is
 			// invisible to anything rendering the stream.
-			ctx.Stream("done", map[string]string{
-				"summary": inferenceFailureSummary(err, st.madeProductiveChange) + liveBackgroundJobNote(ctx),
-			})
+			emitTerminal(ctx, st, TerminalFailed, "inference_failed",
+				inferenceFailureSummary(err, st.madeProductiveChange)+liveBackgroundJobNote(ctx))
 			return fmt.Errorf("LLM call failed on turn %d: %w", turn, err)
 		}
 		ctx.TotalTokens += tokens
@@ -942,9 +943,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						log.Printf("[agent] salvaged text at turn %d with nothing written — saying so", turn)
 						salvageSummary = nothingWrittenSummary(salvageSummary)
 					}
-					ctx.Stream("done", map[string]string{
-						"summary": salvageSummary + liveBackgroundJobNote(ctx),
-					})
+					emitTerminal(ctx, st, TerminalIncomplete, "text_instead_of_work",
+						salvageSummary+liveBackgroundJobNote(ctx))
 					return nil
 				}
 			}
@@ -980,7 +980,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						"instead of writing code that reads it. Ask again and say explicitly " +
 						"that the data file should be read at runtime, not rewritten."
 				}
-				ctx.Stream("done", map[string]string{"summary": summary})
+				emitTerminal(ctx, st, TerminalStopped, "unusable_model_output", summary)
 				return nil
 			}
 			continue
@@ -1024,9 +1024,14 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				log.Printf("[agent] done at turn %d with nothing written — saying so", turn)
 				summary = nothingWrittenSummary(summary)
 			}
-			ctx.Stream("done", map[string]string{
-				"summary": summary + liveBackgroundJobNote(ctx),
-			})
+			// A model saying it is finished is a claim, not a demonstration.
+			status, reason := TerminalIncomplete, ""
+			if ok, why := terminalCompletionAllowed(ctx, st.expectedOutputs); ok {
+				status, reason = TerminalCompleted, why
+			} else {
+				reason = why
+			}
+			emitTerminal(ctx, st, status, reason, summary+liveBackgroundJobNote(ctx))
 			return nil
 
 		case "text":
@@ -1055,7 +1060,13 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				log.Printf("[agent] text exit at turn %d with nothing written — saying so", turn)
 				textSummary = nothingWrittenSummary("")
 			}
-			ctx.Stream("done", map[string]string{"summary": textSummary})
+			// A text reply carries no file obligation of its own; when the
+			// run also wrote something, the same demonstration is required.
+			textStatus, textReason := TerminalCompleted, "text_reply"
+			if ok, why := terminalCompletionAllowed(ctx, st.expectedOutputs); !ok {
+				textStatus, textReason = TerminalIncomplete, why
+			}
+			emitTerminal(ctx, st, textStatus, textReason, textSummary)
 			return nil
 
 		case "tool_call":
@@ -1114,7 +1125,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					st.bounceToolCall(ctx, parsed.Name, "Your output was truncated — the content is too long for a single tool call. For existing files, use edit_file with small targeted changes (replace specific functions or sections). For new files, keep them under 100 lines per write_file call.")
 					consecutiveErrors++
 					if consecutiveErrors >= 3 {
-						endStream("Stopped: content too large for tool calls. Try requesting smaller, targeted changes.")
+						endStream(TerminalStopped, "oversized_tool_content",
+							"Stopped: content too large for tool calls. Try requesting smaller, targeted changes.")
 						return nil
 					}
 					continue
@@ -1432,7 +1444,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				if shouldStopForFailures(totalFailures, consecutiveErrors, ctx.RecentFailurePaths) {
 					log.Printf("[agent] breaking at turn %d: %d refused/failed calls, %d consecutive on %q",
 						turn, totalFailures, consecutiveErrors, p)
-					endStream(repeatedRefusalSummary(parsed.Name, p, st.madeProductiveChange) + liveBackgroundJobNote(ctx))
+					endStream(TerminalStopped, "repeated_refusal",
+						repeatedRefusalSummary(parsed.Name, p, st.madeProductiveChange)+liveBackgroundJobNote(ctx))
 					return nil
 				}
 				continue
@@ -1474,7 +1487,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				if shouldStopForFailures(totalFailures, consecutiveErrors, ctx.RecentFailurePaths) {
 					log.Printf("[agent] breaking at turn %d: %d refused/failed calls, %d consecutive on %q",
 						turn, totalFailures, consecutiveErrors, ctx.RecentFailurePaths[len(ctx.RecentFailurePaths)-1])
-					endStream(repeatedRefusalSummary(parsed.Name, failPath, st.madeProductiveChange) + liveBackgroundJobNote(ctx))
+					endStream(TerminalStopped, "repeated_refusal",
+						repeatedRefusalSummary(parsed.Name, failPath, st.madeProductiveChange)+liveBackgroundJobNote(ctx))
 					return nil
 				}
 				continue
@@ -1529,8 +1543,9 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						// a system action: no progress hint is set, no tool
 						// event is emitted, and the terminal stays stopped.
 						recovered := restoreSaferDeliverables(ctx)
-						endStream(repeatTerminalSummary(ctx, st.expectedOutputs,
-							st.madeProductiveChange, recovered))
+						endStream(TerminalStopped, "repeat_detector",
+							repeatTerminalSummary(ctx, st.expectedOutputs,
+								st.madeProductiveChange, recovered))
 						return nil
 					}
 				}
@@ -1678,10 +1693,12 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				// than ending the stream on a bare tool_result: a client has
 				// no way to tell a completed deletion from a dropped
 				// connection.
-				ctx.Stream("done", map[string]string{
-					"summary": "Done — the file operation completed. Nothing further was run." +
-						liveBackgroundJobNote(ctx),
-				})
+				// The file operation ran. Whether REMOVING the file was the
+				// task is not knowable here, so this never claims completion:
+				// a delete authorising a done is the pair-1 defect.
+				emitTerminal(ctx, st, TerminalIncomplete, "file_operation_no_task_intent",
+					"Done — the file operation completed. Nothing further was run."+
+						liveBackgroundJobNote(ctx))
 				return nil
 			}
 
@@ -1932,11 +1949,11 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					log.Printf("[agent] breaking: %d failed tool calls this run (ceiling %d) at turn %d (productive=%v)",
 						totalFailures, maxTotalFailures, turn, st.madeProductiveChange)
 					if st.madeProductiveChange {
-						ctx.Stream("done", map[string]string{"summary": unverifiedSummary(true,
-							"The run hit its failed-call ceiling before finishing.")})
+						emitTerminal(ctx, st, TerminalStopped, "failure_ceiling",
+							unverifiedSummary(true, "The run hit its failed-call ceiling before finishing."))
 					} else {
-						ctx.Stream("done", map[string]string{"summary": fmt.Sprintf(
-							"Stopped after %d failed tool calls with nothing landing on disk. The per-turn errors above say what was refused each time; the last one is the one to act on.", totalFailures)})
+						emitTerminal(ctx, st, TerminalStopped, "failure_ceiling", fmt.Sprintf(
+							"Stopped after %d failed tool calls with nothing landing on disk. The per-turn errors above say what was refused each time; the last one is the one to act on.", totalFailures))
 					}
 					return nil
 				}
@@ -1972,9 +1989,11 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						log.Printf("[agent] breaking error loop: %d consecutive failures on the same path %q at turn %d (productive=%v)",
 							consecutiveErrors, ctx.RecentFailurePaths[0], turn, st.madeProductiveChange)
 						if st.madeProductiveChange {
-							ctx.Stream("done", map[string]string{"summary": "Wrote your changes to disk; couldn't verify them automatically (the verification commands failed). Run them yourself to confirm — they're on disk."})
+							emitTerminal(ctx, st, TerminalStopped, "same_target_failures",
+								"Wrote your changes to disk; couldn't verify them automatically (the verification commands failed). Run them yourself to confirm — they're on disk.")
 						} else {
-							ctx.Stream("done", map[string]string{"summary": "Stopped after 3 tool failures on the same target with no successful changes. Common causes: the file you referenced isn't in the workspace, an empty path argument was passed, or a regex was malformed. Check the per-turn errors above, then try a more specific request (e.g. \"fix snake_game.py at line 95 — the curses bounds are wrong\")."})
+							emitTerminal(ctx, st, TerminalStopped, "same_target_failures",
+								"Stopped after 3 tool failures on the same target with no successful changes. Common causes: the file you referenced isn't in the workspace, an empty path argument was passed, or a regex was malformed. Check the per-turn errors above, then try a more specific request (e.g. \"fix snake_game.py at line 95 — the curses bounds are wrong\").")
 						}
 						return nil
 					}
@@ -2200,9 +2219,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	// form work?": four searches, cap reached, zero bytes back. Every other
 	// loop exit authors a summary; this one has to as well.
 	log.Printf("[agent] max turns (%d) exceeded for %s — returning what the run found", ctx.MaxTurns, ctx.Tier)
-	ctx.Stream("done", map[string]string{
-		"summary": outOfTurnsSummary(ctx, st.madeProductiveChange) + liveBackgroundJobNote(ctx),
-	})
+	emitTerminal(ctx, st, TerminalIncomplete, "turn_budget_exhausted",
+		outOfTurnsSummary(ctx, st.madeProductiveChange)+liveBackgroundJobNote(ctx))
 	return nil
 }
 
@@ -5660,4 +5678,121 @@ func recoverTruncatedText(raw string) (string, bool) {
 		return "", false
 	}
 	return out, true
+}
+
+// --- Phase 2B: the one terminal emitter -------------------------------------
+//
+// Thirteen producers each built their own done payload, so "did this run
+// finish?" was answered by matching English in `summary`. A caller could not
+// tell a completion from a loop-breaker without knowing every phrase the
+// proxy might use, and the broker's own done envelope said "success": true
+// unconditionally -- including for every stop.
+//
+// Every terminal now goes through here. It fires at most once per session:
+// a timeout racing a completion produces one event, not two, and whichever
+// arrives first is the outcome.
+func emitTerminal(ctx *AgentContext, st *runState, status TerminalStatus, reason, summary string) {
+	if !status.Classified() {
+		// A producer that did not name its outcome does not get to imply one.
+		status, reason = TerminalIncomplete, "unclassified_producer"
+	}
+	ctx.terminalOnce.Do(func() {
+		ctx.TerminalStatus = status
+		ctx.TerminalReason = reason
+		if st != nil && st.pendingToolCall != "" {
+			// The outstanding call is answered first, so tool_call and
+			// tool_result stay balanced at every exit.
+			ctx.Stream("tool_result", map[string]interface{}{
+				"tool":    st.pendingToolCall,
+				"success": false,
+				"data":    json.RawMessage("null"),
+				"error":   "not run — the session stopped before this call executed",
+				"elapsed": "0s",
+			})
+			st.pendingToolCall = ""
+		}
+		// `summary` keeps its exact legacy meaning and position. `status` and
+		// `reason` are additive, so a consumer that never learned about them
+		// reads the same event it always did.
+		ctx.Stream("done", map[string]string{
+			"summary": summary,
+			"status":  string(status),
+			"reason":  reason,
+		})
+	})
+}
+
+// terminalCompletionAllowed decides whether a model-issued `done` may be
+// called completed. It answers from the workspace as it is right now, never
+// from the run's history.
+//
+// The pair-1 defect this exists to prevent: a run deleted the deliverable and
+// the delete's success authorised the completion. Existence is not validity,
+// an earlier successful write is not the current bytes, and a removal is not
+// an achievement unless removal was the task -- which the proxy cannot
+// establish, so it does not pretend to.
+func terminalCompletionAllowed(ctx *AgentContext, expected []string) (bool, string) {
+	if sessionHasTombstones(ctx) {
+		// Something was deleted or moved. Whether that WAS the task is not
+		// knowable here, so completion is not claimable here.
+		return false, "delete_intent_unestablished"
+	}
+	paths := declaredOrOwnedDeliverables(ctx, expected)
+	if len(paths) == 0 {
+		// Nothing declared and nothing written: there is no file obligation
+		// to demonstrate.
+		return true, "no_file_obligation"
+	}
+	if deliverablesDemonstrablyValid(ctx, paths) {
+		return true, "deliverables_demonstrated"
+	}
+	return false, "deliverables_not_demonstrated"
+}
+
+// declaredOrOwnedDeliverables is the union of what the run said it would
+// produce and what it actually wrote, minus anything deliberately removed.
+// Sorted so a summary and a decision never disagree on order.
+func declaredOrOwnedDeliverables(ctx *AgentContext, expected []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(rel string) {
+		if rel == "" || seen[rel] {
+			return
+		}
+		seen[rel] = true
+		out = append(out, rel)
+	}
+	for _, rel := range expected {
+		add(rel)
+	}
+	if ctx != nil {
+		ctx.LedgerMu.Lock()
+		for key, d := range ctx.Ledger {
+			if d.Tombstoned || d.Generation == 0 {
+				continue
+			}
+			rel := key
+			if r, err := filepath.Rel(ctx.WorkingDir, key); err == nil && !strings.HasPrefix(r, "..") {
+				rel = r
+			}
+			add(rel)
+		}
+		ctx.LedgerMu.Unlock()
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sessionHasTombstones(ctx *AgentContext) bool {
+	if ctx == nil {
+		return false
+	}
+	ctx.LedgerMu.Lock()
+	defer ctx.LedgerMu.Unlock()
+	for _, d := range ctx.Ledger {
+		if d.Tombstoned {
+			return true
+		}
+	}
+	return false
 }

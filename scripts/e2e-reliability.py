@@ -832,6 +832,11 @@ def _file_parses(path: Path) -> tuple[bool, str]:
 # same omission has now been found in the lens breaker, the worked-example
 # generator, the productive-change counter, the write-gate chain, and here:
 # a set of tool names that nobody updates when a tool is added.
+# Terminal outcomes a `done` payload may carry (proxy/types.go owns the
+# vocabulary). Kept literal here because this script runs standalone against a
+# deployed proxy and must not import the CLI package.
+TERMINAL_STATUSES = ("completed", "incomplete", "stopped", "timed_out", "failed")
+
 WRITE_TOOLS = {"write_file", "edit_file", "structural_edit", "delete_file",
                "move_file", "insert_after", "replace_lines"}
 
@@ -1011,6 +1016,14 @@ def h4_gate_escape(s: Session, task: Task = None) -> list[str]:
         return []
     if not s.of_type("done"):
         return []
+    # A classified terminal answers this directly: anything but "completed"
+    # is the run saying it did not finish, which is the opposite of escaping.
+    # Absent or unrecognised falls back to the prose match below rather than
+    # being read as completion.
+    for e in s.of_type("done"):
+        raw = (e.get("data") or {}).get("status")
+        if isinstance(raw, str) and raw in TERMINAL_STATUSES and raw != "completed":
+            return []
     # The breaker ending honestly is not an escape — it says it stopped.
     summary = " ".join(str((e.get("data") or {}).get("summary") or "")
                        for e in s.of_type("done"))

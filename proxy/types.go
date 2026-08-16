@@ -712,6 +712,50 @@ const (
 	maxLedgerReadBytes        = 8 * 1024 * 1024
 )
 
+// TerminalStatus is what a session's single terminal event says happened. It
+// exists because `summary` is prose: every consumer that needed to know
+// whether a run finished was matching on English, and "Stopped: ..." and
+// "Made your change" are not a contract.
+//
+// The zero value is TerminalUnknown, and every consumer must read it -- along
+// with an absent or unrecognised value -- as incomplete. Failing closed is the
+// whole point: a run whose outcome cannot be named did not finish.
+type TerminalStatus string
+
+const (
+	TerminalUnknown    TerminalStatus = "" // unclassified (zero value)
+	TerminalCompleted  TerminalStatus = "completed"
+	TerminalIncomplete TerminalStatus = "incomplete"
+	TerminalStopped    TerminalStatus = "stopped"
+	TerminalTimedOut   TerminalStatus = "timed_out"
+	TerminalFailed     TerminalStatus = "failed"
+)
+
+// Completed is true for exactly TerminalCompleted. Comparing against the
+// literal at a call site is what lets an unknown or future value read as
+// success.
+func (t TerminalStatus) Completed() bool { return t == TerminalCompleted }
+
+// Classified reports whether a producer actually named the outcome.
+func (t TerminalStatus) Classified() bool {
+	switch t {
+	case TerminalCompleted, TerminalIncomplete, TerminalStopped,
+		TerminalTimedOut, TerminalFailed:
+		return true
+	}
+	return false
+}
+
+// NormalizeTerminalStatus is what a CONSUMER applies to whatever arrived.
+// Absent, malformed, unknown, or from a future producer all become incomplete,
+// never completed.
+func NormalizeTerminalStatus(raw string) TerminalStatus {
+	if s := TerminalStatus(raw); s.Classified() {
+		return s
+	}
+	return TerminalIncomplete
+}
+
 // AgentContext holds all state for a single agent loop execution.
 type AgentContext struct {
 	// Configuration
@@ -853,6 +897,12 @@ type AgentContext struct {
 	// turn. Keyed by path so one file's failures cannot exhaust another's
 	// allowance. A successful resolution clears the entry.
 	FencedFailures map[string]int
+
+	// The session's single terminal outcome, set by the one emitter. Read by
+	// the deferred broker envelope so the two cannot disagree.
+	TerminalStatus TerminalStatus
+	TerminalReason string
+	terminalOnce   sync.Once
 
 	// Ledger is the observational record of what this session has done to
 	// each declared/session-owned deliverable, keyed by CANONICAL

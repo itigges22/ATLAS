@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -1228,9 +1229,19 @@ func TestCorruptedDeliverableIsRestoredAtTheRepeatTerminal(t *testing.T) {
 	if !strings.Contains(summary, rel) {
 		t.Errorf("the disclosure does not name the file it recovered:\n%s", summary)
 	}
-	// Recovery is not completion.
-	if !strings.HasPrefix(strings.TrimPrefix(summary, `{"summary":"`), "Stopped:") {
-		t.Errorf("terminal stopped being a stop:\n%s", summary)
+	// Recovery is not completion, in the prose and in the contract.
+	var term struct{ Summary, Status, Reason string }
+	if err := json.Unmarshal([]byte(summary), &term); err != nil {
+		t.Fatalf("terminal payload is not decodable: %v", err)
+	}
+	if !strings.HasPrefix(term.Summary, "Stopped:") {
+		t.Errorf("terminal stopped being a stop:\n%s", term.Summary)
+	}
+	if term.Status != "stopped" {
+		t.Errorf("a restored run reported status %q", term.Status)
+	}
+	if term.Reason != "repeat_detector" {
+		t.Errorf("terminal reason = %q", term.Reason)
 	}
 	for _, claim := range []string{"Made your change", "the change is on disk"} {
 		if strings.Contains(summary, claim) {
@@ -1286,9 +1297,229 @@ func TestRestorationIsWiredToExactlyOneTerminal(t *testing.T) {
 	if !strings.Contains(body[i:min(len(body), i+400)], "repeatTerminalSummary(") {
 		t.Error("restoration is no longer adjacent to the repeat-detector terminal")
 	}
-	// The other done emitters must not have gained it.
-	if n := strings.Count(body, `Stream("done"`); n < 12 {
-		t.Errorf("found %d done emitters, expected the full set; if one was "+
-			"removed, re-check this scope deliberately", n)
+	// The other terminal producers must not have gained it. They all route
+	// through the one emitter now, so the count to hold is theirs.
+	if n := strings.Count(body, "emitTerminal("); n < 13 {
+		t.Errorf("found %d emitTerminal call sites, expected the full set of "+
+			"producers; if one was removed, re-check this scope deliberately", n)
 	}
+	if n := strings.Count(body, `Stream("done"`); n != 1 {
+		t.Errorf("found %d direct done payloads, want exactly 1 (the emitter)", n)
+	}
+}
+
+// --- Phase 2B commit A: the atomic terminal contract ------------------------
+
+// Every producer routes through the one emitter, and the emitter is the only
+// place a done payload is built. A half-migrated producer would emit a
+// terminal with no status, which consumers must read as incomplete -- so the
+// defect would be invisible in behaviour and visible only here.
+func TestEveryTerminalProducerGoesThroughTheOneEmitter(t *testing.T) {
+	src, err := os.ReadFile("agent.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	if n := strings.Count(body, `Stream("done"`); n != 1 {
+		t.Errorf("%d direct done payloads outside the emitter, want 0", n-1)
+	}
+	// 13 producers: 9 direct plus the 4 that share endStream.
+	producers := strings.Count(body, "emitTerminal(") - 1 // the definition
+	if producers < 13 {
+		t.Errorf("found %d terminal producers, want at least 13; a producer "+
+			"that stopped emitting is a session that ends in silence", producers)
+	}
+	for _, reason := range []string{
+		"workspace_misaligned", "inference_failed", "text_instead_of_work",
+		"unusable_model_output", "file_operation_no_task_intent",
+		"failure_ceiling", "same_target_failures", "turn_budget_exhausted",
+		"oversized_tool_content", "repeated_refusal", "repeat_detector",
+	} {
+		if !strings.Contains(body, `"`+reason+`"`) {
+			t.Errorf("terminal reason %q is gone; reasons are a stable "+
+				"machine-readable contract", reason)
+		}
+	}
+}
+
+func TestUnclassifiedStatusFailsClosedAtTheEmitter(t *testing.T) {
+	for _, raw := range []string{"", "COMPLETED", "done", "success", "ok", "finished"} {
+		if NormalizeTerminalStatus(raw).Completed() {
+			t.Errorf("consumer read %q as completed", raw)
+		}
+		if NormalizeTerminalStatus(raw) != TerminalIncomplete {
+			t.Errorf("consumer read %q as %q, want incomplete",
+				raw, NormalizeTerminalStatus(raw))
+		}
+	}
+	if !NormalizeTerminalStatus("completed").Completed() {
+		t.Error("a real completion stopped being one")
+	}
+
+	// A producer that names nothing must not imply an outcome.
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	var got map[string]string
+	ctx.StreamFn = func(eventType string, data interface{}) {
+		if eventType == "done" {
+			b, _ := json.Marshal(data)
+			json.Unmarshal(b, &got)
+		}
+	}
+	emitTerminal(ctx, nil, TerminalStatus("nonsense"), "made_up", "whatever")
+	if got["status"] != string(TerminalIncomplete) {
+		t.Errorf("emitter accepted an unclassified status: %v", got)
+	}
+	if got["reason"] != "unclassified_producer" {
+		t.Errorf("reason = %q, want the producer defect named", got["reason"])
+	}
+}
+
+// Exactly one terminal per session, whatever races.
+func TestOnlyOneTerminalEventPerSession(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	var mu sync.Mutex
+	var terminals []map[string]string
+	ctx.StreamFn = func(eventType string, data interface{}) {
+		if eventType != "done" {
+			return
+		}
+		b, _ := json.Marshal(data)
+		var m map[string]string
+		json.Unmarshal(b, &m)
+		mu.Lock()
+		terminals = append(terminals, m)
+		mu.Unlock()
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if i%2 == 0 {
+				emitTerminal(ctx, nil, TerminalTimedOut, "work_deadline", "timed out")
+			} else {
+				emitTerminal(ctx, nil, TerminalCompleted, "deliverables_demonstrated", "done")
+			}
+		}(i)
+	}
+	wg.Wait()
+	if len(terminals) != 1 {
+		t.Fatalf("%d terminal events for one session", len(terminals))
+	}
+	// Whichever won, the recorded outcome and the emitted one agree.
+	if terminals[0]["status"] != string(ctx.TerminalStatus) {
+		t.Errorf("emitted %q but recorded %q", terminals[0]["status"], ctx.TerminalStatus)
+	}
+}
+
+// The legacy key keeps its exact meaning and position, so a consumer that
+// never learned about status reads what it always read.
+func TestLegacyConsumersStillSeeSummaryOnly(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	var raw string
+	ctx.StreamFn = func(eventType string, data interface{}) {
+		if eventType == "done" {
+			b, _ := json.Marshal(data)
+			raw = string(b)
+		}
+	}
+	emitTerminal(ctx, nil, TerminalStopped, "repeat_detector", "Stopped: because.")
+
+	var legacy struct {
+		Summary string `json:"summary"`
+	}
+	if err := json.Unmarshal([]byte(raw), &legacy); err != nil {
+		t.Fatalf("a legacy decoder cannot read the payload: %v", err)
+	}
+	if legacy.Summary != "Stopped: because." {
+		t.Errorf("summary changed for legacy readers: %q", legacy.Summary)
+	}
+}
+
+// The completion rule, stated as the outcomes it must produce.
+func TestCompletionRequiresADemonstratedObligation(t *testing.T) {
+	newCtx := func(t *testing.T, syntaxValid bool) (*AgentContext, string) {
+		dir := t.TempDir()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !strings.HasSuffix(r.URL.Path, "/syntax-check") {
+				http.Error(w, "unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{"valid": syntaxValid})
+		}))
+		t.Cleanup(srv.Close)
+		ctx := NewAgentContext(dir, Tier2Medium)
+		ctx.SandboxURL = srv.URL
+		ctx.PermissionMode = PermissionYolo
+		ctx.StreamFn = func(string, interface{}) {}
+		return ctx, dir
+	}
+
+	t.Run("nothing declared and nothing written", func(t *testing.T) {
+		ctx, _ := newCtx(t, true)
+		ok, reason := terminalCompletionAllowed(ctx, nil)
+		if !ok || reason != "no_file_obligation" {
+			t.Errorf("ok=%v reason=%q", ok, reason)
+		}
+	})
+
+	t.Run("declared deliverable that parses", func(t *testing.T) {
+		ctx, dir := newCtx(t, true)
+		os.WriteFile(filepath.Join(dir, "solve.py"), []byte("A = 1\n"), 0o644)
+		if ok, _ := terminalCompletionAllowed(ctx, []string{"solve.py"}); !ok {
+			t.Error("a demonstrated deliverable was refused")
+		}
+	})
+
+	t.Run("declared deliverable that does not parse", func(t *testing.T) {
+		ctx, dir := newCtx(t, false)
+		os.WriteFile(filepath.Join(dir, "solve.py"), []byte("def f(\n"), 0o644)
+		ok, reason := terminalCompletionAllowed(ctx, []string{"solve.py"})
+		if ok {
+			t.Error("invalid bytes authorized completion")
+		}
+		if reason != "deliverables_not_demonstrated" {
+			t.Errorf("reason = %q", reason)
+		}
+	})
+
+	t.Run("declared deliverable that is not there", func(t *testing.T) {
+		ctx, _ := newCtx(t, true)
+		if ok, _ := terminalCompletionAllowed(ctx, []string{"missing.py"}); ok {
+			t.Error("a missing deliverable authorized completion")
+		}
+	})
+
+	t.Run("validation unavailable", func(t *testing.T) {
+		ctx, dir := newCtx(t, true)
+		ctx.SandboxURL = "http://127.0.0.1:1"
+		os.WriteFile(filepath.Join(dir, "solve.py"), []byte("A = 1\n"), 0o644)
+		if ok, _ := terminalCompletionAllowed(ctx, []string{"solve.py"}); ok {
+			t.Error("an unknown verdict authorized completion")
+		}
+	})
+
+	t.Run("a file the session wrote but never declared", func(t *testing.T) {
+		ctx, _ := newCtx(t, false)
+		args, _ := json.Marshal(map[string]string{"path": "side.py", "content": "def f(\n"})
+		executeToolCall("write_file", args, ctx)
+		if ok, _ := terminalCompletionAllowed(ctx, nil); ok {
+			t.Error("an undeclared broken file the run wrote authorized completion")
+		}
+	})
+
+	t.Run("deleting the deliverable cannot authorize completion", func(t *testing.T) {
+		ctx, _ := newCtx(t, true)
+		w, _ := json.Marshal(map[string]string{"path": "solve.py", "content": "A = 1\n"})
+		executeToolCall("write_file", w, ctx)
+		d, _ := json.Marshal(map[string]string{"path": "solve.py"})
+		executeToolCall("delete_file", d, ctx)
+		ok, reason := terminalCompletionAllowed(ctx, []string{"solve.py"})
+		if ok {
+			t.Fatal("removing the deliverable authorized completion — pair-1 defect")
+		}
+		if reason != "delete_intent_unestablished" {
+			t.Errorf("reason = %q, want the delete intent named", reason)
+		}
+	})
 }
