@@ -1680,3 +1680,280 @@ func TestValidInlineWriteIsByteIdentical(t *testing.T) {
 		t.Error("the ledger does not describe the inline write")
 	}
 }
+
+// --- Phase 4B-M1: the signature describes what the model sent ---------------
+//
+// Fenced resolution rewrites parsed.Args with the fetched file body before the
+// repetition detector fingerprints it. The model's call is byte-identical every
+// turn; the bytes the detector sees are different every turn. In the frozen
+// run that blindness is why debounce2 sent the same write_file seven times and
+// reached the 600 s harness cap with no intervention at all.
+//
+// m1Stub answers every fenced sub-call with a DIFFERENT body, which is what
+// makes the two builds diverge: same intent, different resolved bytes.
+func m1Stub(t *testing.T, dir string, turns, fences *int, script func(int) map[string]interface{}) *httptest.Server {
+	t.Helper()
+	var mu sync.Mutex
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
+			return
+		case strings.HasSuffix(r.URL.Path, "/execute"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			if strings.Contains(in.Code, ".atlas-mount-probe") {
+				b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": true, "stdout": string(b), "exit_code": 0})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "stdout": "", "exit_code": 0})
+			return
+		case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
+			http.NotFound(w, r)
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		if strings.Contains(string(raw), "single fenced block") {
+			mu.Lock()
+			n := *fences
+			*fences++
+			mu.Unlock()
+			// A different body every time — the model iterating on the file.
+			body := fmt.Sprintf("```python\nVALUE = %d\n%s\n```", n, strings.Repeat("# pad\n", n))
+			d, _ := json.Marshal(map[string]interface{}{
+				"choices": []map[string]interface{}{
+					{"delta": map[string]string{"content": body}}}})
+			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+			return
+		}
+		mu.Lock()
+		i := *turns
+		*turns++
+		mu.Unlock()
+		call, _ := json.Marshal(script(i))
+		d, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"delta": map[string]string{"content": string(call)}}}})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+	}))
+}
+
+func m1Ctx(t *testing.T, dir, url string, census map[string]int, terminal map[string]string) *AgentContext {
+	t.Helper()
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = url, url, url
+	ctx.PermissionMode = PermissionYolo
+	ctx.MaxTurns = 14
+	var mu sync.Mutex
+	ctx.StreamFn = func(eventType string, data interface{}) {
+		mu.Lock()
+		defer mu.Unlock()
+		census[eventType]++
+		if eventType == "done" {
+			b, _ := json.Marshal(data)
+			var m map[string]string
+			json.Unmarshal(b, &m)
+			for k, v := range m {
+				terminal[k] = v
+			}
+		}
+	}
+	return ctx
+}
+
+// Seven byte-identical raw calls, seven different fetched bodies. The parent
+// records seven distinct signatures and intervenes zero times; here the intent
+// is one signature and the existing threshold is reached.
+func TestIdenticalFencedIntentIsOneSignature(t *testing.T) {
+	dir := t.TempDir()
+	turns, fences := 0, 0
+	srv := m1Stub(t, dir, &turns, &fences, func(i int) map[string]interface{} {
+		return map[string]interface{}{
+			"type": "tool_call", "name": "write_file",
+			"args": map[string]string{"path": "solve.py", "content": "@fenced"}}
+	})
+	defer srv.Close()
+
+	census, terminal := map[string]int{}, map[string]string{}
+	ctx := m1Ctx(t, dir, srv.URL, census, terminal)
+	if err := runAgentLoop(ctx, "Write solve.py."); err != nil {
+		t.Fatalf("agent loop error: %v", err)
+	}
+
+	t.Logf("turns=%d fenced=%d interventions=%d status=%q reason=%q",
+		turns, fences, census["agent_repeat_intervention"],
+		terminal["status"], terminal["reason"])
+
+	if census["agent_repeat_intervention"] < 2 {
+		t.Errorf("%d repeat interventions across %d identical calls; the detector "+
+			"is still reading the resolved bytes rather than the model's call",
+			census["agent_repeat_intervention"], turns)
+	}
+	if turns > 10 {
+		t.Errorf("%d turns before the breaker engaged", turns)
+	}
+	// Requirement 6: the fetched bytes still did their job.
+	got, err := os.ReadFile(filepath.Join(dir, "solve.py"))
+	if err != nil {
+		t.Fatalf("the resolved file never landed: %v", err)
+	}
+	if !strings.HasPrefix(string(got), "VALUE = ") {
+		t.Errorf("disk does not hold a fetched body: %q", got)
+	}
+	d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
+	if d == nil || d.CurrentHash != hashBytes(got) {
+		t.Error("the ledger does not describe the bytes on disk")
+	}
+	// Requirement 8: the terminal contract is untouched.
+	if census["done"] != 1 {
+		t.Errorf("%d terminal events", census["done"])
+	}
+	if NormalizeTerminalStatus(terminal["status"]).Completed() {
+		t.Errorf("a repeat-broken run reported %q", terminal["status"])
+	}
+	if census["tool_call"] != census["tool_result"] {
+		t.Errorf("call/result invariant broken: %d vs %d",
+			census["tool_call"], census["tool_result"])
+	}
+}
+
+// Spelling the same target two ways must not buy a fresh budget.
+func TestCanonicalSpellingsShareTheIntentSignature(t *testing.T) {
+	dir := t.TempDir()
+	turns, fences := 0, 0
+	spellings := []string{"solve.py", "./solve.py", "solve.py", "./solve.py"}
+	srv := m1Stub(t, dir, &turns, &fences, func(i int) map[string]interface{} {
+		return map[string]interface{}{
+			"type": "tool_call", "name": "write_file",
+			"args": map[string]string{
+				"path": spellings[i%len(spellings)], "content": "@fenced"}}
+	})
+	defer srv.Close()
+
+	census, terminal := map[string]int{}, map[string]string{}
+	ctx := m1Ctx(t, dir, srv.URL, census, terminal)
+	if err := runAgentLoop(ctx, "Write solve.py."); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("turns=%d interventions=%d", turns, census["agent_repeat_intervention"])
+	if census["agent_repeat_intervention"] < 2 {
+		t.Errorf("alternating spellings evaded repetition tracking (%d interventions in %d turns)",
+			census["agent_repeat_intervention"], turns)
+	}
+}
+
+// Two different files are two different problems and keep their own budgets.
+func TestDifferentFencedTargetsStayIndependent(t *testing.T) {
+	dir := t.TempDir()
+	turns, fences := 0, 0
+	paths := []string{"a.py", "b.py", "c.py", "d.py", "e.py", "f.py"}
+	srv := m1Stub(t, dir, &turns, &fences, func(i int) map[string]interface{} {
+		if i >= len(paths) {
+			return map[string]interface{}{"type": "done", "summary": "wrote them"}
+		}
+		return map[string]interface{}{
+			"type": "tool_call", "name": "write_file",
+			"args": map[string]string{"path": paths[i], "content": "@fenced"}}
+	})
+	defer srv.Close()
+
+	census, terminal := map[string]int{}, map[string]string{}
+	ctx := m1Ctx(t, dir, srv.URL, census, terminal)
+	if err := runAgentLoop(ctx, "Write six files."); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("turns=%d interventions=%d status=%q reason=%q summary=%.120s",
+		turns, census["agent_repeat_intervention"], terminal["status"],
+		terminal["reason"], terminal["summary"])
+	if census["agent_repeat_intervention"] != 0 {
+		t.Errorf("%d interventions for six distinct targets", census["agent_repeat_intervention"])
+	}
+	// Not every file lands: once a.py and b.py exist, the sibling-pattern hint
+	// starts asking the model to read one before creating another. That guard
+	// is unrelated to the signature, so this checks only what M1 owns — the
+	// files that DID land hold their own fetched body, and no two targets
+	// collided into one budget.
+	landed := 0
+	for _, p := range paths {
+		b, err := os.ReadFile(filepath.Join(dir, p))
+		if err != nil {
+			continue
+		}
+		landed++
+		if !strings.HasPrefix(string(b), "VALUE = ") {
+			t.Errorf("%s does not hold a fetched body: %q", p, b)
+		}
+	}
+	if landed < 2 {
+		t.Fatalf("only %d of the distinct targets landed; the fixture proves nothing", landed)
+	}
+}
+
+// A model genuinely revising a file inline must not be read as repetition.
+func TestMateriallyDifferentInlineWritesAreNotRepetition(t *testing.T) {
+	dir := t.TempDir()
+	turns, fences := 0, 0
+	srv := m1Stub(t, dir, &turns, &fences, func(i int) map[string]interface{} {
+		if i >= 6 {
+			return map[string]interface{}{"type": "done", "summary": "done revising"}
+		}
+		body := fmt.Sprintf("def solve():\n    total = %d\n    return total\n", i*7+1)
+		return map[string]interface{}{
+			"type": "tool_call", "name": "write_file",
+			"args": map[string]string{"path": "solve.py", "content": body}}
+	})
+	defer srv.Close()
+
+	census, terminal := map[string]int{}, map[string]string{}
+	ctx := m1Ctx(t, dir, srv.URL, census, terminal)
+	if err := runAgentLoop(ctx, "Revise solve.py."); err != nil {
+		t.Fatal(err)
+	}
+	if fences != 0 {
+		t.Errorf("an inline write opened the fenced channel %d times", fences)
+	}
+	if census["agent_repeat_intervention"] != 0 {
+		t.Errorf("%d interventions for six materially different revisions",
+			census["agent_repeat_intervention"])
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "solve.py"))
+	if !strings.Contains(string(got), "total = 36") {
+		t.Errorf("the last revision did not land: %q", got)
+	}
+}
+
+// The signature is intent-only, so a call the preflight refuses records
+// nothing and starts nothing.
+func TestMalformedIntentRecordsNoSignatureAndStartsNoFetch(t *testing.T) {
+	dir := t.TempDir()
+	turns, fences := 0, 0
+	srv := m1Stub(t, dir, &turns, &fences, func(i int) map[string]interface{} {
+		return map[string]interface{}{
+			"type": "tool_call", "name": "write_file",
+			"args": map[string]string{"content": "@fenced"}}
+	})
+	defer srv.Close()
+
+	census, terminal := map[string]int{}, map[string]string{}
+	ctx := m1Ctx(t, dir, srv.URL, census, terminal)
+	if err := runAgentLoop(ctx, "Write it."); err != nil {
+		t.Fatal(err)
+	}
+	if fences != 0 {
+		t.Errorf("%d fenced generations for a call with no path", fences)
+	}
+	if len(ctx.FencedFailures) != 0 {
+		t.Errorf("allowance keys created: %v", ctx.FencedFailures)
+	}
+	if NormalizeTerminalStatus(terminal["status"]).Completed() {
+		t.Errorf("a run that wrote nothing reported %q", terminal["status"])
+	}
+}

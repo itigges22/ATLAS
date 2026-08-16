@@ -1085,6 +1085,21 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 		case "tool_call":
 			st.toolsRun++
 			st.pendingToolCall = parsed.Name
+			// The repetition detector has to judge what the MODEL sent, and
+			// `parsed.Args` does not stay that. Fenced resolution rewrites it
+			// with the fetched file body further down, so by the time the
+			// detector runs it is fingerprinting bytes the model never wrote --
+			// bytes that differ on every attempt, while the call itself is
+			// byte-identical each time. That is why the seven-turn @fenced
+			// loops in the frozen run reached the 600s cap with the detector
+			// silent: the instrument built to catch exactly that repetition
+			// was reading the output of the channel that resolved it.
+			//
+			// Snapshotting here, before anything can rewrite it, is the whole
+			// fix. The copy is used for the signature and nothing else: the
+			// fetched bytes still drive the mutation, the gates, the ledger
+			// and the write, exactly as before.
+			intentArgs := append(json.RawMessage(nil), parsed.Args...)
 			ctx.Stream("tool_call", map[string]interface{}{
 				"name": parsed.Name,
 				"args": json.RawMessage(parsed.Args),
@@ -1516,7 +1531,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				}
 				continue
 			}
-			if msg, _, repeating := recordToolCall(ctx, parsed.Name, parsed.Args); repeating || runawayWrite {
+			if msg, _, repeating := recordToolCall(ctx, parsed.Name, intentArgs); repeating || runawayWrite {
 				if runawayWrite && !repeating {
 					msg = "You have rewritten this file an unusually large number of times without converging. Stop rewriting the whole file — read the current on-disk version, make ONE targeted change with edit_file/structural_edit, or step back and reconsider the approach; if the task is satisfied, respond with done."
 					// The detector clears its window only when IT fires.

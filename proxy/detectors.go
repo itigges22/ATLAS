@@ -236,6 +236,19 @@ func structuralEditTarget(args json.RawMessage) (string, string) {
 	return in.Path, in.Selector
 }
 
+// signaturePath collapses the spellings of one target so a rename of the
+// STRING cannot buy a fresh repetition budget: `solve.py` and `./solve.py` are
+// the same file to the loop and must be the same signature to the detector.
+// filepath.Clean is enough here -- the detector compares a session's calls with
+// each other, and every one of them was written by the same model against the
+// same working directory.
+func signaturePath(p string) string {
+	if p == "" {
+		return ""
+	}
+	return filepath.Clean(p)
+}
+
 func toolCallSignature(toolName string, args json.RawMessage) string {
 	// structural_edit is keyed on (path, selector) and deliberately ignores
 	// `content`. When a selector cannot carry the change the model is
@@ -248,13 +261,13 @@ func toolCallSignature(toolName string, args json.RawMessage) string {
 	// the failure cap with the model never told the selector was the problem.
 	if toolName == "structural_edit" {
 		if p, sel := structuralEditTarget(args); p != "" && sel != "" {
-			h := sha1.Sum([]byte(toolName + "|path:" + p + "|sel:" + sel))
+			h := sha1.Sum([]byte(toolName + "|path:" + signaturePath(p) + "|sel:" + sel))
 			return hex.EncodeToString(h[:])
 		}
 	}
 	if toolName == "write_file" {
 		if p := writeFilePath(args); p != "" {
-			key := toolName + "|path:" + p
+			key := toolName + "|path:" + signaturePath(p)
 			if fp := writeFileContentFingerprint(args); fp != "" {
 				key += "|c:" + fp
 			}
