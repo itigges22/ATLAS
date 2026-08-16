@@ -870,7 +870,8 @@ func identicalRetryRefusal(ctx *AgentContext, toolName string, args json.RawMess
 
 // recordFailedToolCall remembers a rejected call so an identical re-send is
 // refused. Keyed on the same signature the repetition window uses, so the two
-// agree on what "the same call" means.
+// agree on what "the same call" means -- and, like that window, on the args
+// the MODEL sent rather than on whatever fenced resolution left behind.
 func recordFailedToolCall(ctx *AgentContext, toolName string, args json.RawMessage, errMsg string) {
 	if ctx == nil || errMsg == "" {
 		return

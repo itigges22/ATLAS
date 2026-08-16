@@ -1492,7 +1492,12 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// executes. Checked ahead of the repetition detector because that
 			// one needs three occurrences and only steers the NEXT turn,
 			// which a two-turn identical pair never reaches.
-			if refusal := identicalRetryRefusal(ctx, parsed.Name, parsed.Args); refusal != "" {
+			// Same representation the repeat detector uses, for the same
+			// reason: a fenced re-send is byte-identical as the model wrote
+			// it and different only in the body the channel fetched for it.
+			// The lookup, the record and the clear all key on the intent, or
+			// they key on three different things and never meet.
+			if refusal := identicalRetryRefusal(ctx, parsed.Name, intentArgs); refusal != "" {
 				log.Printf("[agent] turn=%d refusing an identical re-send of a rejected %s", turn, parsed.Name)
 				// Escalate from refusing THIS call to removing the tool for
 				// THIS file. The model has now sent the same rejected call
@@ -1687,7 +1692,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			if !result.Success {
 				log.Printf("[agent] turn=%d tool=%q FAIL: %q", turn,
 					truncateStr(parsed.Name, 64), truncateStr(result.Error, 240))
-				recordFailedToolCall(ctx, parsed.Name, parsed.Args, result.Error)
+				recordFailedToolCall(ctx, parsed.Name, intentArgs, result.Error)
 				// Every refusal of authored content is a deterministic
 				// negative for the lens corpus. One site rather than 60-odd
 				// rejection points, and it cannot miss a gate added later.
@@ -1699,7 +1704,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				// A call can fail and later succeed — an edit rejected for a
 				// stale range works after a re-read. Drop the memory with the
 				// condition that caused it.
-				clearFailedToolCall(ctx, parsed.Name, parsed.Args)
+				clearFailedToolCall(ctx, parsed.Name, intentArgs)
 			}
 
 			// Force-stop after destructive operations that shouldn't have

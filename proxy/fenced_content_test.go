@@ -1957,3 +1957,168 @@ func TestMalformedIntentRecordsNoSignatureAndStartsNoFetch(t *testing.T) {
 		t.Errorf("a run that wrote nothing reported %q", terminal["status"])
 	}
 }
+
+// The retry ban had the same blindness the repeat detector had: it compares
+// the args left behind by fenced resolution, so a re-sent `@fenced` call whose
+// body came back different is not recognised as the same rejected call. The
+// lookup, the record and the clear all key on the model's intent now, or they
+// key on three different things and never meet.
+func TestRejectedFencedIntentIsRecognisedOnResend(t *testing.T) {
+	dir := t.TempDir()
+	turns, fences := 0, 0
+	stop := make(chan struct{})
+	defer close(stop)
+
+	// Every fenced body is invalid AND different, which is exactly the shape
+	// that defeated the ban: the call is byte-identical as the model wrote it,
+	// and the args it is judged on change every turn.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			valid := !strings.Contains(in.Code, "]]")
+			out := map[string]interface{}{"valid": valid}
+			if !valid {
+				out["errors"] = []string{"SyntaxError: unmatched ']'"}
+			}
+			json.NewEncoder(w).Encode(out)
+			return
+		case strings.HasSuffix(r.URL.Path, "/execute"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			if strings.Contains(in.Code, ".atlas-mount-probe") {
+				b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": true, "stdout": string(b), "exit_code": 0})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "stdout": "", "exit_code": 0})
+			return
+		case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
+			http.NotFound(w, r)
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		if strings.Contains(string(raw), "single fenced block") {
+			n := fences
+			fences++
+			body := fmt.Sprintf("```python\nVALUE = %d]]\n```", n)
+			d, _ := json.Marshal(map[string]interface{}{
+				"choices": []map[string]interface{}{
+					{"delta": map[string]string{"content": body}}}})
+			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+			return
+		}
+		i := turns
+		turns++
+		args := map[string]string{"path": "solve.py", "content": "@fenced"}
+		if i == 0 {
+			// Establish a healthy, session-owned file first. Without it the
+			// broken writes are NEW-file writes, which land with a warning
+			// rather than being refused — and a call that did not fail is not
+			// the ban's business.
+			args = map[string]string{"path": "solve.py",
+				"content": "def solve():\n    return 1\n"}
+		}
+		call, _ := json.Marshal(map[string]interface{}{
+			"type": "tool_call", "name": "write_file", "args": args})
+		d, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"delta": map[string]string{"content": string(call)}}}})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+	}))
+	defer srv.Close()
+
+	census, terminal := map[string]int{}, map[string]string{}
+	ctx := m1Ctx(t, dir, srv.URL, census, terminal)
+	// The ban's own signal. It fires one occurrence earlier than the repeat
+	// detector, so it is the only way to observe it separately.
+	banBounces := 0
+	inner := ctx.StreamFn
+	ctx.StreamFn = func(eventType string, data interface{}) {
+		if b, _ := json.Marshal(data); strings.Contains(string(b), "byte for byte") {
+			banBounces++
+		}
+		inner(eventType, data)
+	}
+	if err := runAgentLoop(ctx, "Write solve.py."); err != nil {
+		t.Fatalf("agent loop error: %v", err)
+	}
+	t.Logf("turns=%d fenced=%d ban_bounces=%d status=%q reason=%q", turns, fences,
+		banBounces, terminal["status"], terminal["reason"])
+
+	// The behaviour under test: the re-sent intent is recognised as the same
+	// rejected call. On the parent the ban never sees it, because the args it
+	// compares carry a different fetched body every turn.
+	if banBounces == 0 {
+		t.Error("the identical re-sent intent was never recognised by the retry ban")
+	}
+
+	// The rejected intent is recognised on its re-send, so the run does not
+	// spend its whole budget re-sending it.
+	if turns > 10 {
+		t.Errorf("%d turns of an identical rejected intent before the run ended", turns)
+	}
+	// Fewer generations than turns: once the intent is recognised, the later
+	// re-sends are answered without opening the channel again.
+	if fences >= turns {
+		t.Errorf("%d generations for %d turns — the re-send still paid for a "+
+			"fresh generation every time", fences, turns)
+	}
+	if NormalizeTerminalStatus(terminal["status"]).Completed() {
+		t.Errorf("a run whose every write was refused reported %q", terminal["status"])
+	}
+	// The healthy bytes written on the first turn are still there: every
+	// broken rewrite after them was refused before disk.
+	got, err := os.ReadFile(filepath.Join(dir, "solve.py"))
+	if err != nil {
+		t.Fatalf("the healthy write did not land: %v", err)
+	}
+	if string(got) != "def solve():\n    return 1\n" {
+		t.Errorf("a refused rewrite reached disk: %q", got)
+	}
+}
+
+// The three sites that make up the ban must agree on the key, or a recorded
+// rejection can never be found again.
+func TestRetryBanKeysOnIntentAcrossRecordLookupAndClear(t *testing.T) {
+	ctx := &AgentContext{}
+	intent := json.RawMessage(`{"path":"solve.py","content":"@fenced"}`)
+	resolved := json.RawMessage(`{"path":"solve.py","content":"VALUE = 1\n"}`)
+	alias := json.RawMessage(`{"path":"./solve.py","content":"@fenced"}`)
+
+	recordFailedToolCall(ctx, "write_file", intent, "rejected: would not parse")
+	if identicalRetryRefusal(ctx, "write_file", intent) == "" {
+		t.Fatal("a recorded rejection is not found under its own intent")
+	}
+	if identicalRetryRefusal(ctx, "write_file", alias) == "" {
+		t.Error("./solve.py evaded the ban recorded for solve.py")
+	}
+	if identicalRetryRefusal(ctx, "write_file", resolved) != "" {
+		t.Error("the resolved body matched an intent-keyed record; the two " +
+			"representations must not be interchangeable")
+	}
+	clearFailedToolCall(ctx, "write_file", alias)
+	if identicalRetryRefusal(ctx, "write_file", intent) != "" {
+		t.Error("clearing under an equivalent spelling did not clear the record")
+	}
+
+	// A materially different inline write is a different call.
+	a := json.RawMessage(`{"path":"solve.py","content":"def f():\n    return 1\n"}`)
+	b := json.RawMessage(`{"path":"solve.py","content":"def f():\n    return 2\n"}`)
+	recordFailedToolCall(ctx, "write_file", a, "rejected")
+	if identicalRetryRefusal(ctx, "write_file", b) != "" {
+		t.Error("a genuine revision was refused as an identical re-send")
+	}
+	// And a different target keeps its own record.
+	other := json.RawMessage(`{"path":"other.py","content":"@fenced"}`)
+	if identicalRetryRefusal(ctx, "write_file", other) != "" {
+		t.Error("a different path inherited another path's ban")
+	}
+}
