@@ -1200,7 +1200,17 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					// fetches it in a fenced block, its native emission format.
 					// See fetchFencedContent.
 					trimmed := strings.TrimSpace(wfInput.Content)
-					if strings.HasPrefix(trimmed, "@fenced") {
+					// A call that cannot execute must not open the channel.
+					// Falling through leaves the sentinel in `content` and
+					// hands the call to the tool, which refuses it with the
+					// same check that refused it here -- so the model gets the
+					// authoritative message, the ledger sees MutationNone, and
+					// the session spends one turn instead of a generation.
+					fencedUsable, fencedWhy := fencedCallIsExecutable("write_file", parsed.Args, ctx)
+					if !fencedUsable {
+						log.Printf("[agent] not opening the fenced channel for an unusable write_file call: %s", fencedWhy)
+					}
+					if fencedUsable && strings.HasPrefix(trimmed, "@fenced") {
 						// Anything after the sentinel is the model inlining
 						// the file anyway. Exactly one of two things arrived,
 						// and only one of them is a file:

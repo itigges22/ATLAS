@@ -5362,6 +5362,43 @@ func editSyntaxObservation(ctx *AgentContext, tool, checkPath, relPath, original
 // the content parses, and something about its structure does not. Syntax ran
 // first and did not fail on these bytes, so the structural failure is the
 // decisive one and recording it as syntax/failed would assert the opposite.
+// fencedCallIsExecutable answers one question before any generation is spent:
+// would this call survive the checks it has to survive anyway?
+//
+// The fenced channel exists to carry a file body around the JSON encoding, and
+// it costs a full unconstrained generation per attempt. Starting one for a
+// call that cannot execute -- no path, a path outside the workspace, a
+// deny-listed target -- spends a minute of the session budget to produce
+// content that is then thrown away, and a model that keeps re-sending the
+// malformed call spends the whole session that way. Measured live: a 300s
+// canary reached turn 36 having written nothing, every turn a write_file with
+// `content: "@fenced"` and no path at all.
+//
+// It runs the SAME checks executeToolCall runs, by calling them, so the set of
+// calls refused here is a subset of the set refused there. That is what lets
+// the caller simply decline to resolve and hand the call to the tool, whose
+// own producer owns the refusal, its wording and its MutationNone.
+func fencedCallIsExecutable(name string, args json.RawMessage, ctx *AgentContext) (bool, string) {
+	trimmed := strings.TrimSpace(string(args))
+	if trimmed == "" || trimmed == "null" {
+		return false, "the call carried no arguments"
+	}
+	var in WriteFileInput
+	if err := json.Unmarshal(args, &in); err != nil {
+		return false, "the arguments are not the shape " + name + " takes"
+	}
+	if strings.TrimSpace(in.Path) == "" {
+		return false, "the call names no path"
+	}
+	if reason := validateToolWorkspacePaths(name, args, ctx); reason != "" {
+		return false, reason
+	}
+	if denied, reason := shouldDenyToolCall(name, args); denied {
+		return false, reason
+	}
+	return true, ""
+}
+
 // noMutation classifies a branch that ran, formed no bytes to write, and
 // returned -- a malformed argument, an unmet precondition, an anchor that
 // matched nothing, a replacement identical to what is already there. Disk is
