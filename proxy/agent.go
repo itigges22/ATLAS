@@ -199,6 +199,12 @@ type runState struct {
 	// edit repeats. Further writes to such a path bounce until any
 	// verification command runs.
 	pendingWarnedRun map[string]bool
+	// Phase 4B: how many times a raw @fenced write for a canonical path has
+	// met the run-first demand, and whether that path's one recovery has been
+	// spent. Both are session-local, bounded by the number of paths the run
+	// touches, and hold no file contents.
+	fencedRunFirstRepeats map[string]int
+	fencedRecoverySpent   map[string]bool
 	// toolBanned records (tool, path) pairs the loop has taken away from the
 	// model after it proved it cannot use them on that file. Advice is not a
 	// fix when the model ignores advice: measured dogfooding "build me a
@@ -1207,13 +1213,27 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			if parsed.Name == "write_file" {
 				var wfInput WriteFileInput
 				if json.Unmarshal(parsed.Args, &wfInput) == nil {
-					if st.pendingWarnedRun[wfInput.Path] && st.chargeBounce("run_first_gate") {
-						log.Printf("[agent] run-first gate: %s has a warned, unexecuted version on disk (bounce %d/%d)",
-							wfInput.Path, st.gateBounces["run_first_gate"], maxGateBounces)
-						st.bounceToolCall(ctx, "write_file", fmt.Sprintf(
-							"The version of %s you wrote is on disk with a parse warning and has never been run. Run it first — `python3 %s` — and read the real error before writing again. Rewriting blind is how the last four attempts went nowhere.",
-							wfInput.Path, wfInput.Path))
-						continue
+					if st.pendingWarnedRun[wfInput.Path] {
+						// The gate has already said this once. Saying it again
+						// while the same call stays available is the C5 shape:
+						// in the frozen run the demand repeated until its
+						// bounce budget ran out and the identical writes
+						// resumed. On the recurrence the model gets what it
+						// has been unable to get for itself -- the file as it
+						// actually is -- and the call that made no progress is
+						// held back until it changes.
+						if msg := fencedRunFirstRecovery(ctx, st, wfInput.Path, wfInput.Content); msg != "" {
+							st.bounceToolCall(ctx, "write_file", msg)
+							continue
+						}
+						if st.chargeBounce("run_first_gate") {
+							log.Printf("[agent] run-first gate: %s has a warned, unexecuted version on disk (bounce %d/%d)",
+								wfInput.Path, st.gateBounces["run_first_gate"], maxGateBounces)
+							st.bounceToolCall(ctx, "write_file", fmt.Sprintf(
+								"The version of %s you wrote is on disk with a parse warning and has never been run. Run it first — `python3 %s` — and read the real error before writing again. Rewriting blind is how the last four attempts went nowhere.",
+								wfInput.Path, wfInput.Path))
+							continue
+						}
 					}
 					// Fenced-content resolution: everything downstream (the
 					// remaining gates, tier classification, execution) must see
@@ -6178,4 +6198,140 @@ func modelProseIfAuthorized(status TerminalStatus, prose string) string {
 		return prose
 	}
 	return ""
+}
+
+// --- Phase 4B: the C5 recovery transition -----------------------------------
+//
+// The observed state: a warned version of the file is on disk, the run-first
+// gate is demanding it be run, and the model answers with the identical raw
+// `@fenced` write it has already sent. In the frozen run that exchange
+// repeated until the gate's bounce budget ran out, after which the same writes
+// started landing again, and the session reached the 600 s cap having made no
+// progress and produced no terminal at all.
+//
+// Repeating a demand the model has already failed to satisfy is not a
+// mechanism. On the recurrence it gets the one thing it has not been able to
+// obtain for itself -- the file as it actually is -- and the call that made no
+// progress is held back until it changes.
+//
+// Deliberately narrow. It runs BEFORE fenced resolution, so a blocked repeat
+// costs zero generations. It reads; it never writes, never runs a command, and
+// never forces a tool. It fires at most once per canonical path, and the
+// budget has to be there to spend.
+
+// fencedRecoveryFloor is the work budget a recovery needs to be worth doing:
+// enough for the model to read the context, run something, and write once.
+const fencedRecoveryFloor = 90 * time.Second
+
+// fencedRunFirstRecovery returns the focused context to hand back, or "" when
+// this is not the state, the recovery is already spent, or there is not enough
+// budget left to act on it.
+func fencedRunFirstRecovery(ctx *AgentContext, st *runState, relPath, content string) string {
+	// Raw model intent only. An inline write is the model doing something
+	// different, which is exactly what this is asking for.
+	if !strings.HasPrefix(strings.TrimSpace(content), "@fenced") {
+		return ""
+	}
+	key := ledgerKey(ctx, relPath)
+	if st.fencedRecoverySpent[key] {
+		return ""
+	}
+	if st.fencedRunFirstRepeats == nil {
+		st.fencedRunFirstRepeats = map[string]int{}
+	}
+	st.fencedRunFirstRepeats[key]++
+	// The first occurrence is the gate's own business. This is the recurrence.
+	if st.fencedRunFirstRepeats[key] < 2 {
+		return ""
+	}
+	// A recovery the run cannot afford to act on is worse than stopping: it
+	// spends the remaining budget on context nobody gets to use.
+	if ctx.Ctx != nil {
+		if deadline, ok := ctx.Ctx.Deadline(); ok && time.Until(deadline) < fencedRecoveryFloor {
+			log.Printf("[agent] skipping the run-first recovery for %s — %v of budget left",
+				relPath, time.Until(deadline).Round(time.Second))
+			return ""
+		}
+	}
+
+	source, truncated, err := boundedCurrentSource(ctx, relPath)
+	if err != nil {
+		// Nothing to show. The gate's own path still applies.
+		log.Printf("[agent] run-first recovery for %s could not read the file: %v", relPath, err)
+		return ""
+	}
+	if st.fencedRecoverySpent == nil {
+		st.fencedRecoverySpent = map[string]bool{}
+	}
+	st.fencedRecoverySpent[key] = true
+	log.Printf("[agent] run-first recovery for %s — supplying the current source once", relPath)
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "You have now sent the same whole-file write for %s twice without "+
+		"anything changing on disk, so re-sending it is not a route to a working file. "+
+		"Here is what %s actually contains right now", relPath, relPath)
+	if truncated {
+		fmt.Fprintf(&sb, " (first %d lines)", fencedRecoveryMaxLines)
+	}
+	sb.WriteString(":\n\n")
+	sb.WriteString(source)
+	sb.WriteString("\n\n")
+	if detail := currentValidationDetail(ctx, relPath); detail != "" {
+		fmt.Fprintf(&sb, "The last thing checked about those exact bytes: %s\n\n", detail)
+	}
+	fmt.Fprintf(&sb, "That version is on disk with a parse warning and has never been run. "+
+		"Do one of these instead of sending that write again: run it with run_command "+
+		"(`python3 %s`) and read the real error, read more of it with read_file, or send a "+
+		"correction that is materially different from what is above — a targeted edit_file or "+
+		"replace_lines against a line you can see here is usually smaller and lands more "+
+		"often than another whole-file rewrite.", relPath)
+	return sb.String()
+}
+
+// fencedRecoveryMaxLines bounds what the recovery reads back. Enough to see a
+// small solution whole and the top of a large one; never the whole file.
+const fencedRecoveryMaxLines = 120
+
+// boundedCurrentSource reads the file through the workspace reader the tools
+// use and returns it numbered and bounded. Nothing is retained: the text goes
+// into one message and the caller keeps only a spent flag.
+func boundedCurrentSource(ctx *AgentContext, relPath string) (string, bool, error) {
+	data, _, err := readWorkspaceFile(ctx, relPath)
+	if err != nil {
+		return "", false, err
+	}
+	lines := strings.Split(string(data), "\n")
+	truncated := false
+	if len(lines) > fencedRecoveryMaxLines {
+		lines = lines[:fencedRecoveryMaxLines]
+		truncated = true
+	}
+	var sb strings.Builder
+	for i, l := range lines {
+		fmt.Fprintf(&sb, "%d\t%s\n", i+1, l)
+	}
+	return strings.TrimRight(sb.String(), "\n"), truncated, nil
+}
+
+// currentValidationDetail reports what the ledger knows about the bytes that
+// are there NOW, and says nothing when the verdict describes older bytes.
+func currentValidationDetail(ctx *AgentContext, relPath string) string {
+	key := ledgerKey(ctx, relPath)
+	ctx.LedgerMu.Lock()
+	d := ctx.Ledger[key]
+	var kind ValidationKind
+	var status ValidationStatus
+	var detail string
+	if d != nil {
+		kind, status = d.CurrentValidation()
+		detail = d.ValidationDetail
+	}
+	ctx.LedgerMu.Unlock()
+	if status != ValidationFailed {
+		return ""
+	}
+	if detail == "" {
+		return string(kind) + " check failed"
+	}
+	return detail
 }
