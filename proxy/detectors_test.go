@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestRepeatDetectorFiresOnIdenticalCalls(t *testing.T) {
@@ -2612,16 +2614,41 @@ func TestDeleteMoveAndIndependenceOfDebt(t *testing.T) {
 		}
 	})
 
-	t.Run("failed delete stays blocking", func(t *testing.T) {
+	t.Run("failed delete of a file that is still there stays blocking", func(t *testing.T) {
+		dir := t.TempDir()
+		ctx := NewAgentContext(dir, Tier2Medium)
+		ctx.PermissionMode, ctx.StreamFn = PermissionYolo, func(string, interface{}) {}
+		st := &runState{}
+		sub := filepath.Join(dir, "locked")
+		os.MkdirAll(sub, 0o755)
+		os.WriteFile(filepath.Join(sub, "keep.py"), []byte("A = 1\n"), 0o644)
+		if err := os.Chmod(sub, 0o555); err != nil {
+			t.Skip("cannot make a directory read-only here")
+		}
+		t.Cleanup(func() { os.Chmod(sub, 0o755) })
+
+		d, _ := json.Marshal(map[string]string{"path": "locked/keep.py"})
+		noteMutationIntent(ctx, st, "delete_file", d)
+		executeToolCall("delete_file", d, ctx) // the file survives
+		settleMutationDebt(ctx, st)
+		if !hasUnresolvedDebt(st) {
+			t.Error("a delete that left the file in place resolved its debt")
+		}
+	})
+
+	t.Run("abandoning a path that never landed settles it", func(t *testing.T) {
 		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
 		ctx.PermissionMode, ctx.StreamFn = PermissionYolo, func(string, interface{}) {}
 		st := &runState{}
-		d, _ := json.Marshal(map[string]string{"path": "never_there.py"})
-		noteMutationIntent(ctx, st, "delete_file", d)
-		executeToolCall("delete_file", d, ctx) // fails: nothing to remove
+		// The fenced case: content debt on a path that was never produced.
+		w, _ := json.Marshal(map[string]string{"path": "ghost.py", "content": "@fenced"})
+		noteMutationIntent(ctx, st, "write_file", w)
+		d, _ := json.Marshal(map[string]string{"path": "ghost.py"})
+		noteMutationIntent(ctx, st, "delete_file", d) // converts to delete debt
+		executeToolCall("delete_file", d, ctx)        // fails: it was never there
 		settleMutationDebt(ctx, st)
-		if !hasUnresolvedDebt(st) {
-			t.Error("a failed delete resolved its debt")
+		if hasUnresolvedDebt(st) {
+			t.Error("an explicitly abandoned path that is demonstrably absent stayed blocking")
 		}
 	})
 
@@ -2743,4 +2770,261 @@ func TestCommandToolsCreateNoPathDebt(t *testing.T) {
 		paths, _ := unresolvedDebtPaths(st, 5)
 		t.Errorf("non-path-targeted tools created debt: %v", paths)
 	}
+}
+
+// --- Bounded recovery for unresolved work -----------------------------------
+
+const debtRecoveryMark = "never reached a state this run could check"
+
+// THE CAUSAL FIXTURE. The scripted model retires the mistaken path only after
+// it is told what is outstanding; on the parent it is never told.
+func TestDebtRecoveryRetiresAMistakenPathAndCompletes(t *testing.T) {
+	dir := t.TempDir()
+	const req = "Write a couple of small scripts."
+	var recoveries, step int
+	var mu sync.Mutex
+
+	ctx, _, census, terminal, _ := debtFixture(t, dir, req, debtCeiling,
+		func(i int, prompt string) map[string]interface{} {
+			sawRecovery := strings.Contains(prompt, debtRecoveryMark)
+			switch {
+			case i == 0 || i == 1:
+				// a.py: the mistaken path, never lands.
+				return map[string]interface{}{"type": "tool_call", "name": "write_file",
+					"args": map[string]string{"path": "a.py", "content": "@fenced"}}
+			case i == 2:
+				return map[string]interface{}{"type": "tool_call", "name": "write_file",
+					"args": map[string]string{"path": "b.py", "content": debtGoodBody}}
+			case i == 3:
+				return map[string]interface{}{"type": "tool_call", "name": "run_command",
+					"args": map[string]string{"command": "python3 b.py"}}
+			case !sawRecovery:
+				return map[string]interface{}{"type": "done", "summary": "wrote what I could"}
+			default:
+				// Steps after the recovery are scripted, because the delete of
+				// a path that never landed FAILS and leaves no marker in the
+				// prompt to key on. The conditional part -- that the model
+				// only abandons the path once it has been told -- is above.
+				mu.Lock()
+				step++
+				n := step
+				mu.Unlock()
+				if n == 1 {
+					return map[string]interface{}{"type": "tool_call", "name": "delete_file",
+						"args": map[string]string{"path": "a.py"}}
+				}
+				return map[string]interface{}{"type": "done", "summary": "b.py is written and runs"}
+			}
+		})
+	inner := ctx.StreamFn
+	ctx.StreamFn = func(et string, data interface{}) {
+		if et == "gate" {
+			if b, _ := json.Marshal(data); strings.Contains(string(b), debtRecoveryMark) {
+				mu.Lock()
+				recoveries++
+				mu.Unlock()
+			}
+		}
+		inner(et, data)
+	}
+	if err := runAgentLoop(ctx, req); err != nil {
+		t.Fatalf("loop error: %v", err)
+	}
+	bBytes, _ := os.ReadFile(filepath.Join(dir, "b.py"))
+	_, aErr := os.Stat(filepath.Join(dir, "a.py"))
+	t.Logf("recoveries=%d status=%q reason=%q a.py_absent=%v",
+		recoveries, terminal["status"], terminal["reason"], os.IsNotExist(aErr))
+
+	if recoveries != 1 {
+		t.Fatalf("recovery fired %d times, want exactly 1", recoveries)
+	}
+	if terminal["status"] != string(TerminalCompleted) {
+		t.Fatalf("structured retirement did not complete: status=%q reason=%q summary=%.140s",
+			terminal["status"], terminal["reason"], terminal["summary"])
+	}
+	if !os.IsNotExist(aErr) {
+		t.Error("a.py was not confirmed absent")
+	}
+	if string(bBytes) != debtGoodBody {
+		t.Errorf("b.py = %q", bBytes)
+	}
+	d := ctx.Ledger[ledgerKey(ctx, "b.py")]
+	if d == nil || d.CurrentHash != hashBytes(bBytes) {
+		t.Error("b.py's ledger hash does not match disk")
+	}
+	if k, s := d.CurrentValidation(); s != ValidationPassed || k != ValidationKindSyntax {
+		t.Errorf("completion over %v/%v", k, s)
+	}
+	if census["done"] != 1 {
+		t.Errorf("%d terminal events", census["done"])
+	}
+	if census["tool_call"] != census["tool_result"] {
+		t.Errorf("call/result balance: %d vs %d", census["tool_call"], census["tool_result"])
+	}
+}
+
+// A user-required path stays required even when the model deletes it.
+func TestDeletingAUserRequiredPathDoesNotComplete(t *testing.T) {
+	dir := t.TempDir()
+	const req = "Write a.py and b.py."
+	ctx, _, _, terminal, _ := debtFixture(t, dir, req, debtCeiling,
+		func(i int, prompt string) map[string]interface{} {
+			sawRecovery := strings.Contains(prompt, debtRecoveryMark)
+			retired := strings.Contains(prompt, `"deleted":true`)
+			switch {
+			case i == 0 || i == 1:
+				return map[string]interface{}{"type": "tool_call", "name": "write_file",
+					"args": map[string]string{"path": "a.py", "content": "@fenced"}}
+			case i == 2:
+				return map[string]interface{}{"type": "tool_call", "name": "write_file",
+					"args": map[string]string{"path": "b.py", "content": debtGoodBody}}
+			case !sawRecovery:
+				return map[string]interface{}{"type": "done", "summary": "did what I could"}
+			case !retired:
+				return map[string]interface{}{"type": "tool_call", "name": "delete_file",
+					"args": map[string]string{"path": "a.py"}}
+			default:
+				return map[string]interface{}{"type": "done", "summary": "b.py is written"}
+			}
+		})
+	if err := runAgentLoop(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("required-path deletion: status=%q reason=%q", terminal["status"], terminal["reason"])
+	if terminal["status"] == string(TerminalCompleted) {
+		t.Fatal("deleting a user-required output completed the run")
+	}
+	if terminal["reason"] != "deliverables_not_demonstrated" {
+		t.Errorf("reason = %q, want the prompt obligation to block first", terminal["reason"])
+	}
+}
+
+// Ignoring the recovery, budget, boundedness, and prose.
+func TestDebtRecoveryBoundsAndRefusals(t *testing.T) {
+	// b.py lands so the unmet-action clause is satisfied and debt is the only
+	// thing left blocking: that isolates what this test is about.
+	ignore := func(i int, prompt string) map[string]interface{} {
+		switch i {
+		case 0, 1:
+			return map[string]interface{}{"type": "tool_call", "name": "write_file",
+				"args": map[string]string{"path": "a.py", "content": "@fenced"}}
+		case 2:
+			return map[string]interface{}{"type": "tool_call", "name": "write_file",
+				"args": map[string]string{"path": "b.py", "content": debtGoodBody}}
+		}
+		return map[string]interface{}{"type": "done",
+			"summary": "I no longer need a.py, so the work is complete."}
+	}
+
+	t.Run("ignored recovery stops honestly", func(t *testing.T) {
+		dir := t.TempDir()
+		ctx, _, census, terminal, _ := debtFixture(t, dir, "Write a couple of scripts.", debtCeiling, ignore)
+		if err := runAgentLoop(ctx, "Write a couple of scripts."); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("ignored: status=%q reason=%q", terminal["status"], terminal["reason"])
+		if terminal["status"] == string(TerminalCompleted) {
+			t.Fatal("prose retired the work")
+		}
+		if terminal["reason"] != "unresolved_mutation_debt" {
+			t.Errorf("reason = %q", terminal["reason"])
+		}
+		if completionClaimIn(terminal["summary"]) != "" {
+			t.Errorf("the terminal claimed success:\n%s", terminal["summary"])
+		}
+		if census["done"] != 1 {
+			t.Errorf("%d terminal events", census["done"])
+		}
+		// Nothing was run or mutated on the model's behalf.
+		if _, err := os.Stat(filepath.Join(dir, "a.py")); err == nil {
+			t.Error("recovery created the file itself")
+		}
+	})
+
+	t.Run("offered once per generation and bounded overall", func(t *testing.T) {
+		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+		st := &runState{}
+		args, _ := json.Marshal(map[string]string{"path": "a.py", "content": "@fenced"})
+		noteMutationIntent(ctx, st, "write_file", args)
+		if offerDebtRecovery(ctx, st) == "" {
+			t.Fatal("no first offer")
+		}
+		if offerDebtRecovery(ctx, st) != "" {
+			t.Error("a second offer in the same generation")
+		}
+		// New unresolved work opens the next generation.
+		args2, _ := json.Marshal(map[string]string{"path": "b.py", "content": "@fenced"})
+		noteMutationIntent(ctx, st, "write_file", args2)
+		if offerDebtRecovery(ctx, st) == "" {
+			t.Error("new unresolved work earned no offer")
+		}
+		// ...but not without bound.
+		args3, _ := json.Marshal(map[string]string{"path": "c.py", "content": "@fenced"})
+		noteMutationIntent(ctx, st, "write_file", args3)
+		if offerDebtRecovery(ctx, st) != "" {
+			t.Errorf("offers exceeded the cap of %d", maxDebtRecoveries)
+		}
+	})
+
+	t.Run("low budget skips recovery", func(t *testing.T) {
+		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+		workCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		ctx.Ctx = workCtx
+		st := &runState{}
+		args, _ := json.Marshal(map[string]string{"path": "a.py", "content": "@fenced"})
+		noteMutationIntent(ctx, st, "write_file", args)
+		if offerDebtRecovery(ctx, st) != "" {
+			t.Error("recovery ran with less budget than it needs to be acted on")
+		}
+		if status, _ := finalizeCompletion(ctx, st, "Write a script.", ""); status.Completed() {
+			t.Error("skipping recovery allowed completion")
+		}
+	})
+
+	t.Run("same-path correction settles without deletion", func(t *testing.T) {
+		dir := t.TempDir()
+		var step2 int
+		var stepMu sync.Mutex
+		const req = "Write a couple of small scripts."
+		ctx, _, _, terminal, _ := debtFixture(t, dir, req, debtCeiling,
+			func(i int, prompt string) map[string]interface{} {
+				sawRecovery := strings.Contains(prompt, debtRecoveryMark)
+				switch {
+				case i == 0 || i == 1:
+					return map[string]interface{}{"type": "tool_call", "name": "write_file",
+						"args": map[string]string{"path": "a.py", "content": "@fenced"}}
+				case i == 2:
+					// Something has to land, or the action gate owns the loop
+					// and the debt recovery is never reached — that gate is
+					// the more specific failure and takes precedence.
+					return map[string]interface{}{"type": "tool_call", "name": "write_file",
+						"args": map[string]string{"path": "b.py", "content": debtGoodBody}}
+				case !sawRecovery:
+					return map[string]interface{}{"type": "done", "summary": "tried"}
+				default:
+					// Scripted after the recovery, for the same reason as the
+					// causal fixture above.
+					stepMu.Lock()
+					step2++
+					n := step2
+					stepMu.Unlock()
+					if n == 1 {
+						return map[string]interface{}{"type": "tool_call", "name": "write_file",
+							"args": map[string]string{"path": "a.py", "content": debtGoodBody}}
+					}
+					return map[string]interface{}{"type": "done", "summary": "a.py is written"}
+				}
+			})
+		if err := runAgentLoop(ctx, req); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := os.ReadFile(filepath.Join(dir, "a.py"))
+		t.Logf("corrected: status=%q reason=%q a.py=%q",
+			terminal["status"], terminal["reason"], string(got))
+		if terminal["status"] != string(TerminalCompleted) {
+			t.Errorf("a corrected path did not complete: status=%q reason=%q",
+				terminal["status"], terminal["reason"])
+		}
+	})
 }

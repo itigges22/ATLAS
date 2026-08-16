@@ -216,6 +216,11 @@ type runState struct {
 	// session owns on disk, and an intent that never landed owns nothing.
 	mutationDebt   map[string]*mutationDebtEntry
 	debtGeneration int
+	// debtRecoveryOffered is the last generation the model was given a chance
+	// to settle. Bumping the generation when NEW work goes unresolved buys
+	// exactly one more offer, and the total is capped so it cannot loop.
+	debtRecoveryOffered int
+	debtRecoveryCount   int
 	// debtOverflow fails closed past the ceiling: the session stops naming
 	// individual paths but never stops reporting that work is unresolved.
 	debtOverflow bool
@@ -1045,6 +1050,12 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// user reads: the model's account is only repeated where the
 			// exact-hash gate authorised the completion it describes.
 			status, reason := finalizeCompletion(ctx, st, userMessage, "")
+			if reason == "unresolved_mutation_debt" {
+				if msg := offerDebtRecovery(ctx, st); msg != "" {
+					st.bounce(ctx, "done", msg)
+					continue
+				}
+			}
 			summary := modelProseIfAuthorized(status, parsed.Summary)
 			if reason == "unresolved_mutation_debt" {
 				summary = unresolvedDebtSummary(st)
@@ -1097,6 +1108,10 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// the done exit, so the two cannot drift.
 			textStatus, textReason := finalizeCompletion(ctx, st, userMessage, "text_reply")
 			if textReason == "unresolved_mutation_debt" {
+				if msg := offerDebtRecovery(ctx, st); msg != "" {
+					st.bounce(ctx, "text", msg)
+					continue
+				}
 				textSummary = unresolvedDebtSummary(st)
 			}
 			emitTerminal(ctx, st, textStatus, textReason, textSummary)
@@ -6620,7 +6635,16 @@ func noteMutationIntent(ctx *AgentContext, st *runState, name string, args json.
 		if st.mutationDebt == nil {
 			st.mutationDebt = map[string]*mutationDebtEntry{}
 		}
-		if _, exists := st.mutationDebt[key]; exists {
+		if prev, exists := st.mutationDebt[key]; exists {
+			// The one structured way a mistaken path is retired: the model
+			// explicitly asks for the same path to be REMOVED. That converts
+			// what it owes from "produce this" to "prove it is gone", and the
+			// proof is a confirmed absence, not a claim.
+			if prev.Kind == debtContent && e.Kind == debtDelete {
+				e.Gen = prev.Gen
+				st.mutationDebt[key] = e
+				log.Printf("[agent] %s: explicit removal requested — it now has to be shown gone", e.Rel)
+			}
 			continue // one debt per canonical path, whatever the spelling
 		}
 		if len(st.mutationDebt) >= maxTrackedMutationDebt {
@@ -6631,6 +6655,11 @@ func noteMutationIntent(ctx *AgentContext, st *runState, name string, args json.
 			}
 			st.debtOverflow = true
 			return
+		}
+		if st.debtRecoveryOffered >= st.debtGeneration {
+			// Work that went unresolved AFTER the model was already given its
+			// chance is a new situation, and earns one more -- bounded below.
+			st.debtGeneration++
 		}
 		e.Gen = st.debtGeneration
 		st.mutationDebt[key] = e
@@ -6689,11 +6718,16 @@ func debtResolved(ctx *AgentContext, key string, e *mutationDebtEntry) bool {
 	case debtContent:
 		return validationSettles(d)
 	case debtDelete:
-		// A tombstone is only written once the path is observed gone, and the
-		// absence is re-confirmed here against disk.
-		if !tombstoned || reason != "deleted" {
-			return false
-		}
+		// The entry only exists because the model explicitly asked for THIS
+		// path to be removed, so the intent is already on the record. What
+		// settles it is the absence, confirmed against disk right now.
+		//
+		// The tombstone is not required, and requiring it made the retirement
+		// route unusable for the case it exists for: a path that never landed
+		// cannot be deleted -- delete_file fails with "file not found" and
+		// writes no tombstone -- so a model abandoning work it never managed
+		// to produce could never say so. A path that IS still there fails this
+		// check whatever the delete reported.
 		_, err := os.Stat(key)
 		return os.IsNotExist(err)
 	case debtMove:
@@ -6749,5 +6783,65 @@ func unresolvedDebtSummary(st *runState) string {
 		sb.WriteString(" Other files are in the same state.")
 	}
 	sb.WriteString(" This run did not confirm the task was complete.")
+	return sb.String()
+}
+
+// maxDebtRecoveries bounds the whole session. New unresolved work opens a new
+// generation and earns another offer, but never without end.
+const maxDebtRecoveries = 2
+
+// offerDebtRecovery is the one chance to settle before the terminal. Returning
+// incomplete is honest and does nothing for the user; this says exactly what is
+// outstanding and exactly what would settle it, once per debt generation.
+//
+// It changes nothing itself: no file is written, deleted, moved or run, and no
+// tool is forced. The model chooses through its normal tools, under their
+// normal guards.
+func offerDebtRecovery(ctx *AgentContext, st *runState) string {
+	if st == nil || !hasUnresolvedDebt(st) {
+		return ""
+	}
+	if st.debtRecoveryOffered >= st.debtGeneration || st.debtRecoveryCount >= maxDebtRecoveries {
+		return ""
+	}
+	// Context nobody has budget to act on is worse than stopping.
+	if ctx.Ctx != nil {
+		if deadline, ok := ctx.Ctx.Deadline(); ok && time.Until(deadline) < fencedRecoveryFloor {
+			log.Printf("[agent] skipping the unresolved-work recovery — %v of budget left",
+				time.Until(deadline).Round(time.Second))
+			return ""
+		}
+	}
+	st.debtRecoveryOffered = st.debtGeneration
+	st.debtRecoveryCount++
+
+	paths, more := unresolvedDebtPaths(st, 5)
+	var sb strings.Builder
+	sb.WriteString("Before finishing: work you started never reached a state this run " +
+		"could check, so it cannot be reported as done.\n\n")
+	for _, p := range paths {
+		var kind debtKind
+		for _, e := range st.mutationDebt {
+			if e.Rel == p {
+				kind = e.Kind
+			}
+		}
+		switch kind {
+		case debtDelete:
+			fmt.Fprintf(&sb, "  %s — you asked for it to be removed; it is still there.\n", p)
+		case debtMove:
+			fmt.Fprintf(&sb, "  %s — the move is unfinished.\n", p)
+		default:
+			fmt.Fprintf(&sb, "  %s — never written in a form that could be checked.\n", p)
+		}
+	}
+	if more {
+		sb.WriteString("  (other files are in the same state)\n")
+	}
+	sb.WriteString("\nFor each one, either finish it — write the complete file and make sure " +
+		"it is valid, or make the change with edit_file — or, if you decided that file " +
+		"should not exist after all, say so by calling delete_file on that exact path so " +
+		"its absence can be confirmed. Saying you no longer need it is not enough. " +
+		"Finishing another file does not settle this one.")
 	return sb.String()
 }
