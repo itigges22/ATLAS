@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"go/ast"
 	"go/parser"
+	"go/printer"
 	"go/token"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -492,5 +496,280 @@ func TestStructuralRoundTripsInternally(t *testing.T) {
 		out.ValidationStatus != ValidationFailed ||
 		out.ValidationDetail != in.ValidationDetail {
 		t.Fatalf("structural round trip lost fields: %+v", out)
+	}
+}
+
+// --- The model-facing boundary ----------------------------------------------
+//
+// The SSE guard above proved the wire never carried classification. The
+// conversation did: ToolResult.MarshalText marshalled the whole struct into
+// the tool message, so every branch that classified itself also put four new
+// keys in front of the model. Phase 3A's claim of unchanged external
+// behaviour held for disk and for SSE, and did not hold here.
+//
+// The projection is an allowlist. These tests pin what crosses it.
+
+// representativeResults covers one of each mutation outcome plus the warning
+// shape -- a write that landed with a defect notice, which is the case where
+// `data` and `error` are both populated and most likely to drift.
+func representativeResults() []struct {
+	name string
+	res  ToolResult
+	want string
+} {
+	return []struct {
+		name string
+		res  ToolResult
+		want string
+	}{
+		{"applied", ToolResult{Success: true, Data: json.RawMessage(`{"bytes_written":6}`),
+			MutationStatus: MutationApplied, ValidationKind: ValidationKindSyntax,
+			ValidationStatus: ValidationPassed, ValidationDetail: "parsed"},
+			`{"success":true,"data":{"bytes_written":6}}`},
+		{"refused", ToolResult{Success: false, Error: "edit_file: would not parse",
+			MutationStatus: MutationRefused, ValidationKind: ValidationKindSyntax,
+			ValidationStatus: ValidationFailed, ValidationDetail: "SyntaxError"},
+			`{"success":false,"error":"edit_file: would not parse"}`},
+		{"none", ToolResult{Success: false, Error: "file not found: gone.py",
+			MutationStatus: MutationNone, ValidationKind: ValidationKindNone,
+			ValidationStatus: ValidationNotApplicable},
+			`{"success":false,"error":"file not found: gone.py"}`},
+		{"failed", ToolResult{Success: false, Error: "delete_file: permission denied",
+			MutationStatus: MutationFailed, ValidationKind: ValidationKindNone,
+			ValidationStatus: ValidationNotApplicable},
+			`{"success":false,"error":"delete_file: permission denied"}`},
+		{"unobserved", ToolResult{Success: true, Data: json.RawMessage(`{"exit_code":0}`),
+			MutationStatus: MutationUnobserved, ValidationKind: ValidationKindNone,
+			ValidationStatus: ValidationNotApplicable},
+			`{"success":true,"data":{"exit_code":0}}`},
+		{"warned write", ToolResult{Success: true,
+			Data:  json.RawMessage(`{"bytes_written":41,"warning":"does not parse"}`),
+			Error: "", MutationStatus: MutationApplied, ValidationKind: ValidationKindSyntax,
+			ValidationStatus: ValidationFailed, ValidationDetail: "SyntaxError: invalid syntax"},
+			`{"success":true,"data":{"bytes_written":41,"warning":"does not parse"}}`},
+		{"v3 provenance survives", ToolResult{Success: true, Data: json.RawMessage(`{"ok":true}`),
+			MutationStatus: MutationApplied, ValidationKind: ValidationKindSyntax,
+			ValidationStatus: ValidationPassed,
+			V3Used:           true, CandidatesTested: 4, WinningScore: 0.75, PhaseSolved: "phase1"},
+			`{"success":true,"data":{"ok":true},"v3_used":true,"candidates_tested":4,"winning_score":0.75,"phase_solved":"phase1"}`},
+	}
+}
+
+func TestModelFacingTextCarriesNoClassification(t *testing.T) {
+	banned := []string{"mutation_status", "validation_kind", "validation_status", "validation_detail"}
+	for _, c := range representativeResults() {
+		t.Run(c.name, func(t *testing.T) {
+			got := c.res.MarshalText()
+			for _, key := range banned {
+				if strings.Contains(got, key) {
+					t.Errorf("model-facing text leaks %q: %s", key, got)
+				}
+			}
+			// Byte-identical to what the parent produced for the same
+			// success/data/error, which is the same struct with the
+			// classification fields at their zero values.
+			if got != c.want {
+				t.Errorf("model-facing text changed:\n got %s\nwant %s", got, c.want)
+			}
+			legacy := ToolResult{Success: c.res.Success, Data: c.res.Data, Error: c.res.Error,
+				V3Used: c.res.V3Used, CandidatesTested: c.res.CandidatesTested,
+				WinningScore: c.res.WinningScore, PhaseSolved: c.res.PhaseSolved,
+				VerificationEvidence: c.res.VerificationEvidence}
+			parent, _ := json.Marshal(legacy)
+			if got != string(parent) {
+				t.Errorf("diverged from the parent shape:\n got %s\nwant %s", got, parent)
+			}
+		})
+	}
+}
+
+// The projection narrows the conversation, not the contract. The same result
+// still marshals with every fact intact for internal use.
+func TestInternalResultsStayFullyClassifiedBehindTheProjection(t *testing.T) {
+	for _, c := range representativeResults() {
+		t.Run(c.name, func(t *testing.T) {
+			b, err := json.Marshal(c.res)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var back ToolResult
+			if err := json.Unmarshal(b, &back); err != nil {
+				t.Fatal(err)
+			}
+			if back.MutationStatus != c.res.MutationStatus ||
+				back.ValidationKind != c.res.ValidationKind ||
+				back.ValidationStatus != c.res.ValidationStatus ||
+				back.ValidationDetail != c.res.ValidationDetail {
+				t.Errorf("internal round trip lost classification: %+v", back)
+			}
+			if !back.Classified() {
+				t.Errorf("internal result is not fully classified: %+v", back)
+			}
+		})
+	}
+}
+
+// Structural inventory of every path a tool result can take into model
+// context. Model context is ctx.Messages, so the guard is on AgentMessage
+// construction plus any direct marshal of a result anywhere in the package.
+// A new direct marshal, or a new tool message built from a result by some
+// other route, fails here rather than silently reaching the prompt.
+func TestEveryModelFacingSerializationSiteIsInventoried(t *testing.T) {
+	fset := token.NewFileSet()
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The approved ways a result becomes a tool message. Anything else must
+	// be added here deliberately.
+	approvedContent := map[string]bool{
+		// The one path that serialises a ToolResult, now via ModelFacing.
+		"result.MarshalText()": true,
+		// Two bounces that never build a ToolResult at all: they emit the
+		// legacy two-key shape directly.
+		"fmt.Sprintf(`{\"success\":false,\"error\":%q}`, rejection)":    true,
+		"`{\"success\":false,\"error\":\"permission denied by user\"}`": true,
+	}
+	resultish := regexp.MustCompile(`^&?\*?(result|res|toolResult|tr)$`)
+
+	var toolMessages, marshals int
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			switch node := n.(type) {
+			case *ast.CompositeLit:
+				id, ok := node.Type.(*ast.Ident)
+				if !ok || id.Name != "AgentMessage" {
+					return true
+				}
+				var role, content string
+				for _, elt := range node.Elts {
+					kv, ok := elt.(*ast.KeyValueExpr)
+					if !ok {
+						continue
+					}
+					key, ok := kv.Key.(*ast.Ident)
+					if !ok {
+						continue
+					}
+					var buf bytes.Buffer
+					printer.Fprint(&buf, fset, kv.Value)
+					switch key.Name {
+					case "Role":
+						role = strings.Trim(buf.String(), `"`)
+					case "Content":
+						content = buf.String()
+					}
+				}
+				if role != "tool" {
+					return true
+				}
+				toolMessages++
+				if !approvedContent[content] {
+					t.Errorf("%s: a tool message is built from an uninventoried "+
+						"expression %s — every path into model context must be "+
+						"listed in this guard", fset.Position(node.Pos()), content)
+				}
+			case *ast.CallExpr:
+				sel, ok := node.Fun.(*ast.SelectorExpr)
+				if !ok || len(node.Args) != 1 {
+					return true
+				}
+				pkg, ok := sel.X.(*ast.Ident)
+				if !ok || pkg.Name != "json" {
+					return true
+				}
+				if sel.Sel.Name != "Marshal" && sel.Sel.Name != "MarshalIndent" {
+					return true
+				}
+				var buf bytes.Buffer
+				printer.Fprint(&buf, fset, node.Args[0])
+				if !resultish.MatchString(buf.String()) {
+					return true
+				}
+				marshals++
+				t.Errorf("%s: json.%s(%s) marshals a tool result directly; use "+
+					"ModelFacing() for the conversation, and name the variable "+
+					"something else if this is internal",
+					fset.Position(node.Pos()), sel.Sel.Name, buf.String())
+			}
+			return true
+		})
+	}
+
+	// The transport half of the inventory. toWireMessages is where messages
+	// become the request body, and it must stay a string passthrough: if it
+	// ever reached for a ToolResult again, the projection above would be
+	// bypassed at the last step.
+	agentFile, err := parser.ParseFile(fset, "agent.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawWire bool
+	ast.Inspect(agentFile, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "toWireMessages" {
+			return true
+		}
+		sawWire = true
+		var buf bytes.Buffer
+		printer.Fprint(&buf, fset, fn.Body)
+		for _, banned := range []string{"ToolResult", "MarshalText", "json.Marshal", "ModelFacing"} {
+			if strings.Contains(buf.String(), banned) {
+				t.Errorf("toWireMessages references %s; the wire conversion must "+
+					"stay a passthrough of already-projected content", banned)
+			}
+		}
+		return false
+	})
+	if !sawWire {
+		t.Fatal("toWireMessages not found; the transport path moved and this " +
+			"guard no longer inventories it")
+	}
+
+	if toolMessages < 3 {
+		t.Fatalf("found %d tool-role AgentMessage sites, expected at least 3; "+
+			"if one was removed, update this guard deliberately", toolMessages)
+	}
+	t.Logf("inventoried %d tool-role message sites and %d direct result marshals",
+		toolMessages, marshals)
+}
+
+// MarshalText must project rather than marshal the receiver. Checking the
+// source keeps this true through a refactor that reintroduces the leak by
+// changing one expression.
+func TestMarshalTextProjectsRatherThanMarshallingTheReceiver(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "types.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	ast.Inspect(file, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "MarshalText" || fn.Recv == nil {
+			return true
+		}
+		found = true
+		var buf bytes.Buffer
+		printer.Fprint(&buf, fset, fn.Body)
+		body := buf.String()
+		if !strings.Contains(body, "ModelFacing()") {
+			t.Error("MarshalText no longer projects through ModelFacing")
+		}
+		if strings.Contains(body, "json.Marshal(r)") {
+			t.Error("MarshalText marshals the whole receiver again")
+		}
+		return false
+	})
+	if !found {
+		t.Fatal("MarshalText not found in types.go")
 	}
 }

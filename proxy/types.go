@@ -282,9 +282,50 @@ type ToolResult struct {
 	VerificationEvidence []V3VerificationEvidence `json:"verification_evidence,omitempty"`
 }
 
-// MarshalText returns a compact string representation for the model.
+// modelFacingResult is the shape a tool result has in the MODEL's context.
+//
+// The classification fields are a server-side fact. They exist so the agent
+// loop, the gates and the ledger can read what happened instead of inferring
+// it from Success -- not so the model can. Serialising them into the
+// conversation would put four new keys in front of a model whose behaviour
+// was measured without them, and would invite it to argue with a verdict it
+// cannot check.
+//
+// This is an allowlist, not a deny-list: a field added to ToolResult is
+// invisible here until someone decides otherwise, which is the direction that
+// fails safe. V3 provenance stays because it predates the evidence contract
+// and the model has always been told when a candidate replaced its content.
+type modelFacingResult struct {
+	Success bool            `json:"success"`
+	Data    json.RawMessage `json:"data,omitempty"`
+	Error   string          `json:"error,omitempty"`
+
+	V3Used               bool                     `json:"v3_used,omitempty"`
+	CandidatesTested     int                      `json:"candidates_tested,omitempty"`
+	WinningScore         float64                  `json:"winning_score,omitempty"`
+	PhaseSolved          string                   `json:"phase_solved,omitempty"`
+	VerificationEvidence []V3VerificationEvidence `json:"verification_evidence,omitempty"`
+}
+
+// ModelFacing projects a result down to what the model sees. It is the ONLY
+// supported way a ToolResult reaches the conversation.
+func (r *ToolResult) ModelFacing() modelFacingResult {
+	return modelFacingResult{
+		Success:              r.Success,
+		Data:                 r.Data,
+		Error:                r.Error,
+		V3Used:               r.V3Used,
+		CandidatesTested:     r.CandidatesTested,
+		WinningScore:         r.WinningScore,
+		PhaseSolved:          r.PhaseSolved,
+		VerificationEvidence: r.VerificationEvidence,
+	}
+}
+
+// MarshalText returns a compact string representation for the model. The full
+// struct still marshals normally for internal use; this is the boundary.
 func (r *ToolResult) MarshalText() string {
-	b, err := json.Marshal(r)
+	b, err := json.Marshal(r.ModelFacing())
 	if err != nil {
 		return fmt.Sprintf(`{"success":false,"error":"marshal error: %s"}`, err)
 	}

@@ -816,10 +816,14 @@ func TestDirectMutatorOutcomeTable(t *testing.T) {
 //	after the loop returns, including a rewrite performed by a shell
 //	command rather than by an edit tool; and
 //
-//	the externally visible behaviour -- the full ordered event stream and
-//	the final workspace -- is byte-for-byte what the parent commit produced.
+//	the OUTWARD behaviour -- the full ordered event stream and the final
+//	workspace -- is byte-for-byte what the parent commit produced.
 //
-// The second is what makes this phase observational. ATLAS_LEDGER_TRANSCRIPT
+// The second claim is about SSE and disk, and only those. Phase 3A described
+// it as "external behaviour", which overstated it: the model-facing prompt
+// was NOT unchanged, because classifying a producer put four new keys in the
+// tool message. TestModelPromptBytesAreUnchangedByClassification covers that
+// half, and the projection in types.go is what makes it true. ATLAS_LEDGER_TRANSCRIPT
 // dumps the transcript so the identical fixture can be run on the parent tree
 // and diffed; the hash below is that transcript, pinned.
 //
@@ -1549,4 +1553,172 @@ func TestWhichMutatorsCanEverPromoteACheckpoint(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- Phase 3A.2: the bytes the next model turn actually receives ------------
+//
+// The SSE transcript proved the OUTWARD stream was unchanged. It could not
+// prove anything about the prompt, because the classification never reached
+// SSE in the first place -- it reached the conversation. This captures the
+// request bodies the proxy sends to the inference endpoint, which is
+// literally what the next turn is conditioned on.
+//
+// The fixture drives two branches whose classification changed in the
+// migration: edit_file with an absent old_str (unclassified -> none) and
+// delete_file on a file that exists (unclassified -> applied). Before the
+// projection those two turns carried mutation_status/validation_kind/
+// validation_status into the prompt; after it they do not, and the bytes
+// match the parent commit exactly.
+//
+// Verified against parent 20952c6 by running this fixture unchanged there:
+// the same 7 requests, and the parent's bytes become these EXACTLY when the
+// four classification keys are removed and nothing else is touched
+// (13342 -> 12025 bytes, byte-identical).
+const modelPromptBytesHash = "8f9a0aabb86f7f033a164e200146eac9b544675348ca760a3a5a5152023220d6"
+
+// conversationBytes keeps every message except the system prompt, whose tool
+// descriptions are rendered in Go map order and therefore differ between two
+// runs of identical code. That ordering is a pre-existing property of the
+// prompt builder and has nothing to do with this boundary; the scan for
+// classification keys below still covers the system prompt in full.
+func conversationBytes(t *testing.T, prompts []string) string {
+	t.Helper()
+	var out strings.Builder
+	for i, raw := range prompts {
+		var req struct {
+			Messages []AgentMessage `json:"messages"`
+		}
+		if err := json.Unmarshal([]byte(raw), &req); err != nil {
+			t.Fatalf("request %d is not decodable: %v", i, err)
+		}
+		fmt.Fprintf(&out, "--- request %d ---\n", i)
+		for _, m := range req.Messages {
+			if m.Role == "system" {
+				fmt.Fprintf(&out, "system <%d bytes elided>\n", len(m.Content))
+				continue
+			}
+			fmt.Fprintf(&out, "%s|%s|%s|%s\n", m.Role, m.ToolName, m.ToolCallID, m.Content)
+		}
+	}
+	return out.String()
+}
+
+func TestModelPromptBytesAreUnchangedByClassification(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "solve.py"), []byte("A = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	turn := 0
+	var prompts []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
+			return
+		case strings.HasSuffix(r.URL.Path, "/execute"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			if strings.Contains(in.Code, ".atlas-mount-probe") {
+				b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": true, "stdout": string(b), "exit_code": 0})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "stdout": "", "exit_code": 0})
+			return
+		case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
+			http.NotFound(w, r)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		// The workspace path is baked into the prompt and differs per run.
+		prompts = append(prompts, strings.ReplaceAll(string(body), dir, "<WORKSPACE>"))
+		turn++
+		n := turn
+		mu.Unlock()
+
+		var payload map[string]interface{}
+		switch n {
+		case 1:
+			payload = map[string]interface{}{"type": "tool_call", "name": "read_file",
+				"args": map[string]string{"path": "solve.py"}}
+		case 2:
+			// Classification changed here: none, was unknown.
+			payload = map[string]interface{}{"type": "tool_call", "name": "edit_file",
+				"args": map[string]string{"path": "solve.py",
+					"old_str": "NOT PRESENT", "new_str": "B = 2"}}
+		case 3:
+			// And here: applied, was unknown. move_file rather than
+			// delete_file because delete forces the loop to stop, so its
+			// result would never condition another turn.
+			payload = map[string]interface{}{"type": "tool_call", "name": "move_file",
+				"args": map[string]string{"source": "solve.py", "destination": "final.py"}}
+		default:
+			payload = map[string]interface{}{"type": "done", "summary": "renamed solve.py"}
+		}
+		call, _ := json.Marshal(payload)
+		d, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"delta": map[string]string{"content": string(call)}}}})
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+	}))
+	defer srv.Close()
+
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.InferenceURL = srv.URL
+	ctx.SandboxURL = srv.URL
+	ctx.V3URL = srv.URL
+	ctx.PermissionMode = PermissionYolo
+	ctx.TrustMode = trustFullyTrusted
+	ctx.VerifyOnHost = true
+	ctx.MaxTurns = 8
+	ctx.StreamFn = func(string, interface{}) {}
+
+	if err := runAgentLoop(ctx, "Rename solve.py."); err != nil {
+		t.Fatalf("agent loop error: %v", err)
+	}
+
+	mu.Lock()
+	joined := strings.Join(prompts, "\n\x1e\n")
+	conversation := conversationBytes(t, prompts)
+	mu.Unlock()
+	if len(prompts) < 3 {
+		t.Fatalf("only %d model requests captured; the fixture did not reach "+
+			"the branches it is meant to exercise", len(prompts))
+	}
+
+	// The direct claim, independent of the pinned hash: no classification key
+	// reached the prompt on any turn.
+	for _, key := range []string{"mutation_status", "validation_kind",
+		"validation_status", "validation_detail"} {
+		if strings.Contains(joined, key) {
+			t.Errorf("%q reached the model prompt", key)
+		}
+	}
+	// The tool messages are still there, carrying their legacy shape.
+	if !strings.Contains(joined, `string to replace not found in file`) {
+		t.Error("the refused edit_file result never reached the prompt at all")
+	}
+	if !strings.Contains(joined, `{\"moved\":true`) {
+		t.Error("the applied move_file result never reached the prompt")
+	}
+
+	if out := os.Getenv("ATLAS_PROMPT_BYTES"); out != "" {
+		os.WriteFile(out, []byte(conversation), 0o600)
+	}
+	h := hashBytes([]byte(conversation))
+	if modelPromptBytesHash != "" && h != modelPromptBytesHash {
+		t.Errorf("conversation bytes changed (%s, want %s):\n%s",
+			h[:12], modelPromptBytesHash[:12], conversation)
+	}
+	t.Logf("conversation: %d requests, %d bytes, sha256 %s",
+		len(prompts), len(conversation), h)
 }

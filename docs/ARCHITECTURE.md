@@ -204,6 +204,29 @@ unclassified branch would be indistinguishable from a deliberate no-op.
 `errFailedMutation` a write that was attempted and left the target
 indeterminate. `TestEvery*OutcomeIsClassified` covers the families.
 
+#### What the model sees
+
+Classification is a server-side fact. `ToolResult.ModelFacing()` projects a
+result down to `success` / `data` / `error` plus the V3 provenance fields, and
+`MarshalText` — the only path from a result into `ctx.Messages` — goes through
+it. The full struct still marshals with every field for internal use; the
+projection is an allowlist, so a field added to `ToolResult` stays out of the
+conversation until someone decides otherwise.
+
+Three tests hold the boundary in `proxy/result_contract_test.go` and
+`proxy/tool_effect_test.go`: `TestEveryModelFacingSerializationSiteIsInventoried`
+fails on a new direct marshal or a tool message built by an uninventoried
+route, `TestModelFacingTextCarriesNoClassification` pins the projected bytes
+per outcome, and `TestModelPromptBytesAreUnchangedByClassification` runs the
+agent loop over two branches whose classification changed and compares the
+request bodies against the parent commit.
+
+Two limitations are carried, not inferred around. `structural_edit` reports
+`syntax`/`not_run` on success and therefore cannot promote a checkpoint;
+`move_file`'s cross-filesystem copy path is production-reachable but has no
+production-path test, since one temp directory cannot straddle two
+filesystems.
+
 `SessionWrites` is a separate, older map keyed on the raw model-supplied path;
 `proxy/types.go` documents the aliasing that follows from that.
 
