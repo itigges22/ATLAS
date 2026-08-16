@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1874,5 +1875,396 @@ func TestModelSuccessClaimOverAnInvalidArtifact(t *testing.T) {
 	}
 	if census["done"] != 1 {
 		t.Errorf("%d terminal events", census["done"])
+	}
+}
+
+// --- Terminal authorization: the evidence the status decision already had ---
+//
+// Both completion paths authorized success before consulting predicates the
+// same function evaluates twelve lines later for the summary. The measured
+// result was one terminal event contradicting itself: status "completed",
+// reason "no_file_obligation", summary "Nothing was written — no file was
+// created or changed in this run."
+
+// termFixture drives the real loop with MaxTurns=0 and a server-side ceiling,
+// so nothing sleeps and an unbounded loop fails immediately.
+func termFixture(t *testing.T, dir, request string, ceiling int,
+	plan func(i int, prompt string) map[string]interface{}) (*AgentContext, *int, map[string]int, map[string]string) {
+	t.Helper()
+	turns := 0
+	census := map[string]int{}
+	terminal := map[string]string{}
+	var mu sync.Mutex
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			valid := !strings.Contains(in.Code, "]]")
+			out := map[string]interface{}{"valid": valid}
+			if !valid {
+				out["errors"] = []string{"SyntaxError: unmatched ']'"}
+			}
+			json.NewEncoder(w).Encode(out)
+			return
+		case strings.HasSuffix(r.URL.Path, "/execute"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			if strings.Contains(in.Code, ".atlas-mount-probe") {
+				b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": true, "stdout": string(b), "exit_code": 0})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "stdout": "", "exit_code": 0})
+			return
+		case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
+			http.NotFound(w, r)
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		if strings.Contains(string(raw), "single fenced block") {
+			// No fenced block ever arrives: the resolution fails fast.
+			d, _ := json.Marshal(map[string]interface{}{
+				"choices": []map[string]interface{}{
+					{"delta": map[string]string{"content": "Sure, here it is."}}}})
+			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+			return
+		}
+		mu.Lock()
+		i := turns
+		turns++
+		mu.Unlock()
+		if i >= ceiling {
+			http.Error(w, "turn ceiling exceeded", http.StatusInsufficientStorage)
+			return
+		}
+		call, _ := json.Marshal(plan(i, string(raw)))
+		d, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"delta": map[string]string{"content": string(call)}}}})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+	}))
+	t.Cleanup(srv.Close)
+
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
+	ctx.PermissionMode = PermissionYolo
+	ctx.TrustMode = trustFullyTrusted
+	ctx.VerifyOnHost = true
+	ctx.MaxTurns = 0
+	ctx.StreamFn = func(et string, data interface{}) {
+		b, _ := json.Marshal(data)
+		mu.Lock()
+		defer mu.Unlock()
+		census[et]++
+		if et == "done" {
+			var m map[string]string
+			json.Unmarshal(b, &m)
+			for k, v := range m {
+				terminal[k] = v
+			}
+		}
+	}
+	return ctx, &turns, census, terminal
+}
+
+const termCeiling = 30
+
+// 1. The measured four-path defect.
+func TestUnnamedDeliverablesNeverCompleteWithNothingWritten(t *testing.T) {
+	dir := t.TempDir()
+	paths := []string{"a.py", "b.py", "c.py", "d.py"}
+	ctx, turns, census, terminal := termFixture(t, dir, "Write four files.", termCeiling,
+		func(i int, _ string) map[string]interface{} {
+			if i >= len(paths) {
+				return map[string]interface{}{"type": "done",
+					"summary": "I have successfully written all four files."}
+			}
+			return map[string]interface{}{"type": "tool_call", "name": "write_file",
+				"args": map[string]string{"path": paths[i], "content": "@fenced"}}
+		})
+	if err := runAgentLoop(ctx, "Write four files."); err != nil {
+		t.Fatalf("loop error: %v", err)
+	}
+	t.Logf("turns=%d status=%q reason=%q summary=%.100s",
+		*turns, terminal["status"], terminal["reason"], terminal["summary"])
+
+	if terminal["status"] != string(TerminalIncomplete) {
+		t.Fatalf("status = %q, want incomplete", terminal["status"])
+	}
+	if terminal["reason"] != "action_demanded_unmet" {
+		t.Errorf("reason = %q, want action_demanded_unmet", terminal["reason"])
+	}
+	if completionClaimIn(terminal["summary"]) != "" {
+		t.Errorf("the model's claim reached the summary:\n%s", terminal["summary"])
+	}
+	if !hasHonestMarker(terminal["summary"]) {
+		t.Errorf("summary is not honest:\n%s", terminal["summary"])
+	}
+	if len(ctx.Ledger) != 0 {
+		t.Errorf("a path the session never wrote entered the ledger: %v", ctx.Ledger)
+	}
+	var found []string
+	filepath.Walk(dir, func(p string, i os.FileInfo, e error) error {
+		if e == nil && i != nil && !i.IsDir() && !strings.Contains(p, "mount-probe") {
+			found = append(found, p)
+		}
+		return nil
+	})
+	if len(found) != 0 {
+		t.Errorf("files on disk: %v", found)
+	}
+	if census["done"] != 1 {
+		t.Errorf("%d terminal events", census["done"])
+	}
+	if census["tool_call"] != census["tool_result"] {
+		t.Errorf("call/result balance: %d vs %d", census["tool_call"], census["tool_result"])
+	}
+}
+
+// 2. The text exit, which starts at completed and only downgrades.
+func TestTextExitCannotCompleteAnUnmetActionRequest(t *testing.T) {
+	dir := t.TempDir()
+	ctx, _, census, terminal := termFixture(t, dir, "Write four files.", termCeiling,
+		func(i int, _ string) map[string]interface{} {
+			return map[string]interface{}{"type": "text",
+				"content": "I have successfully implemented all four files as requested."}
+		})
+	if err := runAgentLoop(ctx, "Write four files."); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("text exit: status=%q reason=%q summary=%.100s",
+		terminal["status"], terminal["reason"], terminal["summary"])
+	if terminal["status"] != string(TerminalIncomplete) {
+		t.Fatalf("status = %q, want incomplete", terminal["status"])
+	}
+	if terminal["reason"] != "action_demanded_unmet" {
+		t.Errorf("reason = %q", terminal["reason"])
+	}
+	if completionClaimIn(terminal["summary"]) != "" {
+		t.Errorf("the model's completion prose reached the summary:\n%s", terminal["summary"])
+	}
+	if census["done"] != 1 {
+		t.Errorf("%d terminal events", census["done"])
+	}
+}
+
+// 3. Verification demanded and unmet, and the precedence when both are unmet.
+func TestUnmetVerificationDowngradesAndActionWins(t *testing.T) {
+	t.Run("verification unmet after a real write", func(t *testing.T) {
+		dir := t.TempDir()
+		const body = "def solve():\n    return 1\n"
+		ctx, _, _, terminal := termFixture(t, dir,
+			"Create solve.py and run the tests to verify it.", termCeiling,
+			func(i int, _ string) map[string]interface{} {
+				if i == 0 {
+					return map[string]interface{}{"type": "tool_call", "name": "write_file",
+						"args": map[string]string{"path": "solve.py", "content": body}}
+				}
+				return map[string]interface{}{"type": "done", "summary": "wrote it"}
+			})
+		if err := runAgentLoop(ctx, "Create solve.py and run the tests to verify it."); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := os.ReadFile(filepath.Join(dir, "solve.py"))
+		t.Logf("verify-unmet: status=%q reason=%q disk=%q",
+			terminal["status"], terminal["reason"], string(got))
+		if terminal["status"] == string(TerminalCompleted) {
+			t.Errorf("completed with verification demanded and unmet")
+		}
+		if terminal["reason"] != "verification_demanded_unmet" {
+			t.Errorf("reason = %q, want verification_demanded_unmet", terminal["reason"])
+		}
+	})
+
+	t.Run("both unmet: action wins", func(t *testing.T) {
+		dir := t.TempDir()
+		ctx, _, _, terminal := termFixture(t, dir,
+			"Create some files and run the tests to verify them.", termCeiling,
+			func(i int, _ string) map[string]interface{} {
+				return map[string]interface{}{"type": "done", "summary": "all set"}
+			})
+		if err := runAgentLoop(ctx, "Create some files and run the tests to verify them."); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("both-unmet: status=%q reason=%q", terminal["status"], terminal["reason"])
+		if terminal["status"] != string(TerminalIncomplete) {
+			t.Fatalf("status = %q", terminal["status"])
+		}
+		if terminal["reason"] != "action_demanded_unmet" {
+			t.Errorf("reason = %q, want action to take precedence", terminal["reason"])
+		}
+	})
+}
+
+// 4. A genuine question still completes, through both exits.
+func TestReadOnlyRequestsStillComplete(t *testing.T) {
+	for _, exit := range []string{"done", "text"} {
+		t.Run(exit, func(t *testing.T) {
+			dir := t.TempDir()
+			const q = "What does this project do?"
+			ctx, _, _, terminal := termFixture(t, dir, q, termCeiling,
+				func(i int, _ string) map[string]interface{} {
+					if exit == "text" {
+						return map[string]interface{}{"type": "text",
+							"content": "It is a small solver: solve.py reads input.txt and prints a total."}
+					}
+					return map[string]interface{}{"type": "done",
+						"summary": "It is a small solver that reads input.txt and prints a total."}
+				})
+			if err := runAgentLoop(ctx, q); err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("%s exit: status=%q reason=%q", exit, terminal["status"], terminal["reason"])
+			if terminal["status"] != string(TerminalCompleted) {
+				t.Errorf("a read-only question no longer completes: status=%q reason=%q",
+					terminal["status"], terminal["reason"])
+			}
+		})
+	}
+}
+
+// 5. The successful paths are unchanged.
+func TestSuccessfulCompletionsAreUnchanged(t *testing.T) {
+	const body = "def solve():\n    return 1\n\nprint(solve())\n"
+	run := func(t *testing.T, request string) (map[string]string, *AgentContext, string) {
+		dir := t.TempDir()
+		ctx, _, _, terminal := termFixture(t, dir, request, termCeiling,
+			func(i int, _ string) map[string]interface{} {
+				switch i {
+				case 0:
+					return map[string]interface{}{"type": "tool_call", "name": "write_file",
+						"args": map[string]string{"path": "solve.py", "content": body}}
+				case 1:
+					return map[string]interface{}{"type": "tool_call", "name": "run_command",
+						"args": map[string]string{"command": "python3 solve.py"}}
+				default:
+					return map[string]interface{}{"type": "done",
+						"summary": "I have successfully created solve.py and ran it."}
+				}
+			})
+		if err := runAgentLoop(ctx, request); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := os.ReadFile(filepath.Join(dir, "solve.py"))
+		return terminal, ctx, string(got)
+	}
+
+	t.Run("named deliverable", func(t *testing.T) {
+		terminal, ctx, got := run(t, "Create solve.py that prints 1, then run it.")
+		t.Logf("named: status=%q reason=%q", terminal["status"], terminal["reason"])
+		if terminal["status"] != string(TerminalCompleted) {
+			t.Fatalf("status=%q reason=%q", terminal["status"], terminal["reason"])
+		}
+		d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
+		if d == nil || d.CurrentHash != hashBytes([]byte(got)) {
+			t.Error("ledger does not describe the final bytes")
+		}
+		if k, s := d.CurrentValidation(); s != ValidationPassed || k != ValidationKindSyntax {
+			t.Errorf("completion over %v/%v", k, s)
+		}
+		// A genuinely completed run keeps the model's account.
+		if completionClaimIn(terminal["summary"]) == "" {
+			t.Errorf("an authorised completion had its claim stripped:\n%s", terminal["summary"])
+		}
+	})
+
+	t.Run("unnamed deliverable actually written", func(t *testing.T) {
+		terminal, _, _ := run(t, "Write a small script and run it.")
+		t.Logf("unnamed: status=%q reason=%q", terminal["status"], terminal["reason"])
+		if terminal["status"] != string(TerminalCompleted) {
+			t.Errorf("a run that wrote and verified did not complete: status=%q reason=%q",
+				terminal["status"], terminal["reason"])
+		}
+	})
+
+	t.Run("deliverables_not_demonstrated still wins when it applies", func(t *testing.T) {
+		dir := t.TempDir()
+		const broken = "def solve():\n    return [1, 2]]\n"
+		ctx, _, _, terminal := termFixture(t, dir,
+			"Create solve.py that prints the list.", termCeiling,
+			func(i int, _ string) map[string]interface{} {
+				if i == 0 {
+					return map[string]interface{}{"type": "tool_call", "name": "write_file",
+						"args": map[string]string{"path": "solve.py", "content": broken}}
+				}
+				if i == 1 {
+					return map[string]interface{}{"type": "tool_call", "name": "run_command",
+						"args": map[string]string{"command": "echo checked"}}
+				}
+				return map[string]interface{}{"type": "done", "summary": "done"}
+			})
+		if err := runAgentLoop(ctx, "Create solve.py that prints the list."); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("broken-artifact: status=%q reason=%q", terminal["status"], terminal["reason"])
+		if terminal["status"] == string(TerminalCompleted) {
+			t.Fatal("invalid bytes completed")
+		}
+		if terminal["reason"] != "deliverables_not_demonstrated" {
+			t.Errorf("reason = %q — a more specific existing failure was replaced",
+				terminal["reason"])
+		}
+	})
+}
+
+// 6. Refused unsafe mutations cannot become success by leaving no trace.
+func TestRefusedUnsafeMutationsCannotComplete(t *testing.T) {
+	for _, c := range []struct{ name, path string }{
+		{"deny-listed", ".env"},
+		{"path escape", "../outside.py"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			os.WriteFile(filepath.Join(dir, ".env"), []byte("S=1\n"), 0o644)
+			ctx, _, _, terminal := termFixture(t, dir, "Write the config file.", termCeiling,
+				func(i int, _ string) map[string]interface{} {
+					if i < 2 {
+						return map[string]interface{}{"type": "tool_call", "name": "write_file",
+							"args": map[string]string{"path": c.path, "content": "SECRET=2\n"}}
+					}
+					return map[string]interface{}{"type": "done", "summary": "wrote the config"}
+				})
+			if err := runAgentLoop(ctx, "Write the config file."); err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("%s: status=%q reason=%q", c.name, terminal["status"], terminal["reason"])
+			if terminal["status"] == string(TerminalCompleted) {
+				t.Errorf("a refused unsafe mutation completed: reason=%q", terminal["reason"])
+			}
+			if got, _ := os.ReadFile(filepath.Join(dir, ".env")); string(got) != "S=1\n" {
+				t.Errorf(".env changed: %q", got)
+			}
+			if len(ctx.Ledger) != 0 {
+				t.Errorf("a refused path entered the ledger: %v", ctx.Ledger)
+			}
+		})
+	}
+}
+
+// Structural guard: both exits must reach the SAME finalizer, so a future
+// producer cannot consult unmet-action evidence only for prose.
+func TestBothCompletionPathsShareOneDecision(t *testing.T) {
+	src, err := os.ReadFile("agent.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	if n := strings.Count(body, "finalizeCompletion("); n < 3 {
+		t.Errorf("finalizeCompletion has %d references (definition + 2 exits expected); "+
+			"both completion paths must share one decision", n)
+	}
+	// terminalCompletionAllowed is the finalizer's input, not a producer's.
+	if n := strings.Count(body, "terminalCompletionAllowed("); n != 2 {
+		t.Errorf("terminalCompletionAllowed has %d references, want 2 (definition + "+
+			"the single call inside finalizeCompletion); a producer calling it "+
+			"directly bypasses the unmet-action evidence", n)
 	}
 }

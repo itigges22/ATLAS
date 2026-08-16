@@ -287,6 +287,8 @@ closes the gap Phase 2B left: a client that reads only `summary` — every clien
 written before `status` existed — now reads the same truth as one that reads
 both.
 
+Both exits — a model-issued `done` and a text reply — reach that decision through one finalizer, in one order: an existing deliverable failure keeps its own more specific reason; otherwise a run that was asked to change something on disk and changed nothing is `incomplete` / `action_demanded_unmet`; otherwise a run that was asked to verify and never did is `incomplete` / `verification_demanded_unmet`; otherwise the completion stands. The predicates are the ones that already rewrite the summary, so the machine-readable half and the prose can no longer contradict each other.
+
 A model-issued `done` is `completed` only when the run's file obligation —
 what it declared plus what it wrote — is demonstrably satisfied right now,
 through the same syntax contract the write path uses. If anything was deleted

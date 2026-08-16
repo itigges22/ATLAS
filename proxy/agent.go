@@ -1034,12 +1034,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// The decision comes FIRST, because it decides whose words the
 			// user reads: the model's account is only repeated where the
 			// exact-hash gate authorised the completion it describes.
-			status, reason := TerminalIncomplete, ""
-			if ok, why := terminalCompletionAllowed(ctx, st.expectedOutputs); ok {
-				status, reason = TerminalCompleted, why
-			} else {
-				reason = why
-			}
+			status, reason := finalizeCompletion(ctx, st, userMessage, "")
 			summary := modelProseIfAuthorized(status, parsed.Summary)
 			// Past the gates, but the verification gate can be past because
 			// it ran out of bounces rather than because anything verified.
@@ -1084,11 +1079,10 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				textSummary = nothingWrittenSummary("")
 			}
 			// A text reply carries no file obligation of its own; when the
-			// run also wrote something, the same demonstration is required.
-			textStatus, textReason := TerminalCompleted, "text_reply"
-			if ok, why := terminalCompletionAllowed(ctx, st.expectedOutputs); !ok {
-				textStatus, textReason = TerminalIncomplete, why
-			}
+			// run also wrote something, or was asked to change something and
+			// did not, the same demonstration is required. Same decision as
+			// the done exit, so the two cannot drift.
+			textStatus, textReason := finalizeCompletion(ctx, st, userMessage, "text_reply")
 			emitTerminal(ctx, st, textStatus, textReason, textSummary)
 			return nil
 
@@ -6452,4 +6446,47 @@ func fencedChannelRecovery(ctx *AgentContext, st *runState, relPath string) stri
 		"replace_lines; read it with read_file; or run it with run_command and read the "+
 		"real error. Pick one of those.", relPath)
 	return sb.String()
+}
+
+// finalizeCompletion is the one decision both exits make, in one order.
+//
+// The defect it closes: the status was decided from the deliverable evidence
+// alone, and the predicates that prove an unmet request were consulted twelve
+// lines later, for the summary only. A run could therefore report
+// completed / no_file_obligation while its own summary said "Nothing was
+// written — no file was created or changed in this run." Measured on a
+// four-target run that wrote nothing, and on a deny-listed write that was
+// correctly refused: neither left a ledger entry, so neither had an obligation
+// to fail, and both were called success.
+//
+// Nothing new is inferred. wantsStateChange, the action demand and the
+// verification demand already exist and are already trusted enough to rewrite
+// the user's summary; this lets the machine-readable half read the same
+// evidence. No prose is parsed, no obligation is invented for a path the
+// session never owned, and no more-specific existing failure is replaced.
+//
+// The order is fixed and shared with the summary composition below it:
+//
+//  1. a deliverable failure keeps its own, more specific reason;
+//  2. otherwise, work was demanded on disk and none landed;
+//  3. otherwise, verification was demanded and none passed;
+//  4. otherwise the completion stands.
+//
+// completedReason lets an exit name its own reason for a genuine completion
+// (the text exit says text_reply); empty keeps the deliverable evidence's.
+func finalizeCompletion(ctx *AgentContext, st *runState, userMessage, completedReason string) (TerminalStatus, string) {
+	ok, why := terminalCompletionAllowed(ctx, st.expectedOutputs)
+	if !ok {
+		return TerminalIncomplete, why
+	}
+	if st.actionDemandedAndUnmet(ctx, userMessage) {
+		return TerminalIncomplete, "action_demanded_unmet"
+	}
+	if st.verificationDemandedAndUnmet() {
+		return TerminalIncomplete, "verification_demanded_unmet"
+	}
+	if completedReason != "" {
+		return TerminalCompleted, completedReason
+	}
+	return TerminalCompleted, why
 }
