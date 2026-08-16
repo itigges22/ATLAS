@@ -616,20 +616,40 @@ func TestRunCommandRehashesTrackedPaths(t *testing.T) {
 	}
 }
 
-// run_background makes the workspace concurrently mutable, and the flag
-// survives a start that reported failure: without a job_id there is nothing
-// to confirm an exit with.
-func TestBackgroundRaisesTheHazardEvenWhenTheStartFails(t *testing.T) {
-	ctx := ledgerToolCtx(t, t.TempDir())
-	ctx.SandboxURL = "" // start cannot succeed
-	args, _ := json.Marshal(map[string]string{"command": "python -m http.server"})
-	res := executeToolCall("run_background", args, ctx)
-	if res.Success {
-		t.Fatal("expected the start to fail with no sandbox configured")
-	}
-	if !workspaceHazardous(ctx) {
-		t.Error("a background start that may have run left no hazard")
-	}
+// The hazard describes work that may exist, not attempts that were made.
+// A call the tool refused before dispatch created nothing to be hazardous
+// about; a call that may have reached the sandbox and came back with no job
+// id did, and nothing can reap that.
+func TestBackgroundHazardFollowsDispatchNotTheAttempt(t *testing.T) {
+	t.Run("refused before dispatch leaves no hazard", func(t *testing.T) {
+		ctx := ledgerToolCtx(t, t.TempDir()) // VerifyOnHost: never dispatches
+		ctx.SandboxURL = ""
+		args, _ := json.Marshal(map[string]string{"command": "python -m http.server"})
+		if res := executeToolCall("run_background", args, ctx); res.Success {
+			t.Fatal("expected the start to be refused")
+		}
+		if workspaceHazardous(ctx) {
+			t.Error("a start that never dispatched left a hazard nothing can lower")
+		}
+	})
+
+	t.Run("may have dispatched, no job id: unresolvable hazard", func(t *testing.T) {
+		ctx := ledgerToolCtx(t, t.TempDir())
+		ctx.VerifyOnHost = false
+		ctx.SandboxURL = "http://127.0.0.1:1" // reachable-looking, actually not
+		args, _ := json.Marshal(map[string]string{"command": "python -m http.server"})
+		if res := executeToolCall("run_background", args, ctx); res.Success {
+			t.Fatal("expected the start to fail")
+		}
+		if !workspaceHazardous(ctx) {
+			t.Error("a start that may have run left no hazard")
+		}
+		// Nothing to reap: reaping cannot clear what it cannot name.
+		reapSessionBackgroundJobs(ctx)
+		if !workspaceHazardous(ctx) {
+			t.Error("an unidentified job was cleared by reaping nothing")
+		}
+	})
 }
 
 func TestStopBackgroundClearsTheHazardOnlyOnAReapedExit(t *testing.T) {
@@ -638,6 +658,12 @@ func TestStopBackgroundClearsTheHazardOnlyOnAReapedExit(t *testing.T) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/jobs/start"):
 			json.NewEncoder(w).Encode(map[string]interface{}{"job_id": "j1", "pid": 4242})
+		case strings.Contains(r.URL.Path, "/output"):
+			// The settle-window tail: the job is live, so it is tracked and
+			// owns a hazard until something confirms its exit.
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"job_id": "j1", "running": true, "stdout": []string{},
+				"stderr": []string{}, "elapsed_sec": 0.1, "command": "sleep 60"})
 		case strings.HasSuffix(r.URL.Path, "/stop"):
 			out := map[string]interface{}{"job_id": "j1", "killed": true,
 				"stdout": []string{}, "stderr": []string{}}
@@ -652,6 +678,7 @@ func TestStopBackgroundClearsTheHazardOnlyOnAReapedExit(t *testing.T) {
 	defer srv.Close()
 
 	ctx := ledgerToolCtx(t, t.TempDir())
+	ctx.VerifyOnHost = false // so the start actually dispatches
 	ctx.SandboxURL = srv.URL
 	start, _ := json.Marshal(map[string]string{"command": "sleep 60"})
 	executeToolCall("run_background", start, ctx)
@@ -1864,7 +1891,7 @@ func TestRestoreDeclinesEveryIneligibleShape(t *testing.T) {
 			wantReason: "deleted or moved on purpose"},
 		{name: "a background job may still be writing", syntaxUp: true,
 			mutate: func(t *testing.T, ctx *AgentContext, dir string) {
-				raiseWorkspaceHazard(ctx)
+				raiseWorkspaceHazard(ctx, "job1")
 			},
 			wantReason: "background job"},
 	} {

@@ -6058,7 +6058,7 @@ func reapSessionBackgroundJobs(ctx *AgentContext) {
 			continue
 		}
 		if out.ExitCode != nil {
-			clearWorkspaceHazard(ctx)
+			clearWorkspaceHazard(ctx, id)
 			continue
 		}
 		log.Printf("[agent] background job %s did not report an exit code — "+
@@ -6903,7 +6903,7 @@ func settleBackgroundHazard(ctx *AgentContext) []string {
 			continue
 		}
 		delete(ctx.BackgroundJobs, id)
-		clearWorkspaceHazard(ctx)
+		clearWorkspaceHazard(ctx, id)
 		reaped = true
 		log.Printf("[agent] background job %s had already exited — reaped at completion", id)
 	}

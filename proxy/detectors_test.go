@@ -3261,7 +3261,7 @@ func TestLiveBackgroundWorkBlocksCompletion(t *testing.T) {
 		dir := t.TempDir()
 		ctx := bgCtx(t, dir, "http://127.0.0.1:1")
 		ctx.BackgroundJobs = map[string]string{"job1": "python app.py"}
-		raiseWorkspaceHazard(ctx)
+		raiseWorkspaceHazard(ctx, "job1")
 		st := &runState{madeProductiveChange: true}
 		status, reason := finalizeCompletion(ctx, st, "Create solve.py.", "")
 		if status.Completed() || reason != "background_work_unresolved" {
@@ -3554,4 +3554,312 @@ func TestNonCodeDeliverableCompletesThroughTheLoop(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- Background hazard lifecycle ---------------------------------------------
+//
+// The hazard rose per start ATTEMPT and fell only when a registered job was
+// reaped, so a start that registered no job raised one nothing could lower.
+// Once completion began consulting it, that session could never finish.
+// Hazards are owned by job identity now.
+
+// bgStartSandbox scripts the job endpoints deterministically: `startFails`
+// makes /jobs/start error, `startRunning` decides what the settle-window tail
+// reports, and `jobID` lets a stub return a duplicate id on purpose.
+type bgStartSandbox struct {
+	mu           sync.Mutex
+	startFails   bool
+	startRunning bool
+	jobID        string
+	started      int
+	stopped      []string
+	mutate       func()
+}
+
+func newBgStartSandbox(t *testing.T, dir string, bg *bgStartSandbox) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"valid": !strings.Contains(in.Code, "]]")})
+		case strings.HasSuffix(r.URL.Path, "/jobs/start"):
+			bg.mu.Lock()
+			fails, id := bg.startFails, bg.jobID
+			bg.started++
+			if id == "" {
+				id = fmt.Sprintf("job%d", bg.started)
+			}
+			bg.mu.Unlock()
+			if fails {
+				http.Error(w, "no slots", http.StatusServiceUnavailable)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{"job_id": id, "pid": 4242})
+		case strings.Contains(r.URL.Path, "/output"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/jobs/"), "/output")
+			bg.mu.Lock()
+			running, mutate := bg.startRunning, bg.mutate
+			bg.mu.Unlock()
+			if !running && mutate != nil {
+				mutate()
+			}
+			out := map[string]interface{}{"job_id": id, "running": running,
+				"stdout": []string{}, "stderr": []string{}, "elapsed_sec": 0.1,
+				"command": "python app.py"}
+			if !running {
+				zero := 0
+				out["exit_code"] = zero
+			}
+			json.NewEncoder(w).Encode(out)
+		case strings.HasSuffix(r.URL.Path, "/stop"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/jobs/"), "/stop")
+			bg.mu.Lock()
+			bg.stopped = append(bg.stopped, id)
+			bg.mu.Unlock()
+			zero := 0
+			json.NewEncoder(w).Encode(map[string]interface{}{"job_id": id,
+				"killed": true, "exit_code": zero, "stdout": []string{}, "stderr": []string{}})
+		default:
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func bgStartCtx(t *testing.T, dir, url string) *AgentContext {
+	t.Helper()
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.SandboxURL = url
+	ctx.PermissionMode = PermissionYolo
+	ctx.TrustMode = trustFullyTrusted
+	ctx.StreamFn = func(string, interface{}) {}
+	return ctx
+}
+
+func TestBackgroundHazardLifecycle(t *testing.T) {
+	const good = "def solve():\n    return 1\n"
+	seed := func(t *testing.T, ctx *AgentContext) {
+		t.Helper()
+		w, _ := json.Marshal(map[string]string{"path": "solve.py", "content": good})
+		if res := executeToolCall("write_file", w, ctx); res.ValidationStatus != ValidationPassed {
+			t.Fatalf("seed did not validate: %s", res.ValidationStatus)
+		}
+	}
+	start := func(ctx *AgentContext) *ToolResult {
+		args, _ := json.Marshal(map[string]string{"command": "python app.py"})
+		return executeToolCall("run_background", args, ctx)
+	}
+	st := func() *runState {
+		return &runState{madeProductiveChange: true, expectedOutputs: []string{"solve.py"}}
+	}
+
+	// A. Definitively no job: a refusal the tool makes before dispatch.
+	t.Run("A definitive failed start leaves no hazard", func(t *testing.T) {
+		dir := t.TempDir()
+		bg := &bgStartSandbox{}
+		srv := newBgStartSandbox(t, dir, bg)
+		ctx := bgStartCtx(t, dir, srv.URL)
+		seed(t, ctx)
+		// An empty command is refused locally: nothing is dispatched.
+		args, _ := json.Marshal(map[string]string{"command": "   "})
+		if res := executeToolCall("run_background", args, ctx); res.Success {
+			t.Fatal("an empty command was accepted")
+		}
+		if workspaceHazardous(ctx) {
+			t.Fatal("a refusal that never dispatched left a hazard")
+		}
+		if len(ctx.BackgroundJobs) != 0 {
+			t.Error("a job was invented")
+		}
+		if len(bg.stopped) != 0 {
+			t.Error("something was reaped")
+		}
+		status, reason := finalizeCompletion(ctx, st(), "Create solve.py.", "")
+		if !status.Completed() {
+			t.Errorf("a valid deliverable could not complete: reason=%q", reason)
+		}
+	})
+
+	// B. A failed attempt beside a live job changes nothing about the live one.
+	t.Run("B failed attempt neither adds nor removes", func(t *testing.T) {
+		dir := t.TempDir()
+		bg := &bgStartSandbox{startRunning: true}
+		srv := newBgStartSandbox(t, dir, bg)
+		ctx := bgStartCtx(t, dir, srv.URL)
+		seed(t, ctx)
+		start(ctx) // job1, live
+		if len(ctx.WorkspaceHazards) != 1 {
+			t.Fatalf("hazards after one live start: %v", ctx.WorkspaceHazards)
+		}
+		args, _ := json.Marshal(map[string]string{"command": ""})
+		executeToolCall("run_background", args, ctx)
+		if len(ctx.WorkspaceHazards) != 1 {
+			t.Errorf("a refused attempt changed the hazard set: %v", ctx.WorkspaceHazards)
+		}
+		if status, reason := finalizeCompletion(ctx, st(), "Create solve.py.", ""); status.Completed() {
+			t.Fatalf("completed with job1 live: reason=%q", reason)
+		}
+		// A settles; nothing else is outstanding.
+		bg.mu.Lock()
+		bg.startRunning = false
+		bg.mu.Unlock()
+		if status, reason := finalizeCompletion(ctx, st(), "Create solve.py.", ""); !status.Completed() {
+			t.Errorf("after A exited and settled: reason=%q", reason)
+		}
+	})
+
+	// C. Dispatched and already gone by the settle window.
+	t.Run("C immediate exit without mutation settles at once", func(t *testing.T) {
+		dir := t.TempDir()
+		bg := &bgStartSandbox{startRunning: false}
+		srv := newBgStartSandbox(t, dir, bg)
+		ctx := bgStartCtx(t, dir, srv.URL)
+		seed(t, ctx)
+		before := ctx.Ledger[ledgerKey(ctx, "solve.py")].CurrentHash
+		start(ctx)
+		if workspaceHazardous(ctx) {
+			t.Fatalf("an already-exited job left a lasting hazard: %v", ctx.WorkspaceHazards)
+		}
+		d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
+		if d.CurrentHash != before {
+			t.Error("an untouched file was re-recorded")
+		}
+		if _, s := d.CurrentValidation(); s != ValidationPassed {
+			t.Errorf("an untouched file lost its verdict: %v", s)
+		}
+		if status, reason := finalizeCompletion(ctx, st(), "Create solve.py.", ""); !status.Completed() {
+			t.Errorf("could not complete after an immediate exit: reason=%q", reason)
+		}
+	})
+
+	// D. Same, but it changed the file on its way out.
+	t.Run("D immediate exit after mutation invalidates", func(t *testing.T) {
+		dir := t.TempDir()
+		bg := &bgStartSandbox{startRunning: false}
+		srv := newBgStartSandbox(t, dir, bg)
+		ctx := bgStartCtx(t, dir, srv.URL)
+		seed(t, ctx)
+		before := ctx.Ledger[ledgerKey(ctx, "solve.py")].CurrentHash
+		bg.mu.Lock()
+		bg.mutate = func() {
+			os.WriteFile(filepath.Join(dir, "solve.py"), []byte("def solve():\n    return [1]]\n"), 0o644)
+		}
+		bg.mu.Unlock()
+		start(ctx)
+		d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
+		if d.CurrentHash == before {
+			t.Fatal("the rehash did not notice the change")
+		}
+		if _, s := d.CurrentValidation(); s == ValidationPassed {
+			t.Error("a verdict about the old bytes survived")
+		}
+		if status, reason := finalizeCompletion(ctx, st(), "Create solve.py.", ""); status.Completed() {
+			t.Errorf("completed over changed bytes: reason=%q", reason)
+		}
+	})
+
+	// E. Two live jobs, two owners.
+	t.Run("E multiple jobs are independently owned", func(t *testing.T) {
+		dir := t.TempDir()
+		bg := &bgStartSandbox{startRunning: true}
+		srv := newBgStartSandbox(t, dir, bg)
+		ctx := bgStartCtx(t, dir, srv.URL)
+		seed(t, ctx)
+		start(ctx)
+		start(ctx)
+		if len(ctx.WorkspaceHazards) != 2 {
+			t.Fatalf("hazards: %v", ctx.WorkspaceHazards)
+		}
+		stop, _ := json.Marshal(map[string]string{"job_id": "job1"})
+		executeToolCall("stop_background", stop, ctx)
+		if len(ctx.WorkspaceHazards) != 1 {
+			t.Errorf("reaping one cleared %v", ctx.WorkspaceHazards)
+		}
+		if !workspaceHazardous(ctx) {
+			t.Error("the second job stopped blocking")
+		}
+		// Idempotent.
+		executeToolCall("stop_background", stop, ctx)
+		if len(ctx.WorkspaceHazards) != 1 {
+			t.Errorf("a repeated reap changed the set: %v", ctx.WorkspaceHazards)
+		}
+		stop2, _ := json.Marshal(map[string]string{"job_id": "job2"})
+		executeToolCall("stop_background", stop2, ctx)
+		if workspaceHazardous(ctx) {
+			t.Errorf("hazards after reaping both: %v", ctx.WorkspaceHazards)
+		}
+	})
+
+	// F. A duplicate id is one job, however often it is seen.
+	t.Run("F duplicate id cannot double-raise", func(t *testing.T) {
+		dir := t.TempDir()
+		bg := &bgStartSandbox{startRunning: true, jobID: "same"}
+		srv := newBgStartSandbox(t, dir, bg)
+		ctx := bgStartCtx(t, dir, srv.URL)
+		seed(t, ctx)
+		start(ctx)
+		start(ctx)
+		start(ctx)
+		if len(ctx.WorkspaceHazards) != 1 {
+			t.Fatalf("a duplicate id raised %v", ctx.WorkspaceHazards)
+		}
+		stop, _ := json.Marshal(map[string]string{"job_id": "same"})
+		executeToolCall("stop_background", stop, ctx)
+		if workspaceHazardous(ctx) {
+			t.Errorf("one reap did not settle the duplicate: %v", ctx.WorkspaceHazards)
+		}
+	})
+
+	// G. Dispatch may have happened and cannot be named.
+	t.Run("G ambiguous dispatch fails closed", func(t *testing.T) {
+		dir := t.TempDir()
+		bg := &bgStartSandbox{startFails: true}
+		srv := newBgStartSandbox(t, dir, bg)
+		ctx := bgStartCtx(t, dir, srv.URL)
+		seed(t, ctx)
+		if res := start(ctx); res.Success {
+			t.Fatal("the start unexpectedly succeeded")
+		}
+		if !workspaceHazardous(ctx) {
+			t.Fatal("a possibly-dispatched start left no hazard")
+		}
+		if !ctx.WorkspaceHazards[hazardUnidentifiedJob] {
+			t.Errorf("the hazard is not the unidentified one: %v", ctx.WorkspaceHazards)
+		}
+		// Nothing can reap it, and it keeps blocking.
+		reapSessionBackgroundJobs(ctx)
+		settleBackgroundHazard(ctx)
+		if !workspaceHazardous(ctx) {
+			t.Error("reaping nothing cleared an unidentified job")
+		}
+		status, reason := finalizeCompletion(ctx, st(), "Create solve.py.", "")
+		if status.Completed() {
+			t.Fatal("completed with a possibly-live unidentified process")
+		}
+		if reason != "background_work_unresolved" {
+			t.Errorf("reason = %q", reason)
+		}
+	})
+
+	// I. Sessions that never start anything do no job work at all.
+	t.Run("I no background work, no job traffic", func(t *testing.T) {
+		dir := t.TempDir()
+		bg := &bgStartSandbox{}
+		srv := newBgStartSandbox(t, dir, bg)
+		ctx := bgStartCtx(t, dir, srv.URL)
+		seed(t, ctx)
+		status, reason := finalizeCompletion(ctx, st(), "Create solve.py.", "")
+		if !status.Completed() {
+			t.Errorf("reason=%q", reason)
+		}
+		bg.mu.Lock()
+		defer bg.mu.Unlock()
+		if bg.started != 0 || len(bg.stopped) != 0 {
+			t.Errorf("job endpoints were touched: started=%d stopped=%v", bg.started, bg.stopped)
+		}
+	})
 }

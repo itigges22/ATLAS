@@ -353,7 +353,7 @@ func TestBackgroundHazardOnlyClearsOnConfirmedExit(t *testing.T) {
 	if workspaceHazardous(ctx) {
 		t.Fatal("hazard set before any background work")
 	}
-	raiseWorkspaceHazard(ctx)
+	raiseWorkspaceHazard(ctx, "job1")
 	if !workspaceHazardous(ctx) {
 		t.Fatal("run_background must mark the workspace concurrently mutable")
 	}
@@ -361,7 +361,7 @@ func TestBackgroundHazardOnlyClearsOnConfirmedExit(t *testing.T) {
 	if !workspaceHazardous(ctx) {
 		t.Fatal("hazard cleared by a stop request")
 	}
-	clearWorkspaceHazard(ctx) // confirmed exit
+	clearWorkspaceHazard(ctx, "job1") // confirmed exit
 	if workspaceHazardous(ctx) {
 		t.Error("confirmed exit did not clear the hazard")
 	}

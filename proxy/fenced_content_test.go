@@ -1136,8 +1136,9 @@ func TestTimeoutReapsOnlyThisSessionsBackgroundJobs(t *testing.T) {
 	ctx.BackgroundJobs = map[string]string{
 		"mine-1": "python app.py", "mine-2": "npm start",
 	}
-	raiseWorkspaceHazard(ctx)
-	raiseWorkspaceHazard(ctx)
+	// Hazards are owned by the job identity they came from.
+	raiseWorkspaceHazard(ctx, "mine-1")
+	raiseWorkspaceHazard(ctx, "mine-2")
 
 	reapSessionBackgroundJobs(ctx)
 
@@ -1171,7 +1172,7 @@ func TestUnconfirmedJobKeepsTheHazardAndBlocksRestore(t *testing.T) {
 	ctx.SandboxURL = srv.URL
 	ctx.StreamFn = func(string, interface{}) {}
 	ctx.BackgroundJobs = map[string]string{"j1": "python app.py"}
-	raiseWorkspaceHazard(ctx)
+	raiseWorkspaceHazard(ctx, "j1")
 
 	reapSessionBackgroundJobs(ctx)
 	if !workspaceHazardous(ctx) {

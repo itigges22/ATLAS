@@ -2594,25 +2594,30 @@ func tombstoneDeliverable(ctx *AgentContext, path, reason string) {
 // raiseWorkspaceHazard marks the workspace concurrently mutable. Raised by
 // run_background. stop_background does NOT lower it: a signalled process may
 // still be flushing, so only a confirmed exit does.
-func raiseWorkspaceHazard(ctx *AgentContext) {
-	if ctx == nil {
+func raiseWorkspaceHazard(ctx *AgentContext, key string) {
+	if ctx == nil || key == "" {
 		return
 	}
 	ctx.LedgerMu.Lock()
 	defer ctx.LedgerMu.Unlock()
-	ctx.WorkspaceHazard++
+	if ctx.WorkspaceHazards == nil {
+		ctx.WorkspaceHazards = map[string]bool{}
+	}
+	// Keyed, so observing the same job twice cannot raise twice and a
+	// duplicate id cannot demand two reaps.
+	ctx.WorkspaceHazards[key] = true
 }
 
 // clearWorkspaceHazard lowers the hazard on a CONFIRMED process exit.
-func clearWorkspaceHazard(ctx *AgentContext) {
-	if ctx == nil {
+func clearWorkspaceHazard(ctx *AgentContext, key string) {
+	if ctx == nil || key == "" {
 		return
 	}
 	ctx.LedgerMu.Lock()
 	defer ctx.LedgerMu.Unlock()
-	if ctx.WorkspaceHazard > 0 {
-		ctx.WorkspaceHazard--
-	}
+	// Only this job's hazard. Idempotent, and it cannot underflow or reach
+	// another job that is still live or unconfirmed.
+	delete(ctx.WorkspaceHazards, key)
 }
 
 func workspaceHazardous(ctx *AgentContext) bool {
@@ -2621,7 +2626,7 @@ func workspaceHazardous(ctx *AgentContext) bool {
 	}
 	ctx.LedgerMu.Lock()
 	defer ctx.LedgerMu.Unlock()
-	return ctx.WorkspaceHazard > 0
+	return len(ctx.WorkspaceHazards) > 0
 }
 
 // invalidateTrackedValidation is what a shell effect does to the ledger: an
@@ -2814,12 +2819,30 @@ func recordLedgerEffect(name string, args json.RawMessage, ctx *AgentContext, re
 		invalidateTrackedValidation(ctx)
 
 	case "run_background":
-		// Conservative for the same reason MutationUnobserved is: once
-		// dispatch reached the handler a job may be running and writing, and
-		// a start that reported failure gives no job_id to confirm an exit
-		// with. The hazard stays raised.
-		raiseWorkspaceHazard(ctx)
+		// The hazard has to describe work that may exist, not attempts that
+		// were made. A call the tool refused before it could dispatch created
+		// nothing to be hazardous about; a dispatch whose outcome is unknown
+		// is exactly what the hazard is for.
+		if !backgroundStartDispatched(ctx, args) {
+			return
+		}
 		invalidateTrackedValidation(ctx)
+		var out RunBackgroundOutput
+		decoded := len(result.Data) > 0 && json.Unmarshal(result.Data, &out) == nil
+		switch {
+		case decoded && out.JobID != "" && out.Running:
+			// A live job, owned by its own identity.
+			raiseWorkspaceHazard(ctx, out.JobID)
+		case decoded && out.JobID != "":
+			// Dispatched and already gone. The rehash above is the settlement
+			// it needs; nothing is left to clear later.
+			clearWorkspaceHazard(ctx, out.JobID)
+		default:
+			// A process may exist and cannot be named. Uncertainty is not
+			// resolved by ignoring it: this hazard is deliberately unclearable
+			// by reaping, because there is nothing to reap.
+			raiseWorkspaceHazard(ctx, hazardUnidentifiedJob)
+		}
 
 	case "stop_background":
 		invalidateTrackedValidation(ctx)
@@ -2828,7 +2851,7 @@ func recordLedgerEffect(name string, args json.RawMessage, ctx *AgentContext, re
 		// process still flushing.
 		var out StopBackgroundOutput
 		if len(result.Data) > 0 && json.Unmarshal(result.Data, &out) == nil && out.ExitCode != nil {
-			clearWorkspaceHazard(ctx)
+			clearWorkspaceHazard(ctx, out.JobID)
 		}
 	}
 }
@@ -3100,4 +3123,32 @@ func restorationDisclosure(decisions []restoreDecision) string {
 		sb.WriteString(fmt.Sprintf(" Tried and could not restore: %s.", strings.Join(failed, ", ")))
 	}
 	return sb.String()
+}
+
+// hazardUnidentifiedJob owns the case where a background start may have
+// dispatched and came back with no usable job id. Nothing can reap it, which
+// is the point: the session cannot claim the workspace is quiet when it does
+// not know what is running in it.
+const hazardUnidentifiedJob = "\x00unidentified-background-job"
+
+// backgroundStartDispatched reports whether a run_background call could have
+// reached the sandbox at all, by asking the same questions the tool asks
+// before it dispatches. A refusal here is provable: no request was sent, so
+// no process exists and no hazard is owed.
+func backgroundStartDispatched(ctx *AgentContext, args json.RawMessage) bool {
+	var in RunBackgroundInput
+	if json.Unmarshal(args, &in) != nil {
+		return false
+	}
+	if ctx == nil || !ctx.TrustMode.commandsAllowed() {
+		return false
+	}
+	if strings.TrimSpace(in.Command) == "" {
+		return false
+	}
+	if reason := validateShellCommand(in.Command); reason != "" {
+		return false
+	}
+	// Host verification runs nothing in the sandbox.
+	return !ctx.VerifyOnHost
 }

@@ -924,11 +924,15 @@ type AgentContext struct {
 	Ledger   map[string]*DeliverableState
 	LedgerMu sync.Mutex
 
-	// WorkspaceHazard is set while a background job may be mutating the
+	// WorkspaceHazards is the set of background work that may still be
+	// writing, keyed by job identity rather than counted by start attempt.
+	// A counter could not be lowered by anything but a reap, so a start that
+	// registered no job raised a hazard nothing could ever clear -- and once
+	// completion consulted it, that session could never finish.
 	// workspace. run_background raises it; stop_background does NOT clear it,
 	// because a signalled process may still be flushing. Only a confirmed
 	// exit clears it, and tracked paths must be rehashed afterwards.
-	WorkspaceHazard int
+	WorkspaceHazards map[string]bool
 
 	// ManifestAnnounced tracks which SessionWrites paths have been named
 	// in a session-file-manifest note (context.go) so each file
