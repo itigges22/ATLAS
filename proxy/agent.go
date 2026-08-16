@@ -937,8 +937,13 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				if salvaged, ok := recoverTruncatedText(response); ok {
 					log.Printf("[agent] salvaged %d chars of a cut text answer at turn %d", len(salvaged), turn)
 					ctx.Stream("text", map[string]string{"content": salvaged})
-					salvageSummary := salvaged + "\n\n(The reply was cut short — it had begun " +
-						"repeating itself. Ask again if something is missing.)"
+					// The salvaged text is the model's own words and already
+					// reached the client as a `text` event. Repeating it in
+					// the summary of an INCOMPLETE terminal is how half-written
+					// code came to read as the answer, so the summary describes
+					// what happened instead of restating it.
+					salvageSummary := "The reply was cut short — it had begun repeating itself, " +
+						"so what arrived above is partial. Ask again if something is missing."
 					// Salvage is a third exit, alongside done and text, and it
 					// reached the user without the honesty the other two apply.
 					// Observed on aoc_slope rep2 and smallrung_toml rep2 (run
@@ -1015,27 +1020,29 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				st.bounce(ctx, gate, rejection)
 				continue
 			}
+			// A model saying it is finished is a claim, not a demonstration.
+			// The decision comes FIRST, because it decides whose words the
+			// user reads: the model's account is only repeated where the
+			// exact-hash gate authorised the completion it describes.
+			status, reason := TerminalIncomplete, ""
+			if ok, why := terminalCompletionAllowed(ctx, st.expectedOutputs); ok {
+				status, reason = TerminalCompleted, why
+			} else {
+				reason = why
+			}
+			summary := modelProseIfAuthorized(status, parsed.Summary)
 			// Past the gates, but the verification gate can be past because
 			// it ran out of bounces rather than because anything verified.
-			// A claim the run cannot support does not reach the user as the
-			// model wrote it.
-			summary := parsed.Summary
 			if st.verificationDemandedAndUnmet() {
 				log.Printf("[agent] done at turn %d with no passing verification — replacing the summary", turn)
-				summary = unverifiedSummary(st.madeProductiveChange, parsed.Summary)
+				summary = unverifiedSummary(st.madeProductiveChange,
+					modelProseIfAuthorized(status, parsed.Summary))
 			}
 			// Same reasoning one gate over: the action gate can be past
 			// because its bounces ran out, not because anything was written.
 			if st.actionDemandedAndUnmet(ctx, userMessage) {
 				log.Printf("[agent] done at turn %d with nothing written — saying so", turn)
 				summary = nothingWrittenSummary(summary)
-			}
-			// A model saying it is finished is a claim, not a demonstration.
-			status, reason := TerminalIncomplete, ""
-			if ok, why := terminalCompletionAllowed(ctx, st.expectedOutputs); ok {
-				status, reason = TerminalCompleted, why
-			} else {
-				reason = why
 			}
 			emitTerminal(ctx, st, status, reason, summary+liveBackgroundJobNote(ctx))
 			return nil
@@ -1718,8 +1725,9 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				// task is not knowable here, so this never claims completion:
 				// a delete authorising a done is the pair-1 defect.
 				emitTerminal(ctx, st, TerminalIncomplete, "file_operation_no_task_intent",
-					"Done — the file operation completed. Nothing further was run."+
-						liveBackgroundJobNote(ctx))
+					"The file operation ran and the session stopped there. Whether removing "+
+						"that file was the whole task is not something this run established, "+
+						"so it is not reported as finished."+liveBackgroundJobNote(ctx))
 				return nil
 			}
 
@@ -5749,9 +5757,10 @@ func emitTerminal(ctx *AgentContext, st *runState, status TerminalStatus, reason
 		}
 		// `summary` keeps its exact legacy meaning and position. `status` and
 		// `reason` are additive, so a consumer that never learned about them
-		// reads the same event it always did.
+		// reads the same event it always did -- and reads the same TRUTH,
+		// which is what honestTerminalSummary enforces.
 		ctx.Stream("done", map[string]string{
-			"summary": summary,
+			"summary": honestTerminalSummary(ctx, st, status, reason, summary),
 			"status":  string(status),
 			"reason":  reason,
 		})
@@ -5987,4 +5996,166 @@ func finishCancelledRun(ctx *AgentContext, st *runState, turn int) error {
 	emitTerminal(ctx, st, TerminalIncomplete, "cancelled",
 		"Stopped: the run was cancelled before the work finished."+liveBackgroundJobNote(ctx))
 	return nil
+}
+
+// --- Phase 4A: the summary a non-completed run is allowed to carry ----------
+//
+// Four of fifty Stage-1 sessions ended with the model's own prose --
+// "I have successfully implemented the interval priority logic in solve.py" --
+// over an artifact nothing had verified. Three more ended with no summary at
+// all. Phase 2B made `status` honest; a client reading only `summary`, which
+// is every client that predates that field, still read a success.
+//
+// So the server owns the sentence whenever it does not own a completion. A
+// completed status keeps the model's account, because the exact-hash gate has
+// already agreed with it.
+
+// completionClaims are the phrases a finished run is allowed to use. Matching
+// is on the claim, not on the word: "no verification command completed
+// successfully" is a report of failure and must not trip this, so each phrase
+// is checked for a negation immediately before it.
+var completionClaims = []string{
+	"successfully implemented", "successfully created", "successfully wrote",
+	"successfully added", "successfully fixed", "successfully completed",
+	"i have successfully", "made your change", "the change is on disk",
+	"final product", "task is complete", "task is done", "work is complete",
+	"is now complete", "everything works", "all tests pass", "it works correctly",
+	"correctly handles", "correctly processes", "correctly implements",
+}
+
+// negators immediately preceding a claim invert it.
+var claimNegators = []string{
+	"no ", "not ", "never ", "cannot ", "can't ", "could not ", "couldn't ",
+	"did not ", "didn't ", "without ", "nothing ", "fails to ", "failed to ",
+	"unverified", "unconfirmed",
+}
+
+// completionClaimIn returns the first unnegated completion claim in s, or "".
+func completionClaimIn(s string) string {
+	low := strings.ToLower(s)
+	for _, claim := range completionClaims {
+		from := 0
+		for {
+			i := strings.Index(low[from:], claim)
+			if i < 0 {
+				break
+			}
+			at := from + i
+			window := low[max(0, at-48):at]
+			negated := false
+			for _, n := range claimNegators {
+				if strings.Contains(window, n) {
+					negated = true
+					break
+				}
+			}
+			if !negated {
+				return claim
+			}
+			from = at + len(claim)
+		}
+	}
+	return ""
+}
+
+// honestMarkers are the ways a summary can already be saying the run did not
+// finish. One of them must be present on every non-completed terminal.
+var honestMarkers = []string{
+	"stopped", "ran out of time", "ran out of turns", "nothing was written",
+	"cannot say the task is done", "did not confirm", "not reported as finished",
+	"unverified", "before finishing", "was cancelled", "could not continue",
+	"not shown to be valid", "check them before relying", "run it yourself",
+	"partial", "did not complete",
+}
+
+func hasHonestMarker(s string) bool {
+	low := strings.ToLower(s)
+	for _, m := range honestMarkers {
+		if strings.Contains(low, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// honestTerminalSummary is the last thing between a terminal and the client.
+//
+// For a completed status it changes nothing: the gate authorised the claim, so
+// the account stands. For every other status it guarantees three properties --
+// there is a summary, it carries no completion claim, and it says plainly that
+// the task was not confirmed finished.
+func honestTerminalSummary(ctx *AgentContext, st *runState, status TerminalStatus,
+	reason, summary string) string {
+	if status.Completed() {
+		return summary
+	}
+	out := strings.TrimSpace(summary)
+	if claim := completionClaimIn(out); claim != "" {
+		// A producer, or prose that reached one, is claiming completion on a
+		// run that did not complete. The server replaces it outright rather
+		// than editing around it.
+		log.Printf("[agent] terminal (%s/%s) carried the completion claim %q — replacing the summary",
+			status, reason, claim)
+		out = ""
+	}
+	if out == "" {
+		out = serverTerminalFallback(ctx, st, status, reason)
+	}
+	if !hasHonestMarker(out) {
+		out += " This run did not confirm the task was complete."
+	}
+	return out
+}
+
+// serverTerminalFallback is what the user reads when the producer had nothing
+// to say, or said something the run cannot support. It reports only facts the
+// server holds: what the outcome was, whether anything is on disk, and whether
+// the deliverables were shown to be valid.
+func serverTerminalFallback(ctx *AgentContext, st *runState, status TerminalStatus, reason string) string {
+	var sb strings.Builder
+	switch status {
+	case TerminalTimedOut:
+		sb.WriteString("Stopped: the session ran out of time before the work finished.")
+	case TerminalFailed:
+		sb.WriteString("Stopped: the run could not continue.")
+	case TerminalStopped:
+		sb.WriteString("Stopped: the run was cut short before the work finished.")
+	default:
+		sb.WriteString("Stopped: the run ended without finishing the task.")
+	}
+
+	wrote := st != nil && st.madeProductiveChange
+	switch {
+	case !wrote:
+		sb.WriteString(" Nothing was written to disk.")
+	default:
+		var expected []string
+		if st != nil {
+			expected = st.expectedOutputs
+		}
+		paths := declaredOrOwnedDeliverables(ctx, expected)
+		switch {
+		case len(paths) == 0:
+			sb.WriteString(" Changes were written to disk and nothing verified them.")
+		case deliverablesDemonstrablyValid(ctx, paths):
+			sb.WriteString(" What is on disk parses, but nothing in this run verified it does " +
+				"the right thing.")
+		default:
+			sb.WriteString(" Changes are on disk and were not shown to be valid — treat them " +
+				"as unverified.")
+		}
+	}
+	sb.WriteString(" This run did not confirm the task was complete.")
+	sb.WriteString(liveBackgroundJobNote(ctx))
+	return sb.String()
+}
+
+// modelProseIfAuthorized passes the model's own account through only where the
+// completion gate has already agreed with it. Elsewhere it returns "", and the
+// server composes the summary instead.
+func modelProseIfAuthorized(status TerminalStatus, prose string) string {
+	if status.Completed() {
+		return prose
+	}
+	return ""
 }

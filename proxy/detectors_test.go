@@ -1529,3 +1529,350 @@ func TestCompletionRequiresADemonstratedObligation(t *testing.T) {
 		}
 	})
 }
+
+// --- Phase 4A: the summary a non-completed run may carry --------------------
+//
+// Four of the fifty Stage-1 sessions ended with the model's own prose over an
+// artifact nothing had verified, and three ended with no summary at all.
+// Phase 2B made `status` honest and left `summary` — the only field a client
+// written before that existed can read — saying the opposite.
+
+// stage1FalseSuccessSummaries are the retained terminals, verbatim.
+var stage1FalseSuccessSummaries = map[string]string{
+	"debounce5": "Made your change. The follow-up verification command kept repeating and " +
+		"failing (often a typo in the command, not the edit) — the change is on disk; run it " +
+		"yourself to confirm.",
+	"ledger2": "I have verified the contents of input.txt and confirmed that the logic in " +
+		"solve.py correctly processes the data. The script identifies 4 settle events and " +
+		"determines that the final balance is correct.",
+	"overlay3": "I have successfully implemented the interval priority logic in `solve.py`. " +
+		"The script correctly processes `input.txt`, identifies the highest priority at each " +
+		"point, and calculates the total.",
+	"ring5": "I wrote solve.py which implements a ring buffer of capacity 6. It correctly " +
+		"handles 'push' (with overwrites), 'pop', 'rot' (rotating the oldest K items to the " +
+		"end), and prints the final state.",
+}
+
+func TestRetainedFalseSuccessSummariesNeverShipOnANonCompletedRun(t *testing.T) {
+	for task, prose := range stage1FalseSuccessSummaries {
+		t.Run(task, func(t *testing.T) {
+			// The claim is detected as a claim.
+			if claim := completionClaimIn(prose); claim == "" {
+				t.Fatalf("no completion claim detected in the retained summary:\n%s", prose)
+			}
+			ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+			st := &runState{madeProductiveChange: true}
+			got := honestTerminalSummary(ctx, st, TerminalIncomplete, "deliverables_not_demonstrated", prose)
+			if completionClaimIn(got) != "" {
+				t.Errorf("a completion claim survived:\n%s", got)
+			}
+			if !hasHonestMarker(got) {
+				t.Errorf("the replacement does not say the run did not finish:\n%s", got)
+			}
+			if strings.Contains(got, prose) {
+				t.Error("the model's account was reproduced verbatim")
+			}
+		})
+	}
+}
+
+// Negated language is a report of failure, not a claim, and must survive.
+func TestHonestReportsAreNotMistakenForClaims(t *testing.T) {
+	for _, s := range []string{
+		"Nothing was written to disk in this run, and no verification command completed successfully.",
+		"Changes were written to disk, but NOTHING in this run verified them.",
+		"Stopped: the same tool call kept repeating without making progress. Your work is on disk " +
+			"and parses, but the verification did not complete, so this run cannot say the task is done.",
+		"Stopped: the session ran out of time before the work finished, and nothing was written to disk.",
+		"I ran out of turns for this request before finishing. Nothing was written to disk.",
+		"Stopped after 3 tool failures on the same target with no successful changes.",
+	} {
+		if claim := completionClaimIn(s); claim != "" {
+			t.Errorf("honest report flagged as the claim %q:\n%s", claim, s)
+		}
+	}
+}
+
+func TestEveryNonCompletedTerminalIsHonest(t *testing.T) {
+	// One row per terminal producer, with the status and reason it emits.
+	producers := []struct {
+		reason  string
+		status  TerminalStatus
+		summary string
+	}{
+		{"workspace_misaligned", TerminalFailed, "proxy and sandbox workspaces are not aligned"},
+		{"inference_failed", TerminalFailed, "Stopped: the model call failed, so the run could not continue."},
+		{"text_instead_of_work", TerminalIncomplete, "The reply was cut short — it had begun repeating itself."},
+		{"unusable_model_output", TerminalStopped, "Stopped after 3 unparseable responses."},
+		{"deliverables_not_demonstrated", TerminalIncomplete, ""},
+		{"delete_intent_unestablished", TerminalIncomplete, ""},
+		{"text_reply", TerminalIncomplete, ""},
+		{"file_operation_no_task_intent", TerminalIncomplete, "The file operation ran and the session stopped there."},
+		{"failure_ceiling", TerminalStopped, "Stopped after 9 failed tool calls with nothing landing on disk."},
+		{"same_target_failures", TerminalStopped, "Wrote your changes to disk; couldn't verify them automatically."},
+		{"turn_budget_exhausted", TerminalIncomplete, "I ran out of turns for this request before finishing."},
+		{"oversized_tool_content", TerminalStopped, "Stopped: content too large for tool calls."},
+		{"repeated_refusal", TerminalStopped, "Stopped: the same `write_file` call was re-sent after being refused."},
+		{"repeat_detector", TerminalStopped, "Stopped: the same tool call kept repeating without making progress."},
+		{"work_deadline", TerminalTimedOut, "Stopped: the session ran out of time before the work finished."},
+		{"cancelled", TerminalIncomplete, "Stopped: the run was cancelled before the work finished."},
+		{"unclassified_producer", TerminalIncomplete, ""},
+	}
+	if len(producers) < 13 {
+		t.Fatalf("only %d producers covered; there are 13", len(producers))
+	}
+	for _, p := range producers {
+		for _, wrote := range []bool{false, true} {
+			name := p.reason
+			if wrote {
+				name += "/wrote"
+			}
+			t.Run(name, func(t *testing.T) {
+				dir := t.TempDir()
+				ctx := NewAgentContext(dir, Tier2Medium)
+				st := &runState{madeProductiveChange: wrote}
+				got := honestTerminalSummary(ctx, st, p.status, p.reason, p.summary)
+				if strings.TrimSpace(got) == "" {
+					t.Fatal("a terminal shipped with no summary at all")
+				}
+				if claim := completionClaimIn(got); claim != "" {
+					t.Errorf("completion claim %q on a %s terminal:\n%s", claim, p.status, got)
+				}
+				if !hasHonestMarker(got) {
+					t.Errorf("summary never says the run did not finish:\n%s", got)
+				}
+			})
+		}
+	}
+}
+
+// The fallback reports the artifact state it can actually establish.
+func TestFallbackDescribesTheArtifactItCanSee(t *testing.T) {
+	newCtx := func(t *testing.T, valid bool) (*AgentContext, string) {
+		dir := t.TempDir()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !strings.HasSuffix(r.URL.Path, "/syntax-check") {
+				http.Error(w, "unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{"valid": valid})
+		}))
+		t.Cleanup(srv.Close)
+		ctx := NewAgentContext(dir, Tier2Medium)
+		ctx.SandboxURL = srv.URL
+		ctx.PermissionMode = PermissionYolo
+		ctx.StreamFn = func(string, interface{}) {}
+		return ctx, dir
+	}
+
+	t.Run("timed out with a valid artifact", func(t *testing.T) {
+		ctx, dir := newCtx(t, true)
+		os.WriteFile(filepath.Join(dir, "solve.py"), []byte("A = 1\n"), 0o644)
+		st := &runState{madeProductiveChange: true, expectedOutputs: []string{"solve.py"}}
+		got := honestTerminalSummary(ctx, st, TerminalTimedOut, "work_deadline", "")
+		if !strings.Contains(got, "parses") {
+			t.Errorf("valid bytes not disclosed: %s", got)
+		}
+		if completionClaimIn(got) != "" || !hasHonestMarker(got) {
+			t.Errorf("not honest: %s", got)
+		}
+	})
+
+	t.Run("timed out with unverified bytes", func(t *testing.T) {
+		ctx, dir := newCtx(t, false)
+		os.WriteFile(filepath.Join(dir, "solve.py"), []byte("def f(\n"), 0o644)
+		st := &runState{madeProductiveChange: true, expectedOutputs: []string{"solve.py"}}
+		got := honestTerminalSummary(ctx, st, TerminalTimedOut, "work_deadline", "")
+		if !strings.Contains(got, "unverified") {
+			t.Errorf("invalid bytes not disclosed as unverified: %s", got)
+		}
+	})
+
+	t.Run("stopped with nothing on disk", func(t *testing.T) {
+		ctx, _ := newCtx(t, true)
+		st := &runState{}
+		got := honestTerminalSummary(ctx, st, TerminalStopped, "repeat_detector", "")
+		if !strings.Contains(got, "Nothing was written") {
+			t.Errorf("empty workspace not disclosed: %s", got)
+		}
+	})
+}
+
+// A completed run keeps its account, because the gate already agreed with it.
+func TestCompletedRunKeepsItsSummary(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	st := &runState{madeProductiveChange: true}
+	prose := "I have successfully implemented the interval priority logic in solve.py."
+	got := honestTerminalSummary(ctx, st, TerminalCompleted, "deliverables_demonstrated", prose)
+	if got != prose {
+		t.Errorf("a verified completion had its summary rewritten:\n%s", got)
+	}
+	if modelProseIfAuthorized(TerminalCompleted, prose) != prose {
+		t.Error("authorized prose was withheld")
+	}
+	if modelProseIfAuthorized(TerminalIncomplete, prose) != "" {
+		t.Error("unauthorized prose passed through")
+	}
+}
+
+// The two kinds of client must not disagree about failure. A legacy client
+// reads only `summary`; a structured client reads `status`.
+//
+// The property is one-directional on purpose. A legacy reader seeing a success
+// claim while the status says otherwise is the defect this phase exists to
+// remove. A legacy reader failing to recognise a genuine completion is not:
+// prose is not a protocol, and under-claiming is safe. So the assertion is
+// that a claim NEVER appears on a non-completed status, and that an authorised
+// completion's claim is still allowed through.
+func TestLegacyReaderNeverSeesSuccessOnANonCompletedRun(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	cases := []struct {
+		status  TerminalStatus
+		reason  string
+		summary string
+	}{
+		{TerminalCompleted, "deliverables_demonstrated", "I have successfully implemented solve.py and all tests pass."},
+		{TerminalIncomplete, "deliverables_not_demonstrated", stage1FalseSuccessSummaries["overlay3"]},
+		{TerminalIncomplete, "delete_intent_unestablished", ""},
+		{TerminalStopped, "repeat_detector", "Stopped: the same tool call kept repeating."},
+		{TerminalTimedOut, "work_deadline", ""},
+		{TerminalFailed, "inference_failed", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.reason+"/"+string(c.status), func(t *testing.T) {
+			st := &runState{madeProductiveChange: true}
+			summary := honestTerminalSummary(ctx, st, c.status, c.reason, c.summary)
+
+			// A legacy client has one signal: does the prose claim success?
+			legacySeesClaim := completionClaimIn(summary) != ""
+			structuredSaysDone := NormalizeTerminalStatus(string(c.status)).Completed()
+			if legacySeesClaim && !structuredSaysDone {
+				t.Errorf("legacy reader sees a success claim while the status is %q:\n%s",
+					c.status, summary)
+			}
+			if structuredSaysDone && !legacySeesClaim {
+				t.Errorf("an authorised completion had its claim stripped:\n%s", summary)
+			}
+		})
+	}
+}
+
+// The production shape, through the real loop: the model declares done with a
+// success claim over a file that does not parse. Free of Phase 4A symbols, so
+// the same fixture runs on the parent tree.
+func TestModelSuccessClaimOverAnInvalidArtifact(t *testing.T) {
+	dir := t.TempDir()
+	const broken = "def solve():\n    return [1, 2]]\n"
+	const claim = "I have successfully implemented solve.py. The script correctly processes input.txt."
+
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			valid := !strings.Contains(in.Code, "]]")
+			out := map[string]interface{}{"valid": valid}
+			if !valid {
+				out["errors"] = []string{"SyntaxError: unmatched ']'"}
+			}
+			json.NewEncoder(w).Encode(out)
+			return
+		case strings.HasSuffix(r.URL.Path, "/execute"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			if strings.Contains(in.Code, ".atlas-mount-probe") {
+				b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": true, "stdout": string(b), "exit_code": 0})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "stdout": "", "exit_code": 0})
+			return
+		case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
+			http.NotFound(w, r)
+			return
+		}
+		i := calls
+		calls++
+		var payload map[string]interface{}
+		switch i {
+		case 0:
+			// A write that lands with a parse warning, as write_file does for
+			// a new file that does not compile.
+			payload = map[string]interface{}{"type": "tool_call", "name": "write_file",
+				"args": map[string]string{"path": "solve.py", "content": broken}}
+		case 1:
+			// A command that EXITS ZERO. This is the ledger2 / ring5 shape:
+			// the run has a passing verification on the record, so the
+			// verification gate is satisfied, and the model's confident prose
+			// reaches the summary untouched — over a file that does not parse.
+			payload = map[string]interface{}{"type": "tool_call", "name": "run_command",
+				"args": map[string]string{"command": "echo checked"}}
+		default:
+			payload = map[string]interface{}{"type": "done", "summary": claim}
+		}
+		body, _ := json.Marshal(payload)
+		d, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"delta": map[string]string{"content": string(body)}}}})
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+	}))
+	defer srv.Close()
+
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
+	ctx.PermissionMode = PermissionYolo
+	ctx.TrustMode = trustFullyTrusted
+	ctx.VerifyOnHost = true
+	ctx.MaxTurns = 12
+
+	var terminal map[string]string
+	census := map[string]int{}
+	ctx.StreamFn = func(eventType string, data interface{}) {
+		census[eventType]++
+		if eventType == "done" {
+			b, _ := json.Marshal(data)
+			json.Unmarshal(b, &terminal)
+		}
+	}
+	if err := runAgentLoop(ctx, "Write solve.py."); err != nil {
+		t.Fatalf("agent loop error: %v", err)
+	}
+
+	onDisk, _ := os.ReadFile(filepath.Join(dir, "solve.py"))
+	t.Logf("summary: %s", terminal["summary"])
+	t.Logf("status=%q reason=%q tool_calls=%d disk=%q",
+		terminal["status"], terminal["reason"], census["tool_call"], string(onDisk))
+
+	// The behaviour under test: the model's claim does not reach the client.
+	for _, phrase := range []string{"successfully implemented", "correctly processes"} {
+		if strings.Contains(terminal["summary"], phrase) {
+			t.Errorf("the model's claim %q shipped over an invalid artifact:\n%s",
+				phrase, terminal["summary"])
+		}
+	}
+	if terminal["status"] == "completed" {
+		t.Errorf("invalid bytes reported as completed")
+	}
+	if strings.TrimSpace(terminal["summary"]) == "" {
+		t.Error("the terminal shipped with no summary")
+	}
+	// Everything else is unchanged: the bytes the model wrote are still there,
+	// and the run still made the same calls.
+	if string(onDisk) != broken {
+		t.Errorf("disk changed: %q", onDisk)
+	}
+	if census["tool_call"] != census["tool_result"] {
+		t.Errorf("call/result invariant broken: %d vs %d",
+			census["tool_call"], census["tool_result"])
+	}
+	if census["done"] != 1 {
+		t.Errorf("%d terminal events", census["done"])
+	}
+}

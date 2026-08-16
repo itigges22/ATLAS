@@ -271,6 +271,16 @@ never as completion (`NormalizeTerminalStatus` in Go, `terminal_status` in
 `atlas/events.py`). The broker's `done`/`stage_end` envelopes report the same
 outcome instead of asserting `success: true`.
 
+For any status other than `completed`, the server owns the sentence as well as
+the field. The model's own account is passed through only where the completion
+gate authorised it; a non-completed terminal with no summary gets a
+server-composed one naming the outcome, whether anything is on disk and whether
+it was shown to be valid; and a completion claim that reaches the emitter on a
+non-completed status is replaced outright rather than edited around. This
+closes the gap Phase 2B left: a client that reads only `summary` — every client
+written before `status` existed — now reads the same truth as one that reads
+both.
+
 A model-issued `done` is `completed` only when the run's file obligation —
 what it declared plus what it wrote — is demonstrably satisfied right now,
 through the same syntax contract the write path uses. If anything was deleted
