@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -788,7 +789,7 @@ func TestProductiveChangeCannotAuthorizeCompletionOverInvalidBytes(t *testing.T)
 	}
 	ctx := NewAgentContext(dir, Tier2Medium)
 
-	summary := repeatTerminalSummary(ctx, []string{"solve.py"}, true)
+	summary := repeatTerminalSummary(ctx, []string{"solve.py"}, true, nil)
 	if strings.Contains(summary, "Made your change") {
 		t.Errorf("a syntax-invalid deliverable must not be reported as a completed change:\n%s", summary)
 	}
@@ -802,7 +803,7 @@ func TestProductiveChangeStillReportsAStopWhenValidityIsUnknown(t *testing.T) {
 	ctx := NewAgentContext(dir, Tier2Medium)
 	// No deliverable on disk at all: validity is not demonstrated, so the
 	// terminal may not claim the change landed.
-	summary := repeatTerminalSummary(ctx, []string{"missing.py"}, true)
+	summary := repeatTerminalSummary(ctx, []string{"missing.py"}, true, nil)
 	if !strings.HasPrefix(summary, "Stopped:") {
 		t.Errorf("unknown validity must stop honestly, got:\n%s", summary)
 	}
@@ -813,7 +814,7 @@ func TestProductiveChangeStillReportsAStopWhenValidityIsUnknown(t *testing.T) {
 
 func TestNoDeclaredDeliverableCannotAuthorizeCompletion(t *testing.T) {
 	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
-	if s := repeatTerminalSummary(ctx, nil, true); !strings.HasPrefix(s, "Stopped:") {
+	if s := repeatTerminalSummary(ctx, nil, true, nil); !strings.HasPrefix(s, "Stopped:") {
 		t.Errorf("with nothing declared, validity is undemonstrated:\n%s", s)
 	}
 }
@@ -852,7 +853,7 @@ func TestValidBytesStillTerminateAsStopped(t *testing.T) {
 	defer srv.Close()
 	ctx := NewAgentContext(dir, Tier2Medium)
 	ctx.SandboxURL = srv.URL
-	summary := repeatTerminalSummary(ctx, []string{"solve.py"}, true)
+	summary := repeatTerminalSummary(ctx, []string{"solve.py"}, true, nil)
 	if !strings.HasPrefix(summary, "Stopped:") {
 		t.Errorf("a repeat-breaker is an operational failure even with valid "+
 			"bytes:\n%s", summary)
@@ -890,7 +891,7 @@ func TestEveryTerminalDisclosureRefusesCompletion(t *testing.T) {
 		{"none declared", nil, true, "not shown to be valid"},
 		{"nothing written", []string{"ok.py"}, false, "nothing was written"},
 	} {
-		got := repeatTerminalSummary(ctx, tc.expected, tc.wrote)
+		got := repeatTerminalSummary(ctx, tc.expected, tc.wrote, nil)
 		if !strings.HasPrefix(got, "Stopped:") {
 			t.Errorf("%s: not an honest stop:\n%s", tc.name, got)
 		}
@@ -1086,4 +1087,208 @@ func TestDebounce5ReachesTheRepeatDetectorTerminal(t *testing.T) {
 		t.Errorf("fixture no longer leaves an invalid deliverable: %q", string(after))
 	}
 	t.Logf("interventions=%d accepted_writes=%d summary=%s", interventions, acceptedWrites, summary)
+}
+
+// --- Phase 3B: the canonical restoration scenario ---------------------------
+//
+// The shape the ledger was built for. A version of the deliverable is written
+// and shown to parse; a shell command then rewrites those exact bytes into
+// something that does not; the model loops on a verification that keeps
+// failing and the repeat detector stops the run. The parent leaves the broken
+// bytes on disk and says so; the current build puts the last version shown to
+// be valid back and still stops.
+//
+// Deliberately free of production symbols added by Phase 3B, so the same
+// fixture runs against the parent commit.
+
+const restoreGood = "def solve():\n    return [1, 2]\n"
+
+func restoreScenarioStubs(t *testing.T, dir, rel string, calls *int) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v3/") || strings.HasPrefix(r.URL.Path, "/internal/") {
+			http.Error(w, "v3 unavailable in this test", http.StatusServiceUnavailable)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/syntax-check") {
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			valid := !strings.Contains(in.Code, "]]")
+			out := map[string]interface{}{"valid": valid}
+			if !valid {
+				out["errors"] = []string{"SyntaxError: unmatched ']' (line 2)"}
+			}
+			json.NewEncoder(w).Encode(out)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/execute") {
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			if strings.Contains(in.Code, ".atlas-mount-probe") {
+				b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": true, "stdout": string(b), "stderr": "", "exit_code": 0})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "stdout": "", "stderr": "", "exit_code": 0})
+			return
+		}
+		if !strings.HasSuffix(r.URL.Path, "/v1/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		i := *calls
+		*calls++
+
+		var body []byte
+		switch i {
+		case 0:
+			body, _ = json.Marshal(map[string]interface{}{
+				"type": "tool_call", "name": "write_file",
+				"args": map[string]string{"path": rel, "content": restoreGood}})
+		case 1:
+			// The corruption comes from OUTSIDE the edit tools, which is the
+			// case no gate can catch: a command rewrites the file after it
+			// was shown to parse.
+			body, _ = json.Marshal(map[string]interface{}{
+				"type": "tool_call", "name": "run_command",
+				"args": map[string]string{
+					"command": "printf 'def solve():\\n    return [1, 2]]\\n' > " + rel}})
+		default:
+			// The model then loops on the same verification, which is what
+			// stops the run.
+			body, _ = json.Marshal(map[string]interface{}{
+				"type": "tool_call", "name": "run_command",
+				"args": map[string]string{"command": "test -s " + rel}})
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		delta, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"delta": map[string]string{"content": string(body)}}},
+		})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", delta)
+	}))
+}
+
+func TestCorruptedDeliverableIsRestoredAtTheRepeatTerminal(t *testing.T) {
+	dir := t.TempDir()
+	rel := "solve.py"
+	calls := 0
+	srv := restoreScenarioStubs(t, dir, rel, &calls)
+	defer srv.Close()
+
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.InferenceURL = srv.URL
+	ctx.SandboxURL = srv.URL
+	ctx.V3URL = srv.URL
+	ctx.PermissionMode = PermissionYolo
+	ctx.TrustMode = trustFullyTrusted
+	ctx.VerifyOnHost = true
+	ctx.MaxTurns = 40
+
+	var summary string
+	interventions := 0
+	census := map[string]int{}
+	ctx.StreamFn = func(eventType string, data interface{}) {
+		b, _ := json.Marshal(data)
+		census[eventType]++
+		switch eventType {
+		case "agent_repeat_intervention":
+			interventions++
+		case "done":
+			summary = string(b)
+		}
+	}
+	if err := runAgentLoop(ctx, "Create solve.py that solves the task."); err != nil {
+		t.Fatalf("agent loop error: %v", err)
+	}
+
+	// --- routing premises -------------------------------------------------
+	if interventions < 2 {
+		t.Fatalf("second-detection condition not reached: %d repeat interventions", interventions)
+	}
+	if !strings.Contains(summary, "kept repeating") {
+		t.Fatalf("terminal did not come from the repeat detector:\n%s", summary)
+	}
+
+	// --- the behaviour under test ----------------------------------------
+	onDisk, err := os.ReadFile(filepath.Join(dir, rel))
+	if err != nil {
+		t.Fatalf("deliverable missing: %v", err)
+	}
+	t.Logf("final bytes: %q", string(onDisk))
+	t.Logf("summary: %s", summary)
+	if string(onDisk) != restoreGood {
+		t.Errorf("the demonstrated-broken bytes were left on disk:\n%q", string(onDisk))
+	}
+	if !strings.Contains(summary, "Put back the last version shown to be valid") {
+		t.Errorf("recovery was not disclosed:\n%s", summary)
+	}
+	if !strings.Contains(summary, rel) {
+		t.Errorf("the disclosure does not name the file it recovered:\n%s", summary)
+	}
+	// Recovery is not completion.
+	if !strings.HasPrefix(strings.TrimPrefix(summary, `{"summary":"`), "Stopped:") {
+		t.Errorf("terminal stopped being a stop:\n%s", summary)
+	}
+	for _, claim := range []string{"Made your change", "the change is on disk"} {
+		if strings.Contains(summary, claim) {
+			t.Errorf("a restored run claimed %q:\n%s", claim, summary)
+		}
+	}
+	// The completion clause must still be the REFUSAL of completion. After a
+	// restore the file does parse again, so this is the branch that is most
+	// tempting to misread as success.
+	if !strings.Contains(summary, "cannot say the task is done") {
+		t.Errorf("the terminal stopped refusing completion:\n%s", summary)
+	}
+	// Never presented as a transaction.
+	if strings.Contains(summary, "rolled back the workspace") {
+		t.Errorf("recovery implied transactionality:\n%s", summary)
+	}
+	// Recovery is not a tool call. The event census is logged so the same
+	// fixture on the parent commit can be compared number for number: the
+	// only intended difference is the text of the terminal disclosure.
+	keys := make([]string, 0, len(census))
+	for k := range census {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var parts []string
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%d", k, census[k]))
+	}
+	t.Logf("event census: %s", strings.Join(parts, " "))
+	if census["tool_call"] != census["tool_result"] {
+		t.Errorf("recovery broke the call/result invariant: %d vs %d",
+			census["tool_call"], census["tool_result"])
+	}
+}
+
+// Phase 3B is scoped to ONE terminal. Twelve other done emitters exist, and
+// silently attaching recovery to them would turn an evidence-bound action
+// into a routine one.
+func TestRestorationIsWiredToExactlyOneTerminal(t *testing.T) {
+	src, err := os.ReadFile("agent.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	if n := strings.Count(body, "restoreSaferDeliverables("); n != 1 {
+		t.Errorf("restoration has %d call sites, want exactly 1", n)
+	}
+	// And that one site is the repeat detector's terminal.
+	i := strings.Index(body, "restoreSaferDeliverables(")
+	if i < 0 {
+		t.Fatal("restoration call site not found")
+	}
+	if !strings.Contains(body[i:min(len(body), i+400)], "repeatTerminalSummary(") {
+		t.Error("restoration is no longer adjacent to the repeat-detector terminal")
+	}
+	// The other done emitters must not have gained it.
+	if n := strings.Count(body, `Stream("done"`); n < 12 {
+		t.Errorf("found %d done emitters, expected the full set; if one was "+
+			"removed, re-check this scope deliberately", n)
+	}
 }

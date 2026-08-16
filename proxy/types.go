@@ -671,6 +671,15 @@ type DeliverableState struct {
 	CheckpointHash        string
 	CheckpointBytes       []byte
 	CheckpointUnavailable string // why there is none, when there is none
+	// CheckpointKind is the kind of check the checkpoint's pass came from.
+	// Restoration compares kinds: a structural pass is not evidence about
+	// syntax, so swapping one for the other would be a guess dressed as
+	// recovery.
+	CheckpointKind ValidationKind
+	// Recovered records that the CURRENT bytes were put there by system
+	// recovery rather than by the model. It is a server-side fact like the
+	// rest of the ledger and never reaches the model, SSE or the wire.
+	Recovered bool
 
 	// Tombstones. A deliberately removed file must never be resurrected, so
 	// the state is recorded and restoration is prohibited outright.

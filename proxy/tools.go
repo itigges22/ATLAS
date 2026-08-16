@@ -1549,17 +1549,28 @@ func applyRouteObservation(res *ToolResult, err error, o checkOutcome) (*ToolRes
 	return res, nil
 }
 
-func writeFileDirect(path, content string) (*ToolResult, error) {
+// atomicReplaceFile is the write-then-rename the mutating tools have always
+// used, as one primitive. A reader of the target either sees the old bytes or
+// the new ones, never a partial file, and a failed rename leaves the target
+// untouched with the temp file cleaned up.
+func atomicReplaceFile(path string, content []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return nil, failedMutation(path, fmt.Errorf("cannot create parent dir for %s: %w", path, err))
+		return fmt.Errorf("cannot create parent dir for %s: %w", path, err)
 	}
 	tmpPath := path + ".atlas.tmp"
-	if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
-		return nil, failedMutation(path, fmt.Errorf("cannot write %s: %w", path, err))
+	if err := os.WriteFile(tmpPath, content, 0644); err != nil {
+		return fmt.Errorf("cannot write %s: %w", path, err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		os.Remove(tmpPath)
-		return nil, failedMutation(path, fmt.Errorf("cannot rename temp file: %w", err))
+		return fmt.Errorf("cannot rename temp file: %w", err)
+	}
+	return nil
+}
+
+func writeFileDirect(path, content string) (*ToolResult, error) {
+	if err := atomicReplaceFile(path, []byte(content)); err != nil {
+		return nil, failedMutation(path, err)
 	}
 	out := WriteFileOutput{BytesWritten: len(content)}
 	outBytes, _ := json.Marshal(out)

@@ -227,6 +227,44 @@ Two limitations are carried, not inferred around. `structural_edit` reports
 production-path test, since one temp directory cannot straddle two
 filesystems.
 
+#### Restoration
+
+One terminal has recovery wired to it: the repeat detector's stop, which is
+where a run ends holding a deliverable it has itself shown to be broken. The
+other twelve `done` emitters are untouched — a terminal that demonstrated
+nothing has nothing to recover from — and
+`TestRestorationIsWiredToExactlyOneTerminal` fails if that spreads.
+
+At that terminal each deliverable is re-read, re-checked through the same
+syntax contract the write path uses, and decided on its own. Every clause is a
+reason not to act:
+
+| Required | Declines when |
+|----------|---------------|
+| this session wrote the path | it was never a deliverable here |
+| current bytes freshly re-read and re-checked | the checker could not run, so the verdict is unknown |
+| that exact hash carries a demonstrated failure | the current contents parse, or were never checked |
+| held bytes exist, in bounds, hashing to their own record | evicted, over-ceiling, or self-inconsistent |
+| the held version passed the *same kind* of check | a structural pass is not evidence about syntax |
+| the two versions differ | the file already holds the safer version |
+| not tombstoned, not restoration-prohibited | the model deleted or moved it on purpose |
+| no live background hazard | a background job may still be writing |
+
+The write goes through `atomicReplaceFile`, the same write-then-rename the
+mutating tools use, and the result is re-read and hashed: a restore that
+cannot prove it landed exactly is a failure that preserves the real error and
+leaves the current bytes alone. Recovery sets no progress hint, registers no
+session write, emits no tool event, claims no V3 provenance, and never turns a
+stopped run into a completed one — the summary discloses per path which files
+were put back, which were left alone and why, and which could not be restored,
+with no implication that they moved together.
+
+For the later reproducibility pass, not fixed here: the system prompt renders
+tool descriptions in Go map order, so two runs of identical code produce
+different prompt bytes. It affects prompt reproducibility only, not behaviour;
+`conversationBytes` in `proxy/tool_effect_test.go` elides the system message
+for exactly this reason.
+
 `SessionWrites` is a separate, older map keyed on the raw model-supplied path;
 `proxy/types.go` documents the aliasing that follows from that.
 

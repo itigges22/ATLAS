@@ -1899,7 +1899,11 @@ func repeatedRefusalSummary(tool, path string, wrote bool) string {
 // path uses. Existence is not validity, an earlier success is not this
 // content, and anything short of an explicit pass -- not_run, not_applicable,
 // unknown, unreadable, or nothing declared -- is undemonstrated and stops.
-func repeatTerminalSummary(ctx *AgentContext, expected []string, wrote bool) string {
+// recovered carries the per-path outcomes of Phase 3B restoration, which the
+// caller performs before composing this summary. It is disclosed as its own
+// clause: recovery changes what is on disk, never whether the run finished.
+func repeatTerminalSummary(ctx *AgentContext, expected []string, wrote bool,
+	recovered []restoreDecision) string {
 	var sb strings.Builder
 	sb.WriteString("Stopped: the same tool call kept repeating without making progress")
 	// Validation status alters DISCLOSURE only. A repeat-breaker is an
@@ -1918,6 +1922,9 @@ func repeatTerminalSummary(ctx *AgentContext, expected []string, wrote bool) str
 	}
 	sb.WriteString(". Try a more specific instruction (e.g. name the file and " +
 		"the exact change).")
+	// Appended last, and never in place of the stop: a restored file is a
+	// safer starting point, not a completed task.
+	sb.WriteString(restorationDisclosure(recovered))
 	return sb.String()
 }
 

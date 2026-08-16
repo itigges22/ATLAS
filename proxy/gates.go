@@ -2547,6 +2547,9 @@ func observeDeliverable(ctx *AgentContext, path string, content []byte,
 	if d.CheckpointHash == h {
 		return
 	}
+	// The kind travels with the bytes. Restoration will not swap a
+	// structural pass in for a syntax failure.
+	d.CheckpointKind = kind
 	if len(content) > maxCheckpointFileBytes {
 		d.CheckpointUnavailable = "exceeds the per-file checkpoint ceiling"
 		return
@@ -2828,4 +2831,273 @@ func recordLedgerEffect(name string, args json.RawMessage, ctx *AgentContext, re
 			clearWorkspaceHazard(ctx)
 		}
 	}
+}
+
+// --- Phase 3B: demonstrably-safer restoration -------------------------------
+//
+// Scope: ONE terminal. The repeat detector is where a run stops with a
+// deliverable it has itself shown to be broken -- the seed-20260901 debounce5
+// shape -- and it is the only producer wired to this. The other twelve done
+// emitters are untouched, deliberately: a terminal that never demonstrated
+// breakage has nothing to recover from, and attaching recovery to all of them
+// would make a rare, evidence-bound action routine.
+//
+// Restoration is a system action, not a model mutation. It sets no progress
+// hint, claims no V3 provenance, emits no tool call or tool result, and never
+// turns a stopped run into a completed one.
+
+// restoreDecision is what happened for ONE path. Recovery is per-path and is
+// disclosed that way: there is no transaction, and a run that recovers two of
+// three files must not read as if it recovered all three.
+type restoreDecision struct {
+	Path      string // workspace-relative, for disclosure
+	Restored  bool
+	Attempted bool   // a write was issued
+	Reason    string // why not, or the real failure
+}
+
+// checkpointRestorable answers the eligibility question and nothing else. It
+// takes the freshly-read current bytes so the decision is about what is on
+// disk right now, not about what the ledger last heard.
+//
+// Every clause is a reason NOT to act. Unknown, not_run, not_applicable,
+// unobserved, a hash that moved, a kind that does not compare, or missing
+// bytes all end here, because the alternative is overwriting a user's file on
+// a guess.
+func checkpointRestorable(d *DeliverableState, currentHash string, hazardous bool) (bool, string) {
+	switch {
+	case d == nil || d.Generation == 0:
+		return false, "not a deliverable this session wrote"
+	case d.Tombstoned:
+		return false, "deleted or moved on purpose"
+	case d.RestoreProhibited:
+		return false, "restoration prohibited for this path"
+	case d.CheckpointHash == "":
+		if d.CheckpointUnavailable != "" {
+			return false, "no earlier valid version was kept (" + d.CheckpointUnavailable + ")"
+		}
+		return false, "no version of it was ever shown to be valid"
+	case len(d.CheckpointBytes) == 0:
+		return false, "the earlier valid version is no longer available"
+	case len(d.CheckpointBytes) > maxCheckpointFileBytes:
+		return false, "the earlier valid version is too large to hold"
+	case hashBytes(d.CheckpointBytes) != d.CheckpointHash:
+		// Held bytes and recorded hash disagree: something is wrong with the
+		// ledger itself, so it is not allowed to touch the workspace.
+		return false, "the earlier valid version could not be verified"
+	case d.CheckpointHash == currentHash:
+		return false, "the file already holds the last version shown to be valid"
+	case d.ValidatedHash != currentHash:
+		// The verdict describes bytes that are no longer there.
+		return false, "the current contents were never checked"
+	case d.ValidationStatus != ValidationFailed:
+		// Only a DEMONSTRATED failure justifies replacing what is there.
+		return false, "the current contents were not shown to be broken"
+	case d.CheckpointKind == ValidationKindUnknown || d.ValidationKind == ValidationKindUnknown:
+		return false, "the two versions were not checked the same way"
+	case d.CheckpointKind != d.ValidationKind:
+		return false, "the two versions were not checked the same way"
+	case hazardous:
+		return false, "a background job may still be writing"
+	}
+	return true, ""
+}
+
+// restoreDeliverable re-reads, decides, and -- only if every clause holds --
+// puts the checkpoint back through the same atomic replace the write tools
+// use. The write is then re-read and hashed: a restore that cannot prove it
+// landed exactly is a failure, not a success.
+func restoreDeliverable(ctx *AgentContext, key string) restoreDecision {
+	rel := key
+	if r, err := filepath.Rel(ctx.WorkingDir, key); err == nil && !strings.HasPrefix(r, "..") {
+		rel = r
+	}
+	dec := restoreDecision{Path: rel}
+
+	// Intent is checked BEFORE anything is observed. A fresh observation
+	// clears the tombstone flag by design -- the path exists again -- and a
+	// path the model deliberately deleted or moved must not become eligible
+	// just because something later recreated it.
+	ctx.LedgerMu.Lock()
+	entry := ctx.Ledger[key]
+	switch {
+	case entry == nil || entry.Generation == 0:
+		ctx.LedgerMu.Unlock()
+		dec.Reason = "not a deliverable this session wrote"
+		return dec
+	case entry.Tombstoned:
+		ctx.LedgerMu.Unlock()
+		dec.Reason = "deleted or moved on purpose"
+		return dec
+	case entry.RestoreProhibited:
+		ctx.LedgerMu.Unlock()
+		dec.Reason = "restoration prohibited for this path"
+		return dec
+	case entry.CheckpointHash == "":
+		reason := "no version of it was ever shown to be valid"
+		if entry.CheckpointUnavailable != "" {
+			reason = "no earlier valid version was kept (" + entry.CheckpointUnavailable + ")"
+		}
+		ctx.LedgerMu.Unlock()
+		dec.Reason = reason
+		return dec
+	}
+	ctx.LedgerMu.Unlock()
+
+	// Read immediately before deciding. Anything the ledger believes is a
+	// starting point; the file is the fact.
+	current, ok := readLedgerBytes(key)
+	if !ok {
+		dec.Reason = "its current contents could not be read"
+		return dec
+	}
+	currentHash := hashBytes(current)
+
+	// Check these exact bytes NOW, through the same syntax contract the write
+	// path uses, and record the result. This is what makes the failure a
+	// fresh demonstration rather than a memory: a shell command that rewrote
+	// the file left the ledger holding no verdict at all, and no verdict is
+	// not evidence of breakage. When the checker cannot run, the observation
+	// is unknown and nothing is restored.
+	fresh := fallbackSyntaxOutcomeFor(ctx, key, string(current)).aggregate()
+	freshKind := ValidationKindSyntax
+	if fresh.Status == ValidationNotApplicable {
+		freshKind = ValidationKindNone
+	}
+	observeDeliverable(ctx, key, current, freshKind, fresh.Status, fresh.Detail)
+
+	// The hazard counter lives under the same mutex, so it is read before the
+	// entry is locked rather than from inside the decision.
+	hazardous := workspaceHazardous(ctx)
+
+	ctx.LedgerMu.Lock()
+	d := ctx.Ledger[key]
+	eligible, reason := checkpointRestorable(d, currentHash, hazardous)
+	var want []byte
+	var wantHash string
+	var wantKind ValidationKind
+	var wantDetail string
+	if eligible {
+		want = append([]byte(nil), d.CheckpointBytes...)
+		wantHash, wantKind, wantDetail = d.CheckpointHash, d.CheckpointKind, d.ValidationDetail
+	}
+	ctx.LedgerMu.Unlock()
+
+	if !eligible {
+		dec.Reason = reason
+		return dec
+	}
+
+	dec.Attempted = true
+	if err := atomicReplaceFile(key, want); err != nil {
+		// The atomic path leaves the target untouched on failure, so the
+		// current bytes are still there. Report the real error.
+		dec.Reason = err.Error()
+		return dec
+	}
+	// Prove it landed. Nothing is claimed from the write returning nil.
+	after, ok := readLedgerBytes(key)
+	if !ok {
+		dec.Reason = "the restored file could not be read back"
+		return dec
+	}
+	if h := hashBytes(after); h != wantHash {
+		dec.Reason = "the file on disk does not match the version that was restored"
+		return dec
+	}
+
+	// The ledger now describes the restored bytes, carrying the evidence that
+	// was already earned for exactly this hash. No new verdict is invented.
+	ctx.LedgerMu.Lock()
+	if d := ctx.Ledger[key]; d != nil {
+		d.CurrentHash = wantHash
+		d.CurrentSize = len(want)
+		d.Generation++
+		d.ValidationKind = wantKind
+		d.ValidationStatus = ValidationPassed
+		d.ValidationDetail = wantDetail
+		d.ValidatedHash = wantHash
+		d.Recovered = true
+	}
+	ctx.LedgerMu.Unlock()
+
+	dec.Restored = true
+	log.Printf("[recovery] restored %s to the last version shown to be valid", rel)
+	return dec
+}
+
+// restoreSaferDeliverables walks the session's deliverables in a stable order
+// and decides each one independently. Returns only the paths where something
+// happened or was deliberately declined after a demonstrated failure -- a
+// path with nothing to say produces no disclosure.
+func restoreSaferDeliverables(ctx *AgentContext) []restoreDecision {
+	if ctx == nil || ctx.WorkingDir == "" {
+		return nil
+	}
+	ctx.LedgerMu.Lock()
+	keys := make([]string, 0, len(ctx.Ledger))
+	for k, d := range ctx.Ledger {
+		// A path with no checkpoint and no failure has no decision worth
+		// reporting; skipping it here keeps the disclosure about recovery.
+		if d.CheckpointHash == "" && d.ValidationStatus != ValidationFailed {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	ctx.LedgerMu.Unlock()
+	sort.Strings(keys)
+
+	var out []restoreDecision
+	for _, k := range keys {
+		dec := restoreDeliverable(ctx, k)
+		if dec.Restored || dec.Attempted {
+			out = append(out, dec)
+			continue
+		}
+		// Declining is only worth saying when the file is actually broken.
+		ctx.LedgerMu.Lock()
+		broken := ctx.Ledger[k] != nil && ctx.Ledger[k].ValidationStatus == ValidationFailed
+		ctx.LedgerMu.Unlock()
+		if broken {
+			out = append(out, dec)
+		}
+	}
+	return out
+}
+
+// restorationDisclosure renders the three outcomes the user must be able to
+// tell apart: a file put back, a file left alone, and a recovery that was
+// tried and did not work. Per path, named, with no implication that the set
+// moved together.
+//
+// Nothing from the ledger's shape appears here -- no hashes, no status names,
+// no generation counts. Only what happened, in the terms a reader can act on.
+func restorationDisclosure(decisions []restoreDecision) string {
+	if len(decisions) == 0 {
+		return ""
+	}
+	var restored, kept, failed []string
+	for _, d := range decisions {
+		switch {
+		case d.Restored:
+			restored = append(restored, d.Path)
+		case d.Attempted:
+			failed = append(failed, fmt.Sprintf("%s (%s)", d.Path, d.Reason))
+		default:
+			kept = append(kept, fmt.Sprintf("%s (%s)", d.Path, d.Reason))
+		}
+	}
+	var sb strings.Builder
+	if len(restored) > 0 {
+		sb.WriteString(fmt.Sprintf(" Put back the last version shown to be valid, file by file: %s",
+			strings.Join(restored, ", ")))
+		sb.WriteString(" — each was decided on its own, and nothing else was rolled back.")
+	}
+	if len(kept) > 0 {
+		sb.WriteString(fmt.Sprintf(" Left as they are: %s.", strings.Join(kept, ", ")))
+	}
+	if len(failed) > 0 {
+		sb.WriteString(fmt.Sprintf(" Tried and could not restore: %s.", strings.Join(failed, ", ")))
+	}
+	return sb.String()
 }

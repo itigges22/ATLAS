@@ -1523,7 +1523,14 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						log.Printf("[agent] repeat loop at turn %d but named deliverable(s) %v not on disk — output-rescue steer instead of stopping", turn, logPaths(missing))
 					} else {
 						log.Printf("[agent] second repetition detection at turn %d — stopping (productive_change_hint=%v)", turn, st.madeProductiveChange)
-						endStream(repeatTerminalSummary(ctx, st.expectedOutputs, st.madeProductiveChange))
+						// The one terminal wired to recovery. It runs BEFORE
+						// the summary so the disclosure describes the bytes
+						// that are actually on disk when the run ends. It is
+						// a system action: no progress hint is set, no tool
+						// event is emitted, and the terminal stays stopped.
+						recovered := restoreSaferDeliverables(ctx)
+						endStream(repeatTerminalSummary(ctx, st.expectedOutputs,
+							st.madeProductiveChange, recovered))
 						return nil
 					}
 				}
