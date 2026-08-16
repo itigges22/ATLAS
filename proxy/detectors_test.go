@@ -2268,3 +2268,479 @@ func TestBothCompletionPathsShareOneDecision(t *testing.T) {
 			"directly bypasses the unmet-action evidence", n)
 	}
 }
+
+// --- Unresolved mutation debt -----------------------------------------------
+//
+// Completion had three inputs: user-named outputs, the deliverable ledger, and
+// one session-wide madeProductiveChange bool. A valid mutation intent that
+// never landed left no trace in any of them, so a success on an unrelated path
+// retired it. Measured: a.py fails before dispatch, b.py lands and validates,
+// terminal completed / deliverables_demonstrated.
+//
+// Debt is deliberately NOT in the deliverable ledger: that records what the
+// session owns on disk, and an intent that never landed owns nothing.
+
+// debtFixture scripts the loop with MaxTurns=0 and a server-side ceiling.
+// Fenced sub-calls never return a block, so a "@fenced" write fails before
+// dispatch — the case that creates debt without a ledger entry.
+func debtFixture(t *testing.T, dir, request string, ceiling int,
+	plan func(i int, prompt string) map[string]interface{}) (*AgentContext, *int, map[string]int, map[string]string, *[]string) {
+	t.Helper()
+	turns := 0
+	census := map[string]int{}
+	terminal := map[string]string{}
+	var bounces []string
+	var mu sync.Mutex
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			valid := !strings.Contains(in.Code, "]]")
+			out := map[string]interface{}{"valid": valid}
+			if !valid {
+				out["errors"] = []string{"SyntaxError: unmatched ']'"}
+			}
+			json.NewEncoder(w).Encode(out)
+			return
+		case strings.HasSuffix(r.URL.Path, "/execute"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			if strings.Contains(in.Code, ".atlas-mount-probe") {
+				b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": true, "stdout": string(b), "exit_code": 0})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "stdout": "", "exit_code": 0})
+			return
+		case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
+			http.NotFound(w, r)
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		if strings.Contains(string(raw), "single fenced block") {
+			d, _ := json.Marshal(map[string]interface{}{
+				"choices": []map[string]interface{}{
+					{"delta": map[string]string{"content": "Sure, here it is."}}}})
+			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+			return
+		}
+		mu.Lock()
+		i := turns
+		turns++
+		mu.Unlock()
+		if i >= ceiling {
+			http.Error(w, "turn ceiling exceeded", http.StatusInsufficientStorage)
+			return
+		}
+		call, _ := json.Marshal(plan(i, string(raw)))
+		d, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"delta": map[string]string{"content": string(call)}}}})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+	}))
+	t.Cleanup(srv.Close)
+
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
+	ctx.PermissionMode = PermissionYolo
+	ctx.TrustMode = trustFullyTrusted
+	ctx.VerifyOnHost = true
+	ctx.MaxTurns = 0
+	ctx.StreamFn = func(et string, data interface{}) {
+		b, _ := json.Marshal(data)
+		mu.Lock()
+		defer mu.Unlock()
+		census[et]++
+		if et == "gate" || et == "tool_result" {
+			bounces = append(bounces, et+"|"+string(b))
+		}
+		if et == "done" {
+			var m map[string]string
+			json.Unmarshal(b, &m)
+			for k, v := range m {
+				terminal[k] = v
+			}
+		}
+	}
+	return ctx, &turns, census, terminal, &bounces
+}
+
+const debtCeiling = 30
+const debtGoodBody = "def helper():\n    return 2\n\nprint(helper())\n"
+
+// 1. THE DEFECT: an unrelated success must not retire a failed intent.
+func TestUnrelatedSuccessDoesNotRetireAFailedIntent(t *testing.T) {
+	dir := t.TempDir()
+	const req = "Write a couple of small scripts."
+	ctx, _, census, terminal, _ := debtFixture(t, dir, req, debtCeiling,
+		func(i int, _ string) map[string]interface{} {
+			switch i {
+			case 0, 1:
+				return map[string]interface{}{"type": "tool_call", "name": "write_file",
+					"args": map[string]string{"path": "a.py", "content": "@fenced"}}
+			case 2:
+				return map[string]interface{}{"type": "tool_call", "name": "write_file",
+					"args": map[string]string{"path": "b.py", "content": debtGoodBody}}
+			case 3:
+				return map[string]interface{}{"type": "tool_call", "name": "run_command",
+					"args": map[string]string{"command": "python3 b.py"}}
+			default:
+				return map[string]interface{}{"type": "done", "summary": "wrote what I could"}
+			}
+		})
+	if err := runAgentLoop(ctx, req); err != nil {
+		t.Fatalf("loop error: %v", err)
+	}
+	t.Logf("status=%q reason=%q summary=%.140s",
+		terminal["status"], terminal["reason"], terminal["summary"])
+
+	if terminal["status"] == string(TerminalCompleted) {
+		t.Fatalf("an unrelated success retired the failed intent: reason=%q", terminal["reason"])
+	}
+	if terminal["reason"] != "unresolved_mutation_debt" {
+		t.Errorf("reason = %q, want unresolved_mutation_debt", terminal["reason"])
+	}
+	if !strings.Contains(terminal["summary"], "a.py") {
+		t.Errorf("the summary does not name the unresolved path:\n%s", terminal["summary"])
+	}
+	for _, leak := range []string{"debt", "ledger", "hash", "canonical"} {
+		if strings.Contains(strings.ToLower(terminal["summary"]), leak) {
+			t.Errorf("the summary exposes the internal term %q:\n%s", leak, terminal["summary"])
+		}
+	}
+	// b.py really did land and validate: debt is not a blanket block.
+	if got, _ := os.ReadFile(filepath.Join(dir, "b.py")); string(got) != debtGoodBody {
+		t.Errorf("b.py = %q", got)
+	}
+	// a.py never entered the deliverable ledger.
+	if _, ok := ctx.Ledger[ledgerKey(ctx, "a.py")]; ok {
+		t.Error("a path that never landed entered the deliverable ledger")
+	}
+	if census["done"] != 1 {
+		t.Errorf("%d terminal events", census["done"])
+	}
+	if census["tool_call"] != census["tool_result"] {
+		t.Errorf("call/result balance: %d vs %d", census["tool_call"], census["tool_result"])
+	}
+}
+
+// 2 + 3. Same-path validated success clears, including through an alias.
+func TestSamePathValidatedSuccessClearsExactlyOneDebt(t *testing.T) {
+	for _, c := range []struct{ name, failPath, fixPath string }{
+		{"same spelling", "a.py", "a.py"},
+		{"alias spelling", "./a.py", "a.py"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			const req = "Write a small script."
+			ctx, _, _, terminal, _ := debtFixture(t, dir, req, debtCeiling,
+				func(i int, _ string) map[string]interface{} {
+					switch i {
+					case 0, 1:
+						return map[string]interface{}{"type": "tool_call", "name": "write_file",
+							"args": map[string]string{"path": c.failPath, "content": "@fenced"}}
+					case 2:
+						return map[string]interface{}{"type": "tool_call", "name": "write_file",
+							"args": map[string]string{"path": c.fixPath, "content": debtGoodBody}}
+					case 3:
+						return map[string]interface{}{"type": "tool_call", "name": "run_command",
+							"args": map[string]string{"command": "python3 " + c.fixPath}}
+					default:
+						return map[string]interface{}{"type": "done", "summary": "wrote it"}
+					}
+				})
+			if err := runAgentLoop(ctx, req); err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("%s: status=%q reason=%q", c.name, terminal["status"], terminal["reason"])
+			if terminal["status"] != string(TerminalCompleted) {
+				t.Errorf("a resolved path did not complete: status=%q reason=%q",
+					terminal["status"], terminal["reason"])
+			}
+		})
+	}
+}
+
+// 4. Bytes on disk are not enough: the validation must be current and passed.
+func TestUnvalidatedBytesDoNotClearDebt(t *testing.T) {
+	dir := t.TempDir()
+	const req = "Write a small script."
+	const broken = "def solve():\n    return [1, 2]]\n"
+	ctx, _, _, terminal, _ := debtFixture(t, dir, req, debtCeiling,
+		func(i int, _ string) map[string]interface{} {
+			switch i {
+			case 0, 1:
+				return map[string]interface{}{"type": "tool_call", "name": "write_file",
+					"args": map[string]string{"path": "a.py", "content": "@fenced"}}
+			case 2:
+				// Lands with a parse warning: applied, but validation failed.
+				return map[string]interface{}{"type": "tool_call", "name": "write_file",
+					"args": map[string]string{"path": "a.py", "content": broken}}
+			default:
+				return map[string]interface{}{"type": "done", "summary": "wrote it"}
+			}
+		})
+	if err := runAgentLoop(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("unvalidated: status=%q reason=%q", terminal["status"], terminal["reason"])
+	if terminal["status"] == string(TerminalCompleted) {
+		t.Errorf("bytes that failed validation cleared the debt")
+	}
+}
+
+// 5. A file with no applicable checker resolves on not_applicable.
+func TestNonCodeNotApplicableClearsDebt(t *testing.T) {
+	dir := t.TempDir()
+	const req = "Write the notes file."
+	ctx, _, _, terminal, _ := debtFixture(t, dir, req, debtCeiling,
+		func(i int, _ string) map[string]interface{} {
+			switch i {
+			case 0, 1:
+				return map[string]interface{}{"type": "tool_call", "name": "write_file",
+					"args": map[string]string{"path": "notes.txt", "content": "@fenced"}}
+			case 2:
+				return map[string]interface{}{"type": "tool_call", "name": "write_file",
+					"args": map[string]string{"path": "notes.txt", "content": "hello\n"}}
+			default:
+				return map[string]interface{}{"type": "done", "summary": "wrote the notes"}
+			}
+		})
+	if err := runAgentLoop(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("not_applicable: status=%q reason=%q", terminal["status"], terminal["reason"])
+	// The DEBT must clear on not_applicable. The terminal is separately
+	// blocked by deliverablesDemonstrablyValid, which requires a syntax PASS
+	// and so can never demonstrate a non-code deliverable — a pre-existing
+	// limitation of the deliverable rule, not of debt, and out of scope here.
+	if terminal["reason"] == "unresolved_mutation_debt" {
+		t.Errorf("a non-code file with no applicable checker did not clear its debt: %s",
+			terminal["summary"])
+	}
+}
+
+// 7. Unsafe or malformed attempts create no debt and no ledger entry; they are
+// still covered by the unmet-action evidence.
+func TestUnsafeAttemptsCreateNoPathDebt(t *testing.T) {
+	for _, c := range []struct{ name, path, content string }{
+		{"deny-listed", ".env", "SECRET=2\n"},
+		{"path escape", "../outside.py", "x = 1\n"},
+		{"blank path", "   ", "x = 1\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			const req = "Write the config and a script."
+			ctx, _, _, terminal, _ := debtFixture(t, dir, req, debtCeiling,
+				func(i int, _ string) map[string]interface{} {
+					switch i {
+					case 0:
+						return map[string]interface{}{"type": "tool_call", "name": "write_file",
+							"args": map[string]string{"path": c.path, "content": c.content}}
+					case 1:
+						return map[string]interface{}{"type": "tool_call", "name": "write_file",
+							"args": map[string]string{"path": "ok.py", "content": debtGoodBody}}
+					case 2:
+						return map[string]interface{}{"type": "tool_call", "name": "run_command",
+							"args": map[string]string{"command": "python3 ok.py"}}
+					default:
+						return map[string]interface{}{"type": "done", "summary": "did the work"}
+					}
+				})
+			if err := runAgentLoop(ctx, req); err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("%s: status=%q reason=%q", c.name, terminal["status"], terminal["reason"])
+			// The unsafe path must not be the reason, and must not appear as
+			// an unresolved deliverable in the summary.
+			if terminal["reason"] == "unresolved_mutation_debt" &&
+				strings.Contains(terminal["summary"], strings.TrimSpace(c.path)) {
+				t.Errorf("an unsafe/invalid path became tracked work:\n%s", terminal["summary"])
+			}
+			if _, ok := ctx.Ledger[ledgerKey(ctx, c.path)]; ok {
+				t.Error("an unsafe path entered the deliverable ledger")
+			}
+		})
+	}
+}
+
+// 11. Read-only tasks are untouched.
+func TestReadOnlyTaskUnaffectedByDebt(t *testing.T) {
+	dir := t.TempDir()
+	const q = "What does this project do?"
+	ctx, _, _, terminal, _ := debtFixture(t, dir, q, debtCeiling,
+		func(i int, _ string) map[string]interface{} {
+			return map[string]interface{}{"type": "done", "summary": "It is a small solver."}
+		})
+	if err := runAgentLoop(ctx, q); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("read-only: status=%q reason=%q", terminal["status"], terminal["reason"])
+	if terminal["status"] != string(TerminalCompleted) {
+		t.Errorf("a question stopped completing: status=%q reason=%q",
+			terminal["status"], terminal["reason"])
+	}
+}
+
+// 8, 9, 10. Delete and move debt resolve only on demonstrated absence and
+// demonstrated destination bytes, and separate paths stay independent.
+func TestDeleteMoveAndIndependenceOfDebt(t *testing.T) {
+	t.Run("successful delete resolves on confirmed absence", func(t *testing.T) {
+		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+		ctx.PermissionMode, ctx.StreamFn = PermissionYolo, func(string, interface{}) {}
+		st := &runState{}
+		w, _ := json.Marshal(map[string]string{"path": "gone.py", "content": "A = 1\n"})
+		executeToolCall("write_file", w, ctx)
+		d, _ := json.Marshal(map[string]string{"path": "gone.py"})
+		noteMutationIntent(ctx, st, "delete_file", d)
+		if !hasUnresolvedDebt(st) {
+			t.Fatal("delete intent created no debt")
+		}
+		executeToolCall("delete_file", d, ctx)
+		settleMutationDebt(ctx, st)
+		if hasUnresolvedDebt(st) {
+			paths, _ := unresolvedDebtPaths(st, 5)
+			t.Errorf("a demonstrated delete did not resolve: %v", paths)
+		}
+	})
+
+	t.Run("failed delete stays blocking", func(t *testing.T) {
+		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+		ctx.PermissionMode, ctx.StreamFn = PermissionYolo, func(string, interface{}) {}
+		st := &runState{}
+		d, _ := json.Marshal(map[string]string{"path": "never_there.py"})
+		noteMutationIntent(ctx, st, "delete_file", d)
+		executeToolCall("delete_file", d, ctx) // fails: nothing to remove
+		settleMutationDebt(ctx, st)
+		if !hasUnresolvedDebt(st) {
+			t.Error("a failed delete resolved its debt")
+		}
+	})
+
+	t.Run("successful move needs source absence and destination bytes", func(t *testing.T) {
+		dir := t.TempDir()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, "/syntax-check") {
+				json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
+				return
+			}
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		}))
+		defer srv.Close()
+		ctx := NewAgentContext(dir, Tier2Medium)
+		ctx.SandboxURL = srv.URL
+		ctx.PermissionMode, ctx.StreamFn = PermissionYolo, func(string, interface{}) {}
+		st := &runState{}
+		w, _ := json.Marshal(map[string]string{"path": "old.py", "content": "A = 1\n"})
+		executeToolCall("write_file", w, ctx)
+		m, _ := json.Marshal(map[string]string{"source": "old.py", "destination": "new.py"})
+		noteMutationIntent(ctx, st, "move_file", m)
+		if !hasUnresolvedDebt(st) {
+			t.Fatal("move intent created no debt")
+		}
+		executeToolCall("move_file", m, ctx)
+		settleMutationDebt(ctx, st)
+		// The destination is observed with an unknown verdict by design — a
+		// rename earns no evidence — so the move stays unresolved until the
+		// destination is demonstrated.
+		if !hasUnresolvedDebt(st) {
+			t.Error("a move resolved before its destination was demonstrated")
+		}
+		w2, _ := json.Marshal(map[string]string{"path": "new.py", "content": "A = 2\n"})
+		executeToolCall("write_file", w2, ctx)
+		settleMutationDebt(ctx, st)
+		if hasUnresolvedDebt(st) {
+			paths, _ := unresolvedDebtPaths(st, 5)
+			t.Errorf("a demonstrated move did not resolve: %v", paths)
+		}
+	})
+
+	t.Run("separate paths are independent", func(t *testing.T) {
+		dir := t.TempDir()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, "/syntax-check") {
+				json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
+				return
+			}
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		}))
+		defer srv.Close()
+		ctx := NewAgentContext(dir, Tier2Medium)
+		ctx.SandboxURL = srv.URL
+		ctx.PermissionMode, ctx.StreamFn = PermissionYolo, func(string, interface{}) {}
+		st := &runState{}
+		for _, p := range []string{"a.py", "b.py"} {
+			args, _ := json.Marshal(map[string]string{"path": p, "content": "@fenced"})
+			noteMutationIntent(ctx, st, "write_file", args)
+		}
+		if n := len(st.mutationDebt); n != 2 {
+			t.Fatalf("%d debts for two paths", n)
+		}
+		w, _ := json.Marshal(map[string]string{"path": "a.py", "content": "A = 1\n"})
+		executeToolCall("write_file", w, ctx)
+		settleMutationDebt(ctx, st)
+		paths, _ := unresolvedDebtPaths(st, 5)
+		if len(paths) != 1 || paths[0] != "b.py" {
+			t.Errorf("unresolved = %v, want only b.py", paths)
+		}
+	})
+}
+
+// The map is bounded, and past the ceiling it fails closed: no naming, still
+// blocking.
+func TestMutationDebtCeilingFailsClosed(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	st := &runState{}
+	for i := 0; i < maxTrackedMutationDebt+25; i++ {
+		args, _ := json.Marshal(map[string]string{
+			"path": fmt.Sprintf("f%03d.py", i), "content": "@fenced"})
+		noteMutationIntent(ctx, st, "write_file", args)
+	}
+	if len(st.mutationDebt) > maxTrackedMutationDebt {
+		t.Errorf("map grew to %d, ceiling is %d", len(st.mutationDebt), maxTrackedMutationDebt)
+	}
+	if !st.debtOverflow {
+		t.Error("the ceiling was reached without recording that it was")
+	}
+	if !hasUnresolvedDebt(st) {
+		t.Fatal("overflow stopped blocking completion")
+	}
+	paths, more := unresolvedDebtPaths(st, 5)
+	if len(paths) != 5 || !more {
+		t.Errorf("disclosure = %d paths, more=%v; want a bounded list flagged as partial",
+			len(paths), more)
+	}
+	if status, reason := finalizeCompletion(ctx, st, "Write the files.", ""); status.Completed() {
+		t.Errorf("overflow allowed completion: reason=%q", reason)
+	}
+	if s := unresolvedDebtSummary(st); !strings.Contains(s, "Other files are in the same state") {
+		t.Errorf("overflow is not disclosed:\n%s", s)
+	}
+}
+
+// run_command and run_background keep their unobserved semantics and must not
+// be approximated as one-path debt.
+func TestCommandToolsCreateNoPathDebt(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	st := &runState{}
+	for _, c := range []struct{ name, args string }{
+		{"run_command", `{"command":"rm -rf build"}`},
+		{"run_background", `{"command":"python app.py"}`},
+		{"read_file", `{"path":"a.py"}`},
+		{"search_files", `{"pattern":"def "}`},
+	} {
+		noteMutationIntent(ctx, st, c.name, json.RawMessage(c.args))
+	}
+	if hasUnresolvedDebt(st) {
+		paths, _ := unresolvedDebtPaths(st, 5)
+		t.Errorf("non-path-targeted tools created debt: %v", paths)
+	}
+}

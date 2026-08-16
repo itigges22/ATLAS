@@ -209,6 +209,16 @@ type runState struct {
 	// been declared spent to the model, so the offer is made once and a new
 	// turn, an alias, or an unrelated success cannot re-open it.
 	fencedChannelClosed map[string]bool
+	// mutationDebt is what the session still owes on a per-path basis: a
+	// valid, permitted, in-workspace mutation the model asked for that has
+	// not reached a demonstrated resolved state. Canonically keyed, bounded,
+	// and deliberately NOT the deliverable ledger -- that records what the
+	// session owns on disk, and an intent that never landed owns nothing.
+	mutationDebt   map[string]*mutationDebtEntry
+	debtGeneration int
+	// debtOverflow fails closed past the ceiling: the session stops naming
+	// individual paths but never stops reporting that work is unresolved.
+	debtOverflow bool
 	// toolBanned records (tool, path) pairs the loop has taken away from the
 	// model after it proved it cannot use them on that file. Advice is not a
 	// fix when the model ignores advice: measured dogfooding "build me a
@@ -1036,6 +1046,9 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// exact-hash gate authorised the completion it describes.
 			status, reason := finalizeCompletion(ctx, st, userMessage, "")
 			summary := modelProseIfAuthorized(status, parsed.Summary)
+			if reason == "unresolved_mutation_debt" {
+				summary = unresolvedDebtSummary(st)
+			}
 			// Past the gates, but the verification gate can be past because
 			// it ran out of bounces rather than because anything verified.
 			if st.verificationDemandedAndUnmet() {
@@ -1083,6 +1096,9 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// did not, the same demonstration is required. Same decision as
 			// the done exit, so the two cannot drift.
 			textStatus, textReason := finalizeCompletion(ctx, st, userMessage, "text_reply")
+			if textReason == "unresolved_mutation_debt" {
+				textSummary = unresolvedDebtSummary(st)
+			}
 			emitTerminal(ctx, st, textStatus, textReason, textSummary)
 			return nil
 
@@ -1172,6 +1188,14 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				consecutiveErrors++
 				continue
 			}
+
+			// The intent is on the record from here: the arguments parse, the
+			// path is inside the workspace, and permission was granted. Every
+			// later refusal -- a gate, a failed fenced resolution, a failed
+			// write -- leaves the debt standing, which is the whole point:
+			// the pre-dispatch failures are exactly the ones that used to
+			// disappear.
+			noteMutationIntent(ctx, st, parsed.Name, parsed.Args)
 
 			// Surgical-edit gate: reject write_file on existing files
 			// outright. write_file is for *creating* files; edits to an
@@ -1745,6 +1769,9 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
 					return finishCancelledRun(ctx, st, turn)
 				}
+				// Debt is settled from the ledger's own evidence, never from
+				// the call reporting that it worked.
+				settleMutationDebt(ctx, st)
 			}
 			elapsed := time.Since(startTime)
 
@@ -6485,8 +6512,242 @@ func finalizeCompletion(ctx *AgentContext, st *runState, userMessage, completedR
 	if st.verificationDemandedAndUnmet() {
 		return TerminalIncomplete, "verification_demanded_unmet"
 	}
+	// Work the model asked for, that the system permitted, and that never
+	// reached a state anything could check. A success elsewhere does not
+	// settle it.
+	if hasUnresolvedDebt(st) {
+		return TerminalIncomplete, "unresolved_mutation_debt"
+	}
 	if completedReason != "" {
 		return TerminalCompleted, completedReason
 	}
 	return TerminalCompleted, why
+}
+
+// --- Unresolved mutation debt -----------------------------------------------
+//
+// Completion had three inputs: the user's named outputs, the deliverable
+// ledger, and one session-wide madeProductiveChange bool. A valid mutation the
+// model asked for and never landed left no trace in any of them, so a success
+// on an unrelated path retired it -- measured as completed /
+// deliverables_demonstrated over a session that had failed to write a.py and
+// succeeded on b.py.
+//
+// The ledger is not the place for this. It records what the session OWNS on
+// disk, and an intent that never landed owns nothing; putting an unowned path
+// in it would break the invariant Phase 3A was built on. Debt is a separate,
+// bounded, session-local record of what is still owed.
+
+// maxTrackedMutationDebt bounds the map. A session that somehow exceeds it
+// stops naming individual paths and never stops reporting that work is
+// unresolved -- the failure direction that cannot manufacture a completion.
+const maxTrackedMutationDebt = 64
+
+// debtKind is what would have to be demonstrated for the debt to clear.
+type debtKind string
+
+const (
+	debtContent debtKind = "content" // bytes must exist and validate
+	debtDelete  debtKind = "delete"  // the path must be demonstrably absent
+	debtMove    debtKind = "move"    // source absent AND destination validated
+)
+
+// mutationDebtEntry holds only what a terminal or a recovery needs to say.
+// No file contents: the bytes live on disk and in the ledger's bounded
+// checkpoint, never here.
+type mutationDebtEntry struct {
+	Rel  string // workspace-relative, for plain-language disclosure
+	Kind debtKind
+	Dest string // canonical destination, move only
+	Gen  int    // the debt generation this entry was opened in
+}
+
+// mutationIntentTargets returns the canonical paths a path-targeted mutator is
+// asking to change, or nil when the call is not one, is malformed, names a
+// blank path, or is deny-listed. run_command and run_background are excluded
+// on purpose: their effects are unobserved by construction and a single path
+// cannot represent them.
+func mutationIntentTargets(ctx *AgentContext, name string, args json.RawMessage) []*mutationDebtEntry {
+	switch name {
+	case "write_file", "edit_file", "structural_edit", "insert_after", "replace_lines",
+		"delete_file", "move_file":
+	default:
+		return nil
+	}
+	// The same authoritative refusals the tool applies. An attempt the system
+	// forbids is not work the session owes; unmet-action evidence covers it.
+	if denied, _ := shouldDenyToolCall(name, args); denied {
+		return nil
+	}
+	if reason := validateToolWorkspacePaths(name, args, ctx); reason != "" {
+		return nil
+	}
+	rel := func(field string) string {
+		var m map[string]json.RawMessage
+		if json.Unmarshal(args, &m) != nil {
+			return ""
+		}
+		var s string
+		if raw, ok := m[field]; !ok || json.Unmarshal(raw, &s) != nil {
+			return ""
+		}
+		return strings.TrimSpace(s)
+	}
+	if name == "move_file" {
+		src, dst := rel("source"), rel("destination")
+		if src == "" || dst == "" {
+			return nil
+		}
+		return []*mutationDebtEntry{{Rel: src, Kind: debtMove, Dest: ledgerKey(ctx, dst)}}
+	}
+	p := rel("path")
+	if p == "" {
+		return nil
+	}
+	kind := debtContent
+	if name == "delete_file" {
+		kind = debtDelete
+	}
+	return []*mutationDebtEntry{{Rel: p, Kind: kind}}
+}
+
+// noteMutationIntent opens debt for a permitted in-workspace mutation. It runs
+// BEFORE dispatch, which is the whole point: a fenced resolution that fails
+// never reaches executeToolCall and used to leave no trace anywhere.
+func noteMutationIntent(ctx *AgentContext, st *runState, name string, args json.RawMessage) {
+	for _, e := range mutationIntentTargets(ctx, name, args) {
+		key := ledgerKey(ctx, e.Rel)
+		if st.mutationDebt == nil {
+			st.mutationDebt = map[string]*mutationDebtEntry{}
+		}
+		if _, exists := st.mutationDebt[key]; exists {
+			continue // one debt per canonical path, whatever the spelling
+		}
+		if len(st.mutationDebt) >= maxTrackedMutationDebt {
+			// Fail closed: stop naming, keep blocking.
+			if !st.debtOverflow {
+				log.Printf("[agent] mutation-debt ceiling reached (%d paths) — further "+
+					"unresolved work is reported without naming the paths", maxTrackedMutationDebt)
+			}
+			st.debtOverflow = true
+			return
+		}
+		e.Gen = st.debtGeneration
+		st.mutationDebt[key] = e
+		log.Printf("[agent] tracking unresolved %s work on %s", e.Kind, e.Rel)
+	}
+}
+
+// settleMutationDebt clears what the LEDGER can prove, and nothing else. It is
+// driven by observed state rather than by a tool reporting success, so a
+// refusal, an unknown verdict, stale evidence, a read, or a success on another
+// path all leave the debt standing.
+func settleMutationDebt(ctx *AgentContext, st *runState) {
+	if st == nil || len(st.mutationDebt) == 0 {
+		return
+	}
+	for key, e := range st.mutationDebt {
+		if debtResolved(ctx, key, e) {
+			delete(st.mutationDebt, key)
+			log.Printf("[agent] unresolved %s work on %s is now demonstrated", e.Kind, e.Rel)
+		}
+	}
+}
+
+// validationSettles reports whether a path's CURRENT validation is good enough
+// to call the work demonstrated: a pass, or a genuine not_applicable from a
+// producer that deliberately checked nothing because nothing applies.
+func validationSettles(d *DeliverableState) bool {
+	if d == nil || d.Tombstoned || d.CurrentHash == "" {
+		return false
+	}
+	kind, status := d.CurrentValidation() // fails closed on a hash mismatch
+	switch status {
+	case ValidationPassed:
+		return true
+	case ValidationNotApplicable:
+		return kind == ValidationKindNone
+	}
+	return false
+}
+
+func debtResolved(ctx *AgentContext, key string, e *mutationDebtEntry) bool {
+	ctx.LedgerMu.Lock()
+	d := ctx.Ledger[key]
+	var dest *DeliverableState
+	if e.Kind == debtMove && e.Dest != "" {
+		dest = ctx.Ledger[e.Dest]
+	}
+	var tombstoned bool
+	var reason string
+	if d != nil {
+		tombstoned, reason = d.Tombstoned, d.TombstoneReason
+	}
+	ctx.LedgerMu.Unlock()
+
+	switch e.Kind {
+	case debtContent:
+		return validationSettles(d)
+	case debtDelete:
+		// A tombstone is only written once the path is observed gone, and the
+		// absence is re-confirmed here against disk.
+		if !tombstoned || reason != "deleted" {
+			return false
+		}
+		_, err := os.Stat(key)
+		return os.IsNotExist(err)
+	case debtMove:
+		if !tombstoned || !strings.HasPrefix(reason, "moved:") {
+			return false
+		}
+		if _, err := os.Stat(key); !os.IsNotExist(err) {
+			return false // the source is still there
+		}
+		return validationSettles(dest)
+	}
+	return false
+}
+
+// unresolvedDebtPaths lists what is still owed, in a stable order, bounded for
+// disclosure. The second return says whether more exist than are named.
+func unresolvedDebtPaths(st *runState, limit int) ([]string, bool) {
+	if st == nil {
+		return nil, false
+	}
+	var out []string
+	for _, e := range st.mutationDebt {
+		out = append(out, e.Rel)
+	}
+	sort.Strings(out)
+	more := st.debtOverflow
+	if len(out) > limit {
+		out, more = out[:limit], true
+	}
+	return out, more
+}
+
+func hasUnresolvedDebt(st *runState) bool {
+	return st != nil && (len(st.mutationDebt) > 0 || st.debtOverflow)
+}
+
+// unresolvedDebtSummary is the plain-language disclosure. It names paths and
+// says what would settle them, in the words a user would use.
+func unresolvedDebtSummary(st *runState) string {
+	paths, more := unresolvedDebtPaths(st, 5)
+	var sb strings.Builder
+	sb.WriteString("Stopped: work you asked for was started and never finished")
+	switch {
+	case len(paths) == 0:
+		sb.WriteString(".")
+	case len(paths) == 1:
+		fmt.Fprintf(&sb, ": %s was never written in a state this run could check.", paths[0])
+	default:
+		fmt.Fprintf(&sb, ": %s were never written in a state this run could check.",
+			strings.Join(paths, ", "))
+	}
+	if more {
+		sb.WriteString(" Other files are in the same state.")
+	}
+	sb.WriteString(" This run did not confirm the task was complete.")
+	return sb.String()
 }
