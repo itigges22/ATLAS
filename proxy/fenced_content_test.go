@@ -2695,3 +2695,344 @@ func TestFencedFailurePathsStayIndependent(t *testing.T) {
 	t.Logf("terminal for the four-path run: status=%q reason=%q",
 		terminal["status"], terminal["reason"])
 }
+
+// --- Recovery for the exhausted fenced channel ------------------------------
+//
+// The allowance stops the generations and tells the model nothing it can act
+// on. This offers the way out once, before anything tries another resolution.
+
+const fencedRecoveryMark = "fenced-content channel for"
+
+func TestFencedChannelRecoveryReachesAVerifiedCompletion(t *testing.T) {
+	dir := t.TempDir()
+	const fixed = "def solve():\n    return 7  # inline_fix\n\nprint(solve())\n"
+	var bounces []string
+	var mu sync.Mutex
+
+	ctx, turns, subcalls, census, terminal := fencedLoopFixture(t, dir, fencedTurnCeiling,
+		// The scripted model is CONDITIONAL: it keeps asking for the fenced
+		// channel until it is told the channel is spent, and only then picks
+		// an allowed alternative. A model that would have switched anyway
+		// proves nothing about recovery.
+		func(i int, prompt string) map[string]interface{} {
+			sawRecovery := strings.Contains(prompt, fencedRecoveryMark)
+			sentInline := strings.Contains(prompt, "inline_fix")
+			ranIt := strings.Contains(prompt, "ran_marker")
+			switch {
+			case !sawRecovery:
+				return map[string]interface{}{"type": "tool_call", "name": "write_file",
+					"args": map[string]string{"path": "solve.py", "content": "@fenced"}}
+			case !sentInline:
+				// The alternative the recovery named: the whole file inline.
+				return map[string]interface{}{"type": "tool_call", "name": "write_file",
+					"args": map[string]string{"path": "solve.py", "content": fixed}}
+			case !ranIt:
+				return map[string]interface{}{"type": "tool_call", "name": "run_command",
+					"args": map[string]string{"command": "echo ran_marker; python3 solve.py"}}
+			default:
+				return map[string]interface{}{"type": "done", "summary": "wrote solve.py inline and ran it"}
+			}
+		})
+	inner := ctx.StreamFn
+	ctx.StreamFn = func(et string, data interface{}) {
+		if et == "gate" || et == "tool_result" {
+			b, _ := json.Marshal(data)
+			mu.Lock()
+			bounces = append(bounces, et+"|"+string(b))
+			mu.Unlock()
+		}
+		inner(et, data)
+	}
+	if err := runAgentLoop(ctx, "Create solve.py."); err != nil {
+		t.Fatalf("loop error: %v", err)
+	}
+
+	recoveries, recoveryText := 0, ""
+	for _, b := range bounces {
+		if !strings.Contains(b, fencedRecoveryMark) {
+			continue
+		}
+		if strings.HasPrefix(b, "gate|") {
+			recoveries++
+		} else {
+			recoveryText = b
+		}
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "solve.py"))
+	t.Logf("turns=%d sub-generations=%d recoveries=%d status=%q reason=%q disk=%q",
+		*turns, *subcalls, recoveries, terminal["status"], terminal["reason"], string(got))
+
+	if recoveries != 1 {
+		t.Fatalf("recovery fired %d times, want exactly 1", recoveries)
+	}
+	if recoveryText == "" {
+		t.Fatal("the recovery never reached the model as a tool result")
+	}
+	for _, want := range []string{"solve.py", "write_file", "edit_file", "read_file", "run_command"} {
+		if !strings.Contains(recoveryText, want) {
+			t.Errorf("the recovery context never names %q", want)
+		}
+	}
+	// THE POINT: a genuinely completed terminal over validated bytes.
+	if terminal["status"] != string(TerminalCompleted) {
+		t.Fatalf("recovery did not reach a verified completion: status=%q reason=%q summary=%s",
+			terminal["status"], terminal["reason"], terminal["summary"])
+	}
+	if terminal["reason"] != "deliverables_demonstrated" {
+		t.Errorf("completion reason = %q", terminal["reason"])
+	}
+	if string(got) != fixed {
+		t.Errorf("disk = %q, want the inline correction", got)
+	}
+	d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
+	if d == nil || d.CurrentHash != hashBytes(got) {
+		t.Fatal("the ledger does not describe the final bytes")
+	}
+	if k, s := d.CurrentValidation(); s != ValidationPassed || k != ValidationKindSyntax {
+		t.Errorf("completion authorized over %v/%v rather than a current syntax pass", k, s)
+	}
+	// The allowance is unchanged and recovery started nothing.
+	if *subcalls > maxFencedFailuresPerPath {
+		t.Errorf("%d sub-generations, allowance is %d", *subcalls, maxFencedFailuresPerPath)
+	}
+	if census["tool_call"] != census["tool_result"] {
+		t.Errorf("call/result invariant broken: %d vs %d", census["tool_call"], census["tool_result"])
+	}
+	if census["done"] != 1 {
+		t.Errorf("%d terminal events", census["done"])
+	}
+}
+
+func TestFencedChannelRecoveryIgnoredStopsHonestly(t *testing.T) {
+	dir := t.TempDir()
+	ctx, turns, subcalls, census, terminal := fencedLoopFixture(t, dir, fencedTurnCeiling,
+		func(i int, _ string) map[string]interface{} {
+			return map[string]interface{}{"type": "tool_call", "name": "write_file",
+				"args": map[string]string{"path": "solve.py", "content": "@fenced"}}
+		})
+	if err := runAgentLoop(ctx, "Create solve.py."); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("ignored: turns=%d sub-generations=%d status=%q reason=%q",
+		*turns, *subcalls, terminal["status"], terminal["reason"])
+	if *turns >= fencedTurnCeiling {
+		t.Errorf("%d turns — recovery did not stay bounded", *turns)
+	}
+	st := NormalizeTerminalStatus(terminal["status"])
+	if st.Completed() {
+		t.Errorf("an ignored recovery reported %q", terminal["status"])
+	}
+	if completionClaimIn(terminal["summary"]) != "" {
+		t.Errorf("the terminal claimed success:\n%s", terminal["summary"])
+	}
+	// Recovery launched no generation of its own.
+	if *subcalls > maxFencedFailuresPerPath {
+		t.Errorf("%d sub-generations after recovery, allowance is %d",
+			*subcalls, maxFencedFailuresPerPath)
+	}
+	if census["done"] != 1 {
+		t.Errorf("%d terminal events", census["done"])
+	}
+}
+
+// The offer is made once per canonical path, whatever spelling arrives, and
+// two different files get their own.
+func TestFencedChannelRecoveryIdentityAndScope(t *testing.T) {
+	t.Run("aliases cannot reset it", func(t *testing.T) {
+		dir := t.TempDir()
+		spellings := []string{"solve.py", "./solve.py"}
+		var seen int
+		var mu sync.Mutex
+		ctx, _, _, _, _ := fencedLoopFixture(t, dir, fencedTurnCeiling,
+			func(i int, _ string) map[string]interface{} {
+				return map[string]interface{}{"type": "tool_call", "name": "write_file",
+					"args": map[string]string{
+						"path": spellings[i%len(spellings)], "content": "@fenced"}}
+			})
+		inner := ctx.StreamFn
+		ctx.StreamFn = func(et string, data interface{}) {
+			if et == "gate" {
+				if b, _ := json.Marshal(data); strings.Contains(string(b), fencedRecoveryMark) {
+					mu.Lock()
+					seen++
+					mu.Unlock()
+				}
+			}
+			inner(et, data)
+		}
+		if err := runAgentLoop(ctx, "Create solve.py."); err != nil {
+			t.Fatal(err)
+		}
+		if seen != 1 {
+			t.Errorf("alias spellings produced %d recoveries, want 1", seen)
+		}
+	})
+
+	t.Run("separate paths get their own", func(t *testing.T) {
+		dir := t.TempDir()
+		paths := []string{"a.py", "a.py", "a.py", "b.py", "b.py", "b.py"}
+		perPath := map[string]int{}
+		var mu sync.Mutex
+		ctx, _, _, _, _ := fencedLoopFixture(t, dir, fencedTurnCeiling,
+			func(i int, _ string) map[string]interface{} {
+				if i >= len(paths) {
+					return map[string]interface{}{"type": "done", "summary": "stopping"}
+				}
+				return map[string]interface{}{"type": "tool_call", "name": "write_file",
+					"args": map[string]string{"path": paths[i], "content": "@fenced"}}
+			})
+		inner := ctx.StreamFn
+		ctx.StreamFn = func(et string, data interface{}) {
+			if et == "gate" {
+				b, _ := json.Marshal(data)
+				if strings.Contains(string(b), fencedRecoveryMark) {
+					mu.Lock()
+					for _, p := range []string{"a.py", "b.py"} {
+						if strings.Contains(string(b), p) {
+							perPath[p]++
+						}
+					}
+					mu.Unlock()
+				}
+			}
+			inner(et, data)
+		}
+		if err := runAgentLoop(ctx, "Create two files."); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("recoveries per path: %v", perPath)
+		for _, p := range []string{"a.py", "b.py"} {
+			if perPath[p] != 1 {
+				t.Errorf("%s got %d recoveries, want exactly 1", p, perPath[p])
+			}
+		}
+	})
+
+	t.Run("absent target invents no source", func(t *testing.T) {
+		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+		st := &runState{}
+		ctx.FencedFailures = map[string]int{fencedKey(ctx, "missing.py"): maxFencedFailuresPerPath}
+		msg := fencedChannelRecovery(ctx, st, "missing.py")
+		if msg == "" {
+			t.Fatal("no recovery offered for an exhausted path")
+		}
+		if !strings.Contains(msg, "not on disk yet") {
+			t.Errorf("absent target not disclosed:\n%s", msg)
+		}
+		if strings.Contains(msg, "currently contains") {
+			t.Errorf("source was invented for a file that is not there:\n%s", msg)
+		}
+	})
+
+	t.Run("budget too small to act on", func(t *testing.T) {
+		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+		st := &runState{}
+		ctx.FencedFailures = map[string]int{fencedKey(ctx, "solve.py"): maxFencedFailuresPerPath}
+		workCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		ctx.Ctx = workCtx
+		if msg := fencedChannelRecovery(ctx, st, "solve.py"); msg != "" {
+			t.Error("recovery ran with less budget than it needs to be acted on")
+		}
+	})
+
+	t.Run("not offered while the allowance remains", func(t *testing.T) {
+		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+		st := &runState{}
+		if msg := fencedChannelRecovery(ctx, st, "solve.py"); msg != "" {
+			t.Error("recovery offered before the channel was spent")
+		}
+		ctx.FencedFailures = map[string]int{fencedKey(ctx, "solve.py"): 1}
+		if msg := fencedChannelRecovery(ctx, st, "solve.py"); msg != "" {
+			t.Error("recovery offered with allowance remaining")
+		}
+	})
+}
+
+// The alternatives the recovery names must actually work after the channel is
+// spent: a targeted edit, and simply verifying an artifact that is already
+// correct rather than rewriting it.
+func TestAllowedAlternativesAfterFencedExhaustion(t *testing.T) {
+	t.Run("a materially different edit lands", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "solve.py"),
+			[]byte("def solve():\n    return 1\n\nprint(solve())\n"), 0o644)
+		// Steps are scripted rather than sniffed from the prompt: the model
+		// still only STARTS them once it has been told the channel is spent,
+		// which is the conditional part that matters.
+		step := 0
+		ctx, turns, subcalls, _, terminal := fencedLoopFixture(t, dir, fencedTurnCeiling,
+			func(i int, prompt string) map[string]interface{} {
+				if !strings.Contains(prompt, fencedRecoveryMark) {
+					return map[string]interface{}{"type": "tool_call", "name": "write_file",
+						"args": map[string]string{"path": "solve.py", "content": "@fenced"}}
+				}
+				step++
+				switch step {
+				case 1:
+					return map[string]interface{}{"type": "tool_call", "name": "read_file",
+						"args": map[string]string{"path": "solve.py"}}
+				case 2:
+					return map[string]interface{}{"type": "tool_call", "name": "edit_file",
+						"args": map[string]string{"path": "solve.py",
+							"old_str": "return 1", "new_str": "return 42"}}
+				case 3:
+					return map[string]interface{}{"type": "tool_call", "name": "run_command",
+						"args": map[string]string{"command": "python3 solve.py"}}
+				default:
+					return map[string]interface{}{"type": "done", "summary": "changed the return value"}
+				}
+			})
+		if err := runAgentLoop(ctx, "Change solve.py to return 42."); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := os.ReadFile(filepath.Join(dir, "solve.py"))
+		t.Logf("edit route: turns=%d sub-generations=%d status=%q disk=%q",
+			*turns, *subcalls, terminal["status"], string(got))
+		if !strings.Contains(string(got), "return 42") {
+			t.Errorf("the targeted edit never landed: %q", got)
+		}
+		if *subcalls > maxFencedFailuresPerPath {
+			t.Errorf("%d sub-generations after exhaustion", *subcalls)
+		}
+	})
+
+	t.Run("an already-correct artifact is verified, not rewritten", func(t *testing.T) {
+		dir := t.TempDir()
+		const good = "def solve():\n    return 3\n\nprint(solve())\n"
+		os.WriteFile(filepath.Join(dir, "solve.py"), []byte(good), 0o644)
+		before := hashBytes([]byte(good))
+		ctx, turns, subcalls, _, terminal := fencedLoopFixture(t, dir, fencedTurnCeiling,
+			func(i int, prompt string) map[string]interface{} {
+				saw := strings.Contains(prompt, fencedRecoveryMark)
+				ran := strings.Contains(prompt, "ran_marker")
+				switch {
+				case !saw:
+					return map[string]interface{}{"type": "tool_call", "name": "write_file",
+						"args": map[string]string{"path": "solve.py", "content": "@fenced"}}
+				case !ran:
+					// The recovery showed the file; it is already right, so
+					// the model verifies instead of rewriting.
+					return map[string]interface{}{"type": "tool_call", "name": "run_command",
+						"args": map[string]string{"command": "echo ran_marker; python3 solve.py"}}
+				default:
+					return map[string]interface{}{"type": "done", "summary": "solve.py already returns 3; ran it"}
+				}
+			})
+		if err := runAgentLoop(ctx, "Make sure solve.py prints 3."); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := os.ReadFile(filepath.Join(dir, "solve.py"))
+		t.Logf("verify route: turns=%d sub-generations=%d status=%q reason=%q",
+			*turns, *subcalls, terminal["status"], terminal["reason"])
+		if hashBytes(got) != before {
+			t.Errorf("a correct artifact was rewritten: %q", got)
+		}
+		if *subcalls > maxFencedFailuresPerPath {
+			t.Errorf("%d sub-generations after exhaustion", *subcalls)
+		}
+		if NormalizeTerminalStatus(terminal["status"]) == TerminalUnknown {
+			t.Error("no classified terminal")
+		}
+	})
+}

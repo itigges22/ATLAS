@@ -205,6 +205,10 @@ type runState struct {
 	// touches, and hold no file contents.
 	fencedRunFirstRepeats map[string]int
 	fencedRecoverySpent   map[string]bool
+	// fencedChannelClosed records the canonical paths whose fenced channel has
+	// been declared spent to the model, so the offer is made once and a new
+	// turn, an alias, or an unrelated success cannot re-open it.
+	fencedChannelClosed map[string]bool
 	// toolBanned records (tool, path) pairs the loop has taken away from the
 	// model after it proved it cannot use them on that file. Advice is not a
 	// fix when the model ignores advice: measured dogfooding "build me a
@@ -1251,6 +1255,15 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					fencedUsable, fencedWhy := fencedCallIsExecutable("write_file", parsed.Args, ctx)
 					if !fencedUsable {
 						log.Printf("[agent] not opening the fenced channel for an unusable write_file call: %s", fencedWhy)
+					}
+					// The channel can be spent while the model keeps asking
+					// for it. Offer the way out ONCE, before anything tries
+					// another resolution, so the turn costs no generation.
+					if fencedUsable && strings.HasPrefix(trimmed, "@fenced") {
+						if msg := fencedChannelRecovery(ctx, st, wfInput.Path); msg != "" {
+							st.bounceToolCall(ctx, "write_file", msg)
+							continue
+						}
 					}
 					if fencedUsable && strings.HasPrefix(trimmed, "@fenced") {
 						// Anything after the sentinel is the model inlining
@@ -6368,4 +6381,75 @@ func currentValidationDetail(ctx *AgentContext, relPath string) string {
 		return string(kind) + " check failed"
 	}
 	return detail
+}
+
+// --- The exhausted fenced channel -------------------------------------------
+//
+// The allowance stops the generations; it does not tell the model anything it
+// can act on. In the frozen run debounce2 asked for the same resolution 147
+// times and was refused 144 of them with the same sentence, because the only
+// thing the refusal could say was that the channel had failed.
+//
+// This is the earlier branch than the C5 run-first state and stays separate
+// from it: no warned artifact is required, and the trigger is the allowance
+// being spent rather than a pending demand to run something.
+//
+// Offered once per canonical path. It reads and never writes, runs no command,
+// forces no tool, and starts no generation.
+func fencedChannelRecovery(ctx *AgentContext, st *runState, relPath string) string {
+	if ctx == nil || st == nil {
+		return ""
+	}
+	// Only when the channel is genuinely spent for THIS path.
+	if !fencedBudgetExhausted(ctx, relPath) {
+		return ""
+	}
+	// A run that is already ending owns its own terminal.
+	if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
+		return ""
+	}
+	key := fencedKey(ctx, relPath)
+	if st.fencedChannelClosed[key] {
+		return ""
+	}
+	// Context nobody has time to act on is worse than stopping.
+	if ctx.Ctx != nil {
+		if deadline, ok := ctx.Ctx.Deadline(); ok && time.Until(deadline) < fencedRecoveryFloor {
+			log.Printf("[agent] skipping the fenced-channel recovery for %s — %v of budget left",
+				relPath, time.Until(deadline).Round(time.Second))
+			return ""
+		}
+	}
+	if st.fencedChannelClosed == nil {
+		st.fencedChannelClosed = map[string]bool{}
+	}
+	st.fencedChannelClosed[key] = true
+	log.Printf("[agent] fenced channel spent for %s — offering the alternatives once", relPath)
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "The fenced-content channel for %s is used up in this session: "+
+		"the sub-call was asked for the file and did not return one, and it will not be "+
+		"asked again for this path. Sending \"content\": \"@fenced\" for %s cannot "+
+		"succeed now, however many times it is repeated.\n\n", relPath, relPath)
+
+	if source, truncated, err := boundedCurrentSource(ctx, relPath); err == nil {
+		fmt.Fprintf(&sb, "%s currently contains", relPath)
+		if truncated {
+			fmt.Fprintf(&sb, " (first %d lines)", fencedRecoveryMaxLines)
+		}
+		sb.WriteString(":\n\n")
+		sb.WriteString(source)
+		sb.WriteString("\n\n")
+	} else {
+		fmt.Fprintf(&sb, "%s is not on disk yet, so there is nothing to show you "+
+			"of it.\n\n", relPath)
+	}
+	if detail := currentValidationDetail(ctx, relPath); detail != "" {
+		fmt.Fprintf(&sb, "The last thing checked about those exact bytes: %s\n\n", detail)
+	}
+	fmt.Fprintf(&sb, "What still works for %s: send write_file with the complete file "+
+		"INLINE in the content field; make a targeted change with edit_file or "+
+		"replace_lines; read it with read_file; or run it with run_command and read the "+
+		"real error. Pick one of those.", relPath)
+	return sb.String()
 }
