@@ -3356,3 +3356,202 @@ func TestHazardAndJobReapingStayConsistent(t *testing.T) {
 		t.Errorf("a fully reaped session did not complete: reason=%q", reason)
 	}
 }
+
+// --- Non-code deliverables ---------------------------------------------------
+//
+// deliverablesDemonstrablyValid required a syntax PASS universally, so a valid
+// notes.txt with exact current bytes could never complete. The naive fix --
+// treating not_applicable as valid -- is unsafe, because an unsupported
+// language reports not_applicable for an entirely different reason. The
+// discriminator is the document set stripOneFenceLayer has always used.
+
+func TestDocumentAssetClassification(t *testing.T) {
+	for _, c := range []struct {
+		path string
+		want bool
+		why  string
+	}{
+		{"notes.txt", true, "ordinary text"},
+		{"README.md", true, "markdown document"},
+		{"guide.markdown", true, "markdown document"},
+		{"spec.rst", true, "restructured text"},
+		{"solve.py", false, "recognized source"},
+		{"lib.rs", false, "unsupported source, not prose"},
+		{"main.c", false, "unsupported source"},
+		{"app.jinja", false, "template with executable content"},
+		{"data.json", false, "structured, has a parser"},
+		{"config.yaml", false, "structured, has a parser"},
+		{"page.html", false, "may carry embedded scripts"},
+		{"weird.zzz", false, "unknown extension"},
+		{"Makefile", false, "no extension, not prose"},
+	} {
+		if got := isDocumentAsset(c.path); got != c.want {
+			t.Errorf("isDocumentAsset(%q) = %v, want %v (%s)", c.path, got, c.want, c.why)
+		}
+	}
+}
+
+func TestNonCodeDeliverableDemonstration(t *testing.T) {
+	newCtx := func(t *testing.T) (*AgentContext, string) {
+		dir := t.TempDir()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !strings.HasSuffix(r.URL.Path, "/syntax-check") {
+				http.Error(w, "unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			var in struct{ Code, Language string }
+			json.NewDecoder(r.Body).Decode(&in)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"valid": !strings.Contains(in.Code, "]]")})
+		}))
+		t.Cleanup(srv.Close)
+		ctx := NewAgentContext(dir, Tier2Medium)
+		ctx.SandboxURL = srv.URL
+		ctx.PermissionMode = PermissionYolo
+		ctx.StreamFn = func(string, interface{}) {}
+		return ctx, dir
+	}
+
+	write := func(t *testing.T, ctx *AgentContext, path, body string) *ToolResult {
+		t.Helper()
+		args, _ := json.Marshal(map[string]string{"path": path, "content": body})
+		return executeToolCall("write_file", args, ctx)
+	}
+
+	t.Run("text file may demonstrate", func(t *testing.T) {
+		ctx, _ := newCtx(t)
+		res := write(t, ctx, "notes.txt", "ordinary notes\n")
+		if res.ValidationKind != ValidationKindNone || res.ValidationStatus != ValidationNotApplicable {
+			t.Fatalf("expected none/not_applicable, got %s/%s",
+				res.ValidationKind, res.ValidationStatus)
+		}
+		if !deliverablesDemonstrablyValid(ctx, []string{"notes.txt"}) {
+			t.Error("a current, ordinary text deliverable could not demonstrate")
+		}
+		// The internal record is untouched: no fake syntax pass.
+		d := ctx.Ledger[ledgerKey(ctx, "notes.txt")]
+		k, s := d.CurrentValidation()
+		if k != ValidationKindNone || s != ValidationNotApplicable {
+			t.Errorf("the ledger was relabelled: %v/%v", k, s)
+		}
+	})
+
+	t.Run("markdown may demonstrate", func(t *testing.T) {
+		ctx, _ := newCtx(t)
+		write(t, ctx, "README.md", "# Title\n\nSome prose.\n")
+		if !deliverablesDemonstrablyValid(ctx, []string{"README.md"}) {
+			t.Error("a markdown document could not demonstrate")
+		}
+	})
+
+	t.Run("unsupported code cannot", func(t *testing.T) {
+		for _, p := range []string{"lib.rs", "main.c", "weird.zzz", "app.jinja"} {
+			ctx, _ := newCtx(t)
+			write(t, ctx, p, "fn main() { let x = 1; }\n")
+			if deliverablesDemonstrablyValid(ctx, []string{p}) {
+				t.Errorf("%s demonstrated completion with no applicable check", p)
+			}
+		}
+	})
+
+	t.Run("recognized code with the checker unavailable cannot", func(t *testing.T) {
+		ctx, _ := newCtx(t)
+		ctx.SandboxURL = "http://127.0.0.1:1"
+		write(t, ctx, "solve.py", "A = 1\n")
+		if deliverablesDemonstrablyValid(ctx, []string{"solve.py"}) {
+			t.Error("an unchecked .py demonstrated completion")
+		}
+	})
+
+	t.Run("structured format uses its parser", func(t *testing.T) {
+		ctx, _ := newCtx(t)
+		write(t, ctx, "data.json", "{\"a\": 1}\n")
+		if !deliverablesDemonstrablyValid(ctx, []string{"data.json"}) {
+			t.Error("valid json did not pass through its own parser")
+		}
+		ctx2, _ := newCtx(t)
+		write(t, ctx2, "bad.json", "{\"a\": [1, 2]]}\n")
+		if deliverablesDemonstrablyValid(ctx2, []string{"bad.json"}) {
+			t.Error("invalid json demonstrated completion")
+		}
+	})
+
+	t.Run("bytes changed after observation cannot", func(t *testing.T) {
+		ctx, dir := newCtx(t)
+		write(t, ctx, "notes.txt", "ordinary notes\n")
+		os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("changed behind us\n"), 0o644)
+		if deliverablesDemonstrablyValid(ctx, []string{"notes.txt"}) {
+			t.Error("a stale record demonstrated completion")
+		}
+	})
+
+	t.Run("a path the session never wrote cannot", func(t *testing.T) {
+		ctx, dir := newCtx(t)
+		os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("pre-existing\n"), 0o644)
+		if deliverablesDemonstrablyValid(ctx, []string{"notes.txt"}) {
+			t.Error("a file the session never owned demonstrated completion")
+		}
+	})
+
+	t.Run("unmet verification and outstanding work still block", func(t *testing.T) {
+		ctx, _ := newCtx(t)
+		write(t, ctx, "notes.txt", "ordinary notes\n")
+		st := &runState{madeProductiveChange: true, expectedOutputs: []string{"notes.txt"}}
+		// Requested verification, never satisfied.
+		st.userWantsVerification = true
+		if status, reason := finalizeCompletion(ctx, st, "Write notes.txt and verify it.", ""); status.Completed() {
+			t.Errorf("completed with verification unmet: reason=%q", reason)
+		}
+		// Outstanding work elsewhere.
+		st2 := &runState{madeProductiveChange: true, expectedOutputs: []string{"notes.txt"}}
+		args, _ := json.Marshal(map[string]string{"path": "other.py", "content": "@fenced"})
+		noteMutationIntent(ctx, st2, "write_file", args)
+		if status, reason := finalizeCompletion(ctx, st2, "Write the files.", ""); status.Completed() {
+			t.Errorf("completed with unresolved work: reason=%q", reason)
+		}
+	})
+}
+
+// The production shape, through the real loop.
+func TestNonCodeDeliverableCompletesThroughTheLoop(t *testing.T) {
+	for _, c := range []struct {
+		name, path, body string
+		wantCompleted    bool
+	}{
+		{"ordinary text", "notes.txt", "the notes you asked for\n", true},
+		{"unsupported code", "lib.rs", "fn main() { let x = 1; }\n", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			const req = "Write the file."
+			ctx, _, _, terminal, _ := debtFixture(t, dir, req, debtCeiling,
+				func(i int, _ string) map[string]interface{} {
+					if i == 0 {
+						return map[string]interface{}{"type": "tool_call", "name": "write_file",
+							"args": map[string]string{"path": c.path, "content": c.body}}
+					}
+					return map[string]interface{}{"type": "done", "summary": "wrote it"}
+				})
+			if err := runAgentLoop(ctx, req); err != nil {
+				t.Fatal(err)
+			}
+			got, _ := os.ReadFile(filepath.Join(dir, c.path))
+			d := ctx.Ledger[ledgerKey(ctx, c.path)]
+			t.Logf("%s: status=%q reason=%q hash_matches=%v",
+				c.name, terminal["status"], terminal["reason"],
+				d != nil && d.CurrentHash == hashBytes(got))
+			completed := terminal["status"] == string(TerminalCompleted)
+			if completed != c.wantCompleted {
+				t.Errorf("completed=%v, want %v (reason=%q)", completed, c.wantCompleted, terminal["reason"])
+			}
+			if c.wantCompleted {
+				if d == nil || d.CurrentHash != hashBytes(got) {
+					t.Error("the ledger hash does not match disk")
+				}
+				if k, s := d.CurrentValidation(); k != ValidationKindNone || s != ValidationNotApplicable {
+					t.Errorf("the internal record was relabelled: %v/%v", k, s)
+				}
+			}
+		})
+	}
+}

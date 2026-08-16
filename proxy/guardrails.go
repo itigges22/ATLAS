@@ -90,12 +90,27 @@ func sanitizeFileContent(filePath, content string) (string, bool) {
 	return cleaned, modified
 }
 
+// isDocumentAsset reports whether a path is prose rather than code.
+//
+// This is the set stripOneFenceLayer has always used to decide that a file's
+// fences are its CONTENT, not a wrapper around it -- a markdown document full
+// of code blocks is still a document. Naming it lets the completion decision
+// ask the same question, and the answer has to be an allowlist: an unknown
+// extension holding source-like logic, or an unsupported language like .rs,
+// must fall outside it, because "no checker ran" means something entirely
+// different for those than it does for a text file.
+func isDocumentAsset(filePath string) bool {
+	switch strings.ToLower(filepath.Ext(filePath)) {
+	case ".md", ".markdown", ".rst", ".txt":
+		return true
+	}
+	return false
+}
+
 // stripOneFenceLayer removes a single whole-file markdown wrapper. Callers
 // want sanitizeFileContent, which drives this to a fixpoint.
 func stripOneFenceLayer(filePath, content string) (string, bool) {
-	ext := strings.ToLower(filepath.Ext(filePath))
-	switch ext {
-	case ".md", ".markdown", ".rst", ".txt":
+	if isDocumentAsset(filePath) {
 		return content, false
 	}
 
@@ -1942,11 +1957,56 @@ func deliverablesDemonstrablyValid(ctx *AgentContext, expected []string) bool {
 		if err != nil {
 			return false
 		}
-		if fallbackSyntaxOutcomeFor(ctx, resolved, string(content)).WholeFile.Status != ValidationPassed {
-			return false
+		status := fallbackSyntaxOutcomeFor(ctx, resolved, string(content)).WholeFile.Status
+		if status == ValidationPassed {
+			continue
 		}
+		// A document has no syntax to pass. Requiring one meant a valid
+		// notes.txt could never demonstrate anything, however current its
+		// bytes were. What stands in for the pass is existence plus currency:
+		// the checker reports that nothing applies, the path is prose rather
+		// than unsupported code, and the ledger's record still describes the
+		// bytes that are there. This is not a syntax pass and is never
+		// relabelled as one.
+		if status == ValidationNotApplicable && documentDeliverableCurrent(ctx, resolved, content) {
+			continue
+		}
+		return false
 	}
 	return true
+}
+
+// documentDeliverableCurrent is the existence-and-currency evidence a non-code
+// deliverable can offer in place of a syntax pass.
+//
+// Every clause is required. Prose only, so an unsupported language or an
+// unknown extension holding logic is excluded; the ledger must already own the
+// path, so nothing the session never wrote qualifies; its recorded verdict
+// must be exactly "checked nothing because nothing applies"; and that record
+// has to describe the bytes on disk right now.
+func documentDeliverableCurrent(ctx *AgentContext, resolved string, content []byte) bool {
+	if !isDocumentAsset(resolved) {
+		return false
+	}
+	key := ledgerKey(ctx, resolved)
+	ctx.LedgerMu.Lock()
+	d := ctx.Ledger[key]
+	var kind ValidationKind
+	var status ValidationStatus
+	var tombstoned bool
+	var current string
+	if d != nil {
+		kind, status = d.CurrentValidation()
+		tombstoned, current = d.Tombstoned, d.CurrentHash
+	}
+	ctx.LedgerMu.Unlock()
+	if d == nil || tombstoned {
+		return false
+	}
+	if kind != ValidationKindNone || status != ValidationNotApplicable {
+		return false
+	}
+	return current == hashBytes(content)
 }
 
 // inferenceFailureSummary is what the user reads when the model call itself
