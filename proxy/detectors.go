@@ -242,6 +242,32 @@ func structuralEditTarget(args json.RawMessage) (string, string) {
 // filepath.Clean is enough here -- the detector compares a session's calls with
 // each other, and every one of them was written by the same model against the
 // same working directory.
+// retryIdentityArgs chooses the arguments that identify a call for the
+// identical-resend ban.
+//
+// Two layers, deliberately. Channel and repetition identity stay RAW: the
+// fenced allowance and the repeat detector both exist to bound a model
+// re-sending one call, and `content:"@fenced"` is the same seven bytes every
+// time, which is exactly what those two are counting. An EXECUTED write_file
+// is a different question -- "have these bytes already been refused?" -- and
+// the answer has to be about the bytes that would be written, not about the
+// request that went to fetch them.
+//
+// Measured on a session-owned file whose current bytes were exact-hash
+// syntax/passed: three fenced fetches, one proposal evaluated. The second and
+// third bodies were obtained, a generation each, and dropped before any syntax
+// gate saw them, and a valid fourth body never got that far.
+//
+// Only write_file moves. Everything else keeps the identity it had, and a call
+// with nothing resolved keeps the intent -- a pre-resolution failure must stay
+// bounded without pretending resolved bytes exist.
+func retryIdentityArgs(name string, intent, resolved json.RawMessage) json.RawMessage {
+	if name != "write_file" || len(resolved) == 0 {
+		return intent
+	}
+	return resolved
+}
+
 func signaturePath(p string) string {
 	if p == "" {
 		return ""

@@ -1703,7 +1703,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					continue
 				}
 			}
-			if refusal := identicalRetryRefusal(ctx, parsed.Name, intentArgs); refusal != "" {
+			if refusal := identicalRetryRefusal(ctx, parsed.Name,
+				retryIdentityArgs(parsed.Name, intentArgs, parsed.Args)); refusal != "" {
 				log.Printf("[agent] turn=%d refusing an identical re-send of a rejected %s", turn, parsed.Name)
 				// Escalate from refusing THIS call to removing the tool for
 				// THIS file. The model has now sent the same rejected call
@@ -1901,7 +1902,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			if !result.Success {
 				log.Printf("[agent] turn=%d tool=%q FAIL: %q", turn,
 					truncateStr(parsed.Name, 64), truncateStr(result.Error, 240))
-				recordFailedToolCall(ctx, parsed.Name, intentArgs, result.Error)
+				recordFailedToolCall(ctx, parsed.Name,
+					retryIdentityArgs(parsed.Name, intentArgs, parsed.Args), result.Error)
 				// Every refusal of authored content is a deterministic
 				// negative for the lens corpus. One site rather than 60-odd
 				// rejection points, and it cannot miss a gate added later.
@@ -1913,7 +1915,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				// A call can fail and later succeed — an edit rejected for a
 				// stale range works after a re-read. Drop the memory with the
 				// condition that caused it.
-				clearFailedToolCall(ctx, parsed.Name, intentArgs)
+				clearFailedToolCall(ctx, parsed.Name,
+					retryIdentityArgs(parsed.Name, intentArgs, parsed.Args))
 				clearSteerState(ctx, st, parsed.Name, parsed.Args)
 				clearBrokenArtifactState(ctx, st, parsed.Name, intentArgs)
 			}

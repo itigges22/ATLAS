@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -1828,11 +1829,14 @@ func TestIdenticalFencedIntentIsOneSignature(t *testing.T) {
 
 // Spelling the same target two ways must not buy a fresh budget.
 //
-// Measured through the failure window rather than the repeat detector: once
-// ignored write_file steering is failure-accounted, three refusals on one
-// canonical target end the run before the detector's own threshold is
-// reached. The property is unchanged and enforced sooner -- the two spellings
-// have to land on ONE target for that to happen, which is what this asserts.
+// Owned by the repeat detector, which is where the name says it belongs: the
+// detector reads the RAW intent, and `@fenced` on solve.py and on ./solve.py
+// are one signature there. It briefly showed up in the failure window instead,
+// because the resend ban was also reading the raw intent and fired first; now
+// that an executed write is identified by its resolved proposal, the ban stops
+// answering for a channel that returns different bytes each time and the
+// detector answers again. Both spellings still have to collapse to one target
+// for it to fire at all, which is the property.
 // TestDifferentFencedTargetsStayIndependent is the other half: distinct
 // targets must not collapse the same way.
 func TestCanonicalSpellingsShareTheIntentSignature(t *testing.T) {
@@ -1854,22 +1858,17 @@ func TestCanonicalSpellingsShareTheIntentSignature(t *testing.T) {
 	}
 	t.Logf("turns=%d interventions=%d status=%q reason=%q fences=%d", turns,
 		census["agent_repeat_intervention"], terminal["status"], terminal["reason"], fences)
-	if turns > 4 {
-		t.Errorf("alternating spellings evaded repetition tracking (%d turns)", turns)
+	if census["agent_repeat_intervention"] < 2 {
+		t.Errorf("alternating spellings evaded repetition tracking (%d interventions in %d turns)",
+			census["agent_repeat_intervention"], turns)
 	}
-	if terminal["reason"] != "repeated_refusal" {
-		t.Errorf("reason=%q, want repeated_refusal", terminal["reason"])
+	if turns >= 30 {
+		t.Fatalf("%d turns without a terminal", turns)
 	}
-	for _, p := range ctx.RecentFailurePaths {
-		if p != "solve.py" {
-			t.Errorf("the two spellings were counted as different targets: %v",
-				ctx.RecentFailurePaths)
-			break
-		}
+	if NormalizeTerminalStatus(terminal["status"]).Completed() {
+		t.Errorf("a run that only ever re-sent one call reported %q", terminal["status"])
 	}
-	if len(ctx.RecentFailurePaths) == 0 {
-		t.Error("no refusal was accounted at all")
-	}
+	_ = ctx
 }
 
 // Two different files are two different problems and keep their own budgets.
@@ -2075,20 +2074,35 @@ func TestRejectedFencedIntentIsRecognisedOnResend(t *testing.T) {
 	t.Logf("turns=%d fenced=%d ban_bounces=%d status=%q reason=%q", turns, fences,
 		banBounces, terminal["status"], terminal["reason"])
 
-	// The behaviour under test: the re-sent intent is recognised as the same
-	// rejected call. On the parent the ban never sees it, because the args it
-	// compares carry a different fetched body every turn.
-	if banBounces == 0 {
-		t.Error("the identical re-sent intent was never recognised by the retry ban")
+	// The behaviour under test is the ECONOMY, not which mechanism enforces
+	// it: a model re-sending one fenced intent must not spend a fresh
+	// generation every turn, and must not run on indefinitely.
+	//
+	// M1 made the retry ban read the raw intent so it would recognise the
+	// re-send. That answer could not survive C4: an executed write is now
+	// identified by the bytes it proposes, because a channel returning
+	// DIFFERENT bytes each turn was having those bytes discarded unevaluated.
+	// Here every fetched body fails the same way, so the rejection class never
+	// changes, the consecutive-failure streak is never reset, and the
+	// path-aware breaker ends the run on the same turn the ban used to --
+	// which is the discrimination that was wanted all along: one failure
+	// repeated is stuck, three different failures are progress.
+	if banBounces != 0 {
+		t.Logf("the ban also fired %d time(s)", banBounces)
+	}
+	switch terminal["reason"] {
+	case "same_target_failures", "repeated_refusal", "repeat_detector", "failure_ceiling":
+	default:
+		t.Errorf("reason=%q — repeated channel use is no longer bounded by any "+
+			"convergence mechanism", terminal["reason"])
 	}
 
-	// The rejected intent is recognised on its re-send, so the run does not
-	// spend its whole budget re-sending it.
+	// The run does not spend its whole budget re-sending it.
 	if turns > 10 {
 		t.Errorf("%d turns of an identical rejected intent before the run ended", turns)
 	}
-	// Fewer generations than turns: once the intent is recognised, the later
-	// re-sends are answered without opening the channel again.
+	// Fewer generations than turns: the later re-sends are answered without
+	// opening the channel again. This is M1's payload and it is unchanged.
 	if fences >= turns {
 		t.Errorf("%d generations for %d turns — the re-send still paid for a "+
 			"fresh generation every time", fences, turns)
@@ -3057,4 +3071,502 @@ func TestAllowedAlternativesAfterFencedExhaustion(t *testing.T) {
 			t.Error("no classified terminal")
 		}
 	})
+}
+
+// --- C4: retry identity for an executed write is the proposal, not the intent
+//
+// `content:"@fenced"` is the same seven bytes every time the model sends it.
+// The sub-call that resolves it returns DIFFERENT bytes each time, and the
+// resend ban reads the raw intent, so the second and third proposals were
+// fetched -- a generation each -- and discarded before any syntax gate looked
+// at them. Measured on a session-owned file whose current bytes are exact-hash
+// syntax/passed: three fenced fetches, one proposal evaluated, and a valid
+// fourth body queued behind a ban it never reached.
+//
+// Channel identity stays raw: the fenced allowance and the repeat detector both
+// exist to bound a model re-sending one call, and that is what the raw bytes
+// say. Only the identity of an EXECUTED write_file moves to the proposal.
+
+const (
+	c4Valid = "def solve():\n    total = 0\n    for i in range(3):\n        total += i\n    return total\n\n\nprint(solve())\n"
+	c4BadA  = "def solve():\n    total = 0\n    for i in range(3:\n        total += i\n    return total\n\n\nprint(solve())\n"
+	c4BadB  = "def solve():\n    vals = [1, 2]]\n    return sum(vals)\n\n\nprint(solve())\n"
+	c4BadC  = "def solve():\n    d = {'k': 1\n    return d\n\n\nprint(solve())\n"
+	c4Fixed = "def solve():\n    return 7\n\n\nprint(solve())\n"
+)
+
+func c4Syntax(code string) string {
+	cmd := exec.Command("python3", "-c",
+		"import ast,sys\ntry:\n ast.parse(sys.stdin.read())\nexcept SyntaxError as e:\n sys.stdout.write('%s (line %d)' % (e.msg, e.lineno or 0))")
+	cmd.Stdin = strings.NewReader(code)
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// syntaxCheck is one call the write path made to the checker, identified by
+// the exact bytes it asked about. Proposal checks and baseline checks both
+// arrive here, and the hash is what tells them apart.
+type syntaxCheck struct {
+	Hash   string
+	Valid  bool
+	Detail string
+}
+
+type c4Run struct {
+	ctx      *AgentContext
+	dir      string
+	turns    int
+	fetches  int
+	census   map[string]int
+	terminal map[string]string
+	refusals []string // syntax-gate diagnostics, in order
+	gates    []string
+	calls    []string
+	writes   int // successful write_file results
+	checks   []syntaxCheck
+}
+
+// c4Fixture runs the real loop with a genuine Python syntax check. fencedBodies
+// feeds the @fenced sub-call in order.
+func c4Fixture(t *testing.T, fencedBodies []string,
+	plan func(i int, r *c4Run) map[string]interface{}) *c4Run {
+	t.Helper()
+	r := &c4Run{dir: t.TempDir(), census: map[string]int{}, terminal: map[string]string{}}
+	var mu sync.Mutex
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		switch {
+		case strings.HasPrefix(req.URL.Path, "/v3/"), strings.HasPrefix(req.URL.Path, "/internal/"):
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		case strings.HasSuffix(req.URL.Path, "/syntax-check"):
+			var in struct{ Code string }
+			json.NewDecoder(req.Body).Decode(&in)
+			d := c4Syntax(in.Code)
+			mu.Lock()
+			r.checks = append(r.checks, syntaxCheck{
+				Hash: hashBytes([]byte(in.Code))[:12], Valid: d == "", Detail: d})
+			mu.Unlock()
+			if d != "" {
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"valid": false, "errors": []string{d}})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
+			return
+		case strings.HasSuffix(req.URL.Path, "/execute"):
+			var in struct{ Code string }
+			json.NewDecoder(req.Body).Decode(&in)
+			if strings.Contains(in.Code, ".atlas-mount-probe") {
+				b, _ := os.ReadFile(filepath.Join(r.dir, ".atlas-mount-probe"))
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": true, "stdout": string(b), "exit_code": 0})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "stdout": "", "exit_code": 0})
+			return
+		case !strings.HasSuffix(req.URL.Path, "/v1/chat/completions"):
+			http.NotFound(w, req)
+			return
+		}
+		raw, _ := io.ReadAll(req.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		if strings.Contains(string(raw), "single fenced block") {
+			mu.Lock()
+			n := r.fetches
+			r.fetches++
+			mu.Unlock()
+			body := "no block"
+			if n < len(fencedBodies) {
+				body = "```python\n" + fencedBodies[n] + "```"
+			}
+			d, _ := json.Marshal(map[string]interface{}{
+				"choices": []map[string]interface{}{{"delta": map[string]string{"content": body}}}})
+			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+			return
+		}
+		mu.Lock()
+		i := r.turns
+		r.turns++
+		mu.Unlock()
+		if i >= 30 {
+			http.Error(w, "turn ceiling exceeded", http.StatusInsufficientStorage)
+			return
+		}
+		mu.Lock()
+		call, _ := json.Marshal(plan(i, r))
+		mu.Unlock()
+		d, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{{"delta": map[string]string{"content": string(call)}}}})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+	}))
+	t.Cleanup(srv.Close)
+
+	r.ctx = NewAgentContext(r.dir, Tier2Medium)
+	r.ctx.InferenceURL, r.ctx.SandboxURL, r.ctx.V3URL = srv.URL, srv.URL, srv.URL
+	r.ctx.PermissionMode = PermissionYolo
+	r.ctx.TrustMode = trustFullyTrusted
+	r.ctx.VerifyOnHost = true
+	r.ctx.MaxTurns = 0
+	r.ctx.StreamFn = func(et string, data interface{}) {
+		b, _ := json.Marshal(data)
+		mu.Lock()
+		defer mu.Unlock()
+		r.census[et]++
+		switch et {
+		case "tool_result":
+			var ok struct {
+				Success bool
+				Tool    string
+			}
+			if json.Unmarshal(b, &ok) == nil && ok.Success && ok.Tool == "write_file" {
+				r.writes++
+			}
+			var tr struct{ Error string }
+			// Only a real syntax-gate evaluation counts. The resend ban
+			// quotes the original refusal back, so it carries the same
+			// phrase without any proposal having been looked at.
+			if json.Unmarshal(b, &tr) == nil && strings.Contains(tr.Error, "it was NOT written") &&
+				!strings.Contains(tr.Error, "byte for byte") &&
+				!strings.Contains(tr.Error, "no longer available") {
+				r.refusals = append(r.refusals, tr.Error)
+			}
+		case "gate":
+			var g struct{ Gate, Reason string }
+			if json.Unmarshal(b, &g) == nil {
+				r.gates = append(r.gates, g.Gate+": "+g.Reason)
+			}
+		case "done":
+			var m map[string]string
+			json.Unmarshal(b, &m)
+			for k, v := range m {
+				r.terminal[k] = v
+			}
+		case "tool_call":
+			r.calls = append(r.calls, string(b))
+		}
+	}
+	runAgentLoop(r.ctx, "Write solve.py so it prints 7, then run it.")
+	return r
+}
+
+// subject names the bytes a check was about, so a proposal check can be told
+// from the baseline check the write path makes of what is already on disk.
+func (r *c4Run) subject(hash string) string {
+	for name, body := range map[string]string{
+		"valid(known-good)": c4Valid, "BadA": c4BadA, "BadB": c4BadB,
+		"BadC": c4BadC, "Fixed": c4Fixed,
+	} {
+		if hashBytes([]byte(body))[:12] == hash {
+			return name
+		}
+	}
+	return "other"
+}
+
+func (r *c4Run) disk(t *testing.T) string {
+	t.Helper()
+	b, _ := os.ReadFile(filepath.Join(r.dir, "solve.py"))
+	return string(b)
+}
+
+func (r *c4Run) log(t *testing.T, name string) {
+	t.Helper()
+	d := r.ctx.Ledger[ledgerKey(r.ctx, "solve.py")]
+	kind, status := ValidationKindUnknown, ValidationUnknown
+	hashOK := false
+	if d != nil {
+		kind, status = d.CurrentValidation()
+		hashOK = d.CurrentHash == hashBytes([]byte(r.disk(t)))
+	}
+	pass, fail := 0, 0
+	for _, c := range r.checks {
+		if c.Valid {
+			pass++
+		} else {
+			fail++
+		}
+	}
+	t.Logf("%s: turns=%d fetches=%d checks=%d (pass=%d fail=%d) refusals=%d status=%q reason=%q hash_matches=%v validation=%s/%s",
+		name, r.turns, r.fetches, len(r.checks), pass, fail, len(r.refusals),
+		r.terminal["status"], r.terminal["reason"], hashOK, kind, status)
+	for i, c := range r.checks {
+		t.Logf("   check#%d %s %-5v %s [%s]", i+1, c.Hash, c.Valid, c.Detail, r.subject(c.Hash))
+	}
+}
+
+func c4Write(path, content string) map[string]interface{} {
+	return map[string]interface{}{"type": "tool_call", "name": "write_file",
+		"args": map[string]string{"path": path, "content": content}}
+}
+
+// Variant B: the raw intent never changes; the resolved proposals all differ.
+// Every one of them must reach the syntax gate.
+func TestFencedProposalsAreEvaluatedNotDeduplicatedByIntent(t *testing.T) {
+	r := c4Fixture(t, []string{c4BadA, c4BadB, c4BadC, c4Fixed},
+		func(i int, r *c4Run) map[string]interface{} {
+			switch {
+			case i == 0:
+				return c4Write("solve.py", c4Valid)
+			case r.writes < 2: // still trying to replace the known-good file
+				return c4Write("solve.py", "@fenced")
+			}
+			return map[string]interface{}{"type": "done", "summary": "solve.py prints 7"}
+		})
+	r.log(t, "B")
+
+	// Accounting, stated exactly. `refusals` counts REJECTED proposals only;
+	// the checker sees more than that, and the distinction is the point.
+	seen := map[string]bool{}
+	var proposalFail, proposalPass int
+	for _, c := range r.checks {
+		if r.subject(c.Hash) == "valid(known-good)" {
+			continue // the baseline the write path compares against
+		}
+		seen[c.Hash] = true
+		if c.Valid {
+			proposalPass++
+		} else {
+			proposalFail++
+		}
+	}
+	if len(seen) != 4 {
+		t.Errorf("%d distinct proposals reached the checker, want 4 (BadA, BadB, BadC, Fixed); "+
+			"the rest were fetched and discarded on raw-intent identity", len(seen))
+	}
+	if proposalFail != 3 {
+		t.Errorf("%d failed proposal checks, want 3", proposalFail)
+	}
+	if proposalPass == 0 {
+		t.Error("the valid proposal was never checked")
+	}
+	if len(r.refusals) != 3 {
+		t.Fatalf("%d rejected proposals, want 3", len(r.refusals))
+	}
+	// The valid proposal was checked BEFORE it was written: its passing check
+	// precedes the successful write, and no write succeeded between the last
+	// failing check and it.
+	lastFail, firstPass := -1, -1
+	for i, c := range r.checks {
+		if r.subject(c.Hash) == "valid(known-good)" {
+			continue
+		}
+		if !c.Valid {
+			lastFail = i
+		} else if firstPass < 0 {
+			firstPass = i
+		}
+	}
+	if firstPass < 0 || firstPass <= lastFail {
+		t.Errorf("the accepted proposal was not checked after the last rejection "+
+			"(lastFail=%d firstPass=%d)", lastFail, firstPass)
+	}
+	if hashBytes([]byte(r.disk(t)))[:12] != r.checks[firstPass].Hash {
+		t.Error("the bytes on disk are not the bytes that passed the check")
+	}
+	// Each evaluation describes its OWN bytes, as the checker reported them.
+	for i, body := range []string{c4BadA, c4BadB, c4BadC} {
+		want := c4Syntax(body)
+		if want == "" {
+			t.Fatalf("fixture body %d is not actually invalid", i+1)
+		}
+		if i < len(r.refusals) && !strings.Contains(r.refusals[i], want) {
+			t.Errorf("evaluation %d does not describe its own proposal (want %q): %.140s",
+				i+1, want, r.refusals[i])
+		}
+	}
+	// No rejected proposal ever reached disk: what is there is either the
+	// original known-good bytes or the valid correction.
+	got := r.disk(t)
+	if got != c4Valid && got != c4Fixed {
+		t.Errorf("disk holds neither the known-good bytes nor the valid correction: %q", got)
+	}
+	if c4Syntax(got) != "" {
+		t.Errorf("invalid bytes reached disk: %q", got)
+	}
+}
+
+// Identity is the proposal: the same file bytes sent inline and through the
+// fenced channel are one call; different bytes are not.
+func TestProposalIdentityIsTheResolvedBytes(t *testing.T) {
+	inline := json.RawMessage(`{"path":"solve.py","content":` + c4JSON(c4BadA) + `}`)
+	resolved := json.RawMessage(`{"path":"solve.py","content":` + c4JSON(c4BadA) + `}`)
+	alias := json.RawMessage(`{"path":"./solve.py","content":` + c4JSON(c4BadA) + `}`)
+	other := json.RawMessage(`{"path":"solve.py","content":` + c4JSON(c4BadB) + `}`)
+	bare := json.RawMessage(`{"path":"solve.py","content":"@fenced"}`)
+
+	same := retryIdentityArgs("write_file", bare, resolved)
+	if toolCallSignature("write_file", same) != toolCallSignature("write_file", inline) {
+		t.Error("the same bytes inline and through the channel are not one call")
+	}
+	if toolCallSignature("write_file", same) != toolCallSignature("write_file", alias) {
+		t.Error("path aliases do not share proposal identity")
+	}
+	if toolCallSignature("write_file", same) == toolCallSignature("write_file", other) {
+		t.Error("materially different bytes share identity")
+	}
+	// Channel identity is still the raw intent, and other tools are untouched.
+	if got := retryIdentityArgs("write_file", bare, nil); string(got) != string(bare) {
+		t.Errorf("with nothing resolved the identity must stay the intent: %s", got)
+	}
+	ed := json.RawMessage(`{"path":"solve.py","old_str":"a","new_str":"b"}`)
+	if got := retryIdentityArgs("edit_file", ed, resolved); string(got) != string(ed) {
+		t.Errorf("edit_file identity moved: %s", got)
+	}
+}
+
+func c4JSON(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+// The two bounds that must survive the identity change, each owned by a
+// different mechanism.
+func TestInvalidProposalsStayBounded(t *testing.T) {
+	t.Run("identical resolved bytes hit the resend ban", func(t *testing.T) {
+		r := c4Fixture(t, nil, func(i int, _ *c4Run) map[string]interface{} {
+			if i == 0 {
+				return c4Write("solve.py", c4Valid)
+			}
+			return c4Write("solve.py", c4BadA)
+		})
+		r.log(t, "A")
+		if r.turns >= 30 {
+			t.Fatalf("%d turns without a terminal", r.turns)
+		}
+		if r.terminal["reason"] != "repeated_refusal" {
+			t.Errorf("reason=%q, want repeated_refusal", r.terminal["reason"])
+		}
+		if len(r.refusals) != 1 {
+			t.Errorf("%d syntax evaluations of one unchanging proposal, want 1", len(r.refusals))
+		}
+		if r.disk(t) != c4Valid {
+			t.Errorf("the known-good bytes did not survive: %q", r.disk(t))
+		}
+	})
+
+	t.Run("endlessly changing invalid proposals hit the failure ceiling", func(t *testing.T) {
+		bad := []string{c4BadA, c4BadB, c4BadC}
+		r := c4Fixture(t, nil, func(i int, _ *c4Run) map[string]interface{} {
+			if i == 0 {
+				return c4Write("solve.py", c4Valid)
+			}
+			// Never repeats a proposal: a fresh trailing comment each time.
+			return c4Write("solve.py",
+				bad[(i-1)%len(bad)]+fmt.Sprintf("# attempt %d\n", i))
+		})
+		r.log(t, "B2")
+		if r.turns >= 30 {
+			t.Fatalf("%d turns without a terminal", r.turns)
+		}
+		if r.terminal["reason"] != "failure_ceiling" {
+			t.Errorf("reason=%q, want failure_ceiling — the bound for proposals that never repeat",
+				r.terminal["reason"])
+		}
+		if NormalizeTerminalStatus(r.terminal["status"]).Completed() {
+			t.Errorf("a run that never landed a valid replacement reported %q", r.terminal["status"])
+		}
+		if r.disk(t) != c4Valid {
+			t.Errorf("the known-good bytes did not survive: %q", r.disk(t))
+		}
+	})
+
+	t.Run("invalid then valid still completes without ceremony", func(t *testing.T) {
+		r := c4Fixture(t, nil, func(i int, _ *c4Run) map[string]interface{} {
+			switch i {
+			case 0:
+				return c4Write("solve.py", c4Valid)
+			case 1:
+				return c4Write("solve.py", c4BadA)
+			case 2:
+				return c4Write("solve.py", c4Fixed)
+			case 3:
+				return map[string]interface{}{"type": "tool_call", "name": "run_command",
+					"args": map[string]string{"command": "python3 solve.py"}}
+			}
+			return map[string]interface{}{"type": "done", "summary": "solve.py prints 7"}
+		})
+		r.log(t, "C")
+		if r.terminal["status"] != string(TerminalCompleted) {
+			t.Errorf("terminal %q/%q, want completed",
+				r.terminal["status"], r.terminal["reason"])
+		}
+		if r.disk(t) != c4Fixed {
+			t.Errorf("the correction did not land: %q", r.disk(t))
+		}
+	})
+}
+
+// The repeat detector and the fenced allowance both count the model re-sending
+// ONE call, and both still read the raw intent. Moving them to the proposal
+// would make a channel that returns different bytes look like progress.
+func TestChannelIdentityStaysRaw(t *testing.T) {
+	src, err := os.ReadFile("agent.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(src), "\n") {
+		l := strings.TrimSpace(line)
+		if strings.Contains(l, "recordToolCall(ctx,") && !strings.Contains(l, "intentArgs") {
+			t.Errorf("the repeat detector no longer reads the raw intent: %s", l)
+		}
+		if strings.Contains(l, "fencedKey(ctx,") && strings.Contains(l, "retryIdentityArgs") {
+			t.Errorf("the fenced allowance was moved off the raw target: %s", l)
+		}
+	}
+	// And the ban's three operations agree with each other.
+	var lookup, record, clear int
+	for _, line := range strings.Split(string(src), "\n") {
+		l := strings.TrimSpace(line)
+		switch {
+		case strings.Contains(l, "identicalRetryRefusal(ctx"):
+			lookup++
+		case strings.Contains(l, "recordFailedToolCall(ctx, parsed.Name,"):
+			record++
+		case strings.Contains(l, "clearFailedToolCall(ctx"):
+			clear++
+		}
+	}
+	t.Logf("FailedToolCalls operations: %d lookup, %d record, %d clear", lookup, record, clear)
+	if lookup != 1 || clear != 1 {
+		t.Errorf("expected one lookup and one clear, got %d/%d", lookup, clear)
+	}
+}
+
+// Nothing about the bounds moved. The identity change is an identity change:
+// no threshold, no counter reset, no allowance was introduced with it.
+func TestC4IdentityChangeIntroducedNoAllowance(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		got  int
+		want int
+	}{
+		{"maxTotalFailures", maxTotalFailures, 12},
+		{"toolRepeatThreshold", toolRepeatThreshold, 3},
+		{"toolRepeatWindow", toolRepeatWindow, 8},
+		{"maxFencedFailuresPerPath", maxFencedFailuresPerPath, 2},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %d, want %d — the C4 identity change must not move a bound",
+				c.name, c.got, c.want)
+		}
+	}
+	// The streak reset that lets a converging model keep going predates this
+	// commit and is the existing changed-rejection-kind rule, not a new
+	// epoch. It has exactly one site.
+	src, err := os.ReadFile("agent.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Four, all predating this commit: the changed-rejection-kind reset, the
+	// two path-aware-breaker resets, and the one on a successful call.
+	resets := strings.Count(string(src), "consecutiveErrors = 0")
+	t.Logf("consecutiveErrors reset sites: %d", resets)
+	if resets != 4 {
+		t.Errorf("%d reset sites; a new one would be an undeclared allowance", resets)
+	}
 }
