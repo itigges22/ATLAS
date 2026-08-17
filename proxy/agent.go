@@ -2056,9 +2056,14 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					}
 				}
 			}
+			// move_file was missing here, so a successful rename counted as no
+			// work at all: the run reported "Nothing was written -- no file was
+			// created or changed" while the destination sat on disk. A
+			// relocation is a state change like any other.
 			if result.Success && (parsed.Name == "write_file" || parsed.Name == "edit_file" ||
 				parsed.Name == "structural_edit" || parsed.Name == "delete_file" ||
-				parsed.Name == "insert_after" || parsed.Name == "replace_lines") {
+				parsed.Name == "insert_after" || parsed.Name == "replace_lines" ||
+				parsed.Name == "move_file") {
 				st.madeProductiveChange = true
 				// A write AFTER a successful verification un-verifies the
 				// run: what was checked is no longer what is on disk. Three
@@ -6024,7 +6029,7 @@ func emitTerminal(ctx *AgentContext, st *runState, status TerminalStatus, reason
 // an achievement unless removal was the task -- which the proxy cannot
 // establish, so it does not pretend to.
 func terminalCompletionAllowed(ctx *AgentContext, expected []string) (bool, string) {
-	if sessionHasTombstones(ctx) {
+	if blockingTombstone(ctx) {
 		// Something was deleted or moved. Whether that WAS the task is not
 		// knowable here, so completion is not claimable here.
 		return false, "delete_intent_unestablished"
@@ -6087,6 +6092,86 @@ func sessionHasTombstones(ctx *AgentContext) bool {
 		}
 	}
 	return false
+}
+
+// blockingTombstone reports whether anything was removed that this run cannot
+// account for.
+//
+// A plain deletion always blocks. Whether removing a file was the task is not
+// knowable from the workspace, and a delete authorising its own completion is
+// the pair-1 defect.
+//
+// A move is a different fact and does not need intent inferred. The source is
+// gone AND the bytes are somewhere the ledger can point at -- TombstoneReason
+// records exactly where, as `moved:<canonical destination>` -- so the removal
+// is accounted for by the artifact that replaced it. That is only true when
+// every part of it is demonstrated NOW: the reason parses, the source is
+// confirmed absent on disk, the destination is readable, the ledger's record
+// describes the bytes actually there, and the destination clears the same
+// deliverable contract every other artifact clears. Anything less blocks.
+//
+// The contract is reused rather than restated, deliberately: a move must not
+// be an easier way to demonstrate a file than writing one. Restoration stays
+// prohibited on the tombstone either way -- this decides completion, not
+// whether the old path can come back.
+func blockingTombstone(ctx *AgentContext) bool {
+	if ctx == nil {
+		return false
+	}
+	ctx.LedgerMu.Lock()
+	type tomb struct{ key, reason string }
+	var tombs []tomb
+	for k, d := range ctx.Ledger {
+		if d.Tombstoned {
+			tombs = append(tombs, tomb{k, d.TombstoneReason})
+		}
+	}
+	ctx.LedgerMu.Unlock()
+
+	for _, t := range tombs {
+		if !demonstratedMove(ctx, t.key, t.reason) {
+			return true
+		}
+	}
+	return false
+}
+
+// demonstratedMove answers whether one tombstone is a relocation this run can
+// point at, rather than a removal it cannot explain.
+func demonstratedMove(ctx *AgentContext, srcKey, reason string) bool {
+	dest := strings.TrimPrefix(reason, "moved:")
+	if dest == reason || strings.TrimSpace(dest) == "" {
+		return false // a plain deletion, or a reason that says nothing
+	}
+	// The source has to be gone right now, not merely reported gone.
+	if _, err := os.Stat(srcKey); !os.IsNotExist(err) {
+		return false
+	}
+	data, ok := readLedgerBytes(dest)
+	if !ok {
+		return false
+	}
+	ctx.LedgerMu.Lock()
+	d := ctx.Ledger[dest]
+	var current string
+	var tombstoned bool
+	if d != nil {
+		current, tombstoned = d.CurrentHash, d.Tombstoned
+	}
+	ctx.LedgerMu.Unlock()
+	// The destination must be a live deliverable the ledger still describes.
+	if d == nil || tombstoned || current != hashBytes(data) {
+		return false
+	}
+	// And it must clear the same bar as any other artifact.
+	if !deliverablesDemonstrablyValid(ctx, []string{dest}) {
+		return false
+	}
+	// Whatever the session still owes on this move is owed regardless. The
+	// debt gate in finalizeCompletion reads it a few lines later and names it
+	// specifically, so pre-empting it here would only replace a precise
+	// terminal with a vaguer one.
+	return true
 }
 
 // --- Phase 2B: the server-owned session budget ------------------------------
@@ -7419,10 +7504,6 @@ func validationSettles(d *DeliverableState) bool {
 func debtResolved(ctx *AgentContext, key string, e *mutationDebtEntry) bool {
 	ctx.LedgerMu.Lock()
 	d := ctx.Ledger[key]
-	var dest *DeliverableState
-	if e.Kind == debtMove && e.Dest != "" {
-		dest = ctx.Ledger[e.Dest]
-	}
 	var tombstoned bool
 	var reason string
 	if d != nil {
@@ -7453,7 +7534,17 @@ func debtResolved(ctx *AgentContext, key string, e *mutationDebtEntry) bool {
 		if _, err := os.Stat(key); !os.IsNotExist(err) {
 			return false // the source is still there
 		}
-		return validationSettles(dest)
+		// The destination is judged by the same contract every other
+		// deliverable is judged by, read from disk. The ledger's own verdict
+		// cannot be used here: move_file deliberately records the destination
+		// as unknown, because a syntax pass earned under the old name says
+		// nothing about this path -- so asking validationSettles for a verdict
+		// nothing ever writes made this debt unretirable, and a demonstrated
+		// rename could never finish.
+		if e.Dest == "" {
+			return false
+		}
+		return deliverablesDemonstrablyValid(ctx, []string{e.Dest})
 	}
 	return false
 }

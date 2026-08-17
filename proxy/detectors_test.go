@@ -2678,17 +2678,22 @@ func TestDeleteMoveAndIndependenceOfDebt(t *testing.T) {
 		executeToolCall("move_file", m, ctx)
 		settleMutationDebt(ctx, st)
 		// The destination is observed with an unknown verdict by design — a
-		// rename earns no evidence — so the move stays unresolved until the
-		// destination is demonstrated.
-		if !hasUnresolvedDebt(st) {
-			t.Error("a move resolved before its destination was demonstrated")
-		}
-		w2, _ := json.Marshal(map[string]string{"path": "new.py", "content": "A = 2\n"})
-		executeToolCall("write_file", w2, ctx)
-		settleMutationDebt(ctx, st)
+		// rename earns no evidence under the new name — so the demonstration
+		// is read from disk through the same contract every deliverable uses.
+		// These bytes pass it, so the move is settled without the model having
+		// to rewrite a file it only moved.
 		if hasUnresolvedDebt(st) {
 			paths, _ := unresolvedDebtPaths(st, 5)
 			t.Errorf("a demonstrated move did not resolve: %v", paths)
+		}
+		// And a destination that cannot be demonstrated leaves it owed.
+		bad, _ := json.Marshal(map[string]string{"source": "new.py", "destination": "gone.py"})
+		noteMutationIntent(ctx, st, "move_file", bad)
+		executeToolCall("move_file", bad, ctx)
+		os.Remove(filepath.Join(dir, "gone.py"))
+		settleMutationDebt(ctx, st)
+		if !hasUnresolvedDebt(st) {
+			t.Error("a move whose destination is not there resolved anyway")
 		}
 	})
 

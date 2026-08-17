@@ -1614,7 +1614,14 @@ func TestWhichMutatorsCanEverPromoteACheckpoint(t *testing.T) {
 // the same 7 requests, and the parent's bytes become these EXACTLY when the
 // four classification keys are removed and nothing else is touched
 // (13342 -> 12025 bytes, byte-identical).
-const modelPromptBytesHash = "8f9a0aabb86f7f033a164e200146eac9b544675348ca760a3a5a5152023220d6"
+//
+// Re-pinned once since, at 7 requests / 12081 bytes: the fixture renames a
+// file, and a rename did not count as a productive change, so the action gate
+// bounced the model's `done` twice to tell it that nothing had been done while
+// final.py sat on disk. Counting move_file as work removes those two turns and
+// the run reaches the debt gate directly (5 requests / 6000 bytes). The
+// classification keys this pin exists for are absent from both.
+const modelPromptBytesHash = "cd35d94c8870d8f357c28aba1651448acd187b4adebfa8e22e206a42b829524b"
 
 // conversationBytes keeps every message except the system prompt, whose tool
 // descriptions are rendered in Go map order and therefore differ between two
@@ -2318,4 +2325,316 @@ func TestDeleteContinuationMatrix(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- A demonstrated move is not a deletion ------------------------------------
+//
+// The tombstone rule refuses completion whenever anything was removed, because
+// whether removing it was the task is not knowable. That is right for a plain
+// delete. A move is a different fact: the source is gone AND the bytes are
+// somewhere the ledger can point at, and TombstoneReason already records where
+// (`moved:<canonical destination>`). Nothing about user intent has to be
+// guessed to see that, so a move whose destination is demonstrated should not
+// be treated as an unexplained removal.
+//
+// A plain deletion keeps today's refusal exactly.
+
+func dlMove(src, dst string) map[string]interface{} {
+	return map[string]interface{}{"type": "tool_call", "name": "move_file",
+		"args": map[string]string{"source": src, "destination": dst}}
+}
+
+func TestDemonstratedMoveDoesNotBlockCompletion(t *testing.T) {
+	for _, c := range []struct {
+		name, prompt string
+		seed         map[string]string
+		plan         func(i int) map[string]interface{}
+		wantStatus   TerminalStatus
+		wantReason   string
+	}{
+		{"1 validated move completes", "Rename old.py to new.py.",
+			map[string]string{"old.py": delSeed},
+			func(i int) map[string]interface{} {
+				if i == 0 {
+					return dlMove("old.py", "new.py")
+				}
+				return map[string]interface{}{"type": "done", "summary": "renamed old.py to new.py"}
+			}, TerminalCompleted, ""},
+		{"6 several demonstrated moves complete", "Rename a.py to x.py and b.py to y.py.",
+			map[string]string{"a.py": delSeed, "b.py": delSeed},
+			func(i int) map[string]interface{} {
+				switch i {
+				case 0:
+					return dlMove("a.py", "x.py")
+				case 1:
+					return dlMove("b.py", "y.py")
+				}
+				return map[string]interface{}{"type": "done", "summary": "renamed both"}
+			}, TerminalCompleted, ""},
+		{"11 an explicit delete still cannot complete", "Delete a.py.",
+			map[string]string{"a.py": delSeed},
+			func(i int) map[string]interface{} {
+				if i == 0 {
+					return dlDel("a.py")
+				}
+				return map[string]interface{}{"type": "done", "summary": "deleted a.py"}
+			}, TerminalIncomplete, "delete_intent_unestablished"},
+		{"12 an unrequested delete still cannot complete", "Make the tests pass.",
+			map[string]string{"a.py": delSeed},
+			func(i int) map[string]interface{} {
+				if i == 0 {
+					return dlDel("a.py")
+				}
+				return map[string]interface{}{"type": "done", "summary": "removed the failing file"}
+			}, TerminalIncomplete, "delete_intent_unestablished"},
+		{"a move and a delete together still cannot complete", "Rename a.py to x.py.",
+			map[string]string{"a.py": delSeed, "b.py": delSeed},
+			func(i int) map[string]interface{} {
+				switch i {
+				case 0:
+					return dlMove("a.py", "x.py")
+				case 1:
+					return dlDel("b.py")
+				}
+				return map[string]interface{}{"type": "done", "summary": "renamed and cleaned up"}
+			}, TerminalIncomplete, "delete_intent_unestablished"},
+		{"13 destination deleted after the move", "Rename old.py to new.py.",
+			map[string]string{"old.py": delSeed},
+			func(i int) map[string]interface{} {
+				switch i {
+				case 0:
+					return dlMove("old.py", "new.py")
+				case 1:
+					return dlDel("new.py")
+				}
+				return map[string]interface{}{"type": "done", "summary": "renamed"}
+			}, TerminalIncomplete, ""},
+		{"14 text exit after a demonstrated move", "Rename old.py to new.py.",
+			map[string]string{"old.py": delSeed},
+			func(i int) map[string]interface{} {
+				if i == 0 {
+					return dlMove("old.py", "new.py")
+				}
+				return map[string]interface{}{"type": "text", "content": "Renamed old.py to new.py."}
+			}, TerminalCompleted, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := delLoopFixture(t, c.seed, c.prompt, c.plan)
+			r.check(t, c.name)
+			t.Logf("   summary=%.140s", r.terminal["summary"])
+			got := NormalizeTerminalStatus(r.terminal["status"])
+			if got != c.wantStatus {
+				t.Errorf("status=%q reason=%q, want %s",
+					r.terminal["status"], r.terminal["reason"], c.wantStatus)
+			}
+			if c.wantReason != "" && r.terminal["reason"] != c.wantReason {
+				t.Errorf("reason=%q, want %q", r.terminal["reason"], c.wantReason)
+			}
+			// Restoration stays prohibited on every tombstone, always.
+			for k, d := range r.ctx.Ledger {
+				if d.Tombstoned && !d.RestoreProhibited {
+					t.Errorf("%s is tombstoned without RestoreProhibited", filepath.Base(k))
+				}
+			}
+			// 15: an incomplete move must never claim nothing was written
+			// while the destination is on disk.
+			if !got.Completed() && len(r.present()) > 0 && claimsNothingWritten(r.terminal["summary"]) {
+				t.Errorf("summary claims nothing was written while %v is on disk:\n%s",
+					r.present(), r.terminal["summary"])
+			}
+		})
+	}
+}
+
+// The predicate itself, on the cases a loop fixture cannot stage cleanly.
+func TestMoveTombstoneDemonstrationPredicate(t *testing.T) {
+	build := func(t *testing.T, reason string, mutate func(dir string, src, dst *DeliverableState)) (*AgentContext, *runState) {
+		t.Helper()
+		dir := t.TempDir()
+		// The demonstration contract re-reads from disk and asks the checker,
+		// so the predicate needs one to answer.
+		syn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			var in struct{ Code string }
+			json.NewDecoder(req.Body).Decode(&in)
+			valid := !strings.Contains(in.Code, "def solve(:")
+			out := map[string]interface{}{"valid": valid}
+			if !valid {
+				out["errors"] = []string{"invalid syntax (line 1)"}
+			}
+			json.NewEncoder(w).Encode(out)
+		}))
+		t.Cleanup(syn.Close)
+		ctx := NewAgentContext(dir, Tier2Medium)
+		ctx.SandboxURL = syn.URL
+		if ctx.Ledger == nil {
+			ctx.Ledger = map[string]*DeliverableState{}
+		}
+		dstPath := filepath.Join(dir, "new.py")
+		os.WriteFile(dstPath, []byte(delSeed), 0o644)
+		h := hashBytes([]byte(delSeed))
+		dst := &DeliverableState{Path: "new.py", CurrentHash: h, Generation: 1,
+			ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationPassed,
+			ValidatedHash: h}
+		src := &DeliverableState{Path: "old.py", Generation: 1, Tombstoned: true,
+			RestoreProhibited: true,
+			TombstoneReason:   strings.Replace(reason, "<dst>", ledgerKey(ctx, "new.py"), 1)}
+		ctx.Ledger[ledgerKey(ctx, "old.py")] = src
+		ctx.Ledger[ledgerKey(ctx, "new.py")] = dst
+		if mutate != nil {
+			mutate(dir, src, dst)
+		}
+		return ctx, &runState{}
+	}
+	for _, c := range []struct {
+		name   string
+		reason string
+		mutate func(dir string, src, dst *DeliverableState)
+		want   bool // true = still blocks completion
+	}{
+		{"demonstrated move", "moved:<dst>", nil, false},
+		{"plain deletion", "deleted", nil, true},
+		{"2 destination missing", "moved:<dst>", func(dir string, _, _ *DeliverableState) {
+			os.Remove(filepath.Join(dir, "new.py"))
+		}, true},
+		{"3 destination stale in the ledger", "moved:<dst>", func(_ string, _, dst *DeliverableState) {
+			dst.CurrentHash = hashBytes([]byte("other"))
+		}, true},
+		// move_file deliberately records the destination as unknown -- a pass
+		// earned under the old name says nothing about this path -- so the
+		// demonstration is read from disk, not inherited. Unknown plus a
+		// matching hash plus bytes that pass IS demonstrated; what is not
+		// demonstrated is covered by the stale-hash and bad-bytes cases.
+		{"3b unknown ledger verdict, bytes still demonstrate", "moved:<dst>",
+			func(_ string, _, dst *DeliverableState) {
+				dst.ValidationStatus, dst.ValidatedHash = ValidationUnknown, ""
+			}, false},
+		{"4 source still exists", "moved:<dst>", func(dir string, _, _ *DeliverableState) {
+			os.WriteFile(filepath.Join(dir, "old.py"), []byte(delSeed), 0o644)
+		}, true},
+		{"9 malformed move reason", "moved:", nil, true},
+		{"9b move reason naming nothing on disk", "moved:/nowhere/gone.py", nil, true},
+		{"destination bytes no longer parse", "moved:<dst>", func(dir string, _, dst *DeliverableState) {
+			bad := []byte("def solve(:\n")
+			os.WriteFile(filepath.Join(dir, "new.py"), bad, 0o644)
+			dst.CurrentHash, dst.ValidatedHash = hashBytes(bad), hashBytes(bad)
+		}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx, st := build(t, c.reason, c.mutate)
+			_ = st
+			got := blockingTombstone(ctx)
+			t.Logf("%s: blocks=%v", c.name, got)
+			if got != c.want {
+				t.Errorf("blocks=%v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// The rest of the move matrix: partial work, aliases, and a move that only
+// half happened.
+func TestDemonstratedMoveMatrixRemaining(t *testing.T) {
+	t.Run("5 move plus an unmet named deliverable", func(t *testing.T) {
+		r := delLoopFixture(t, map[string]string{"old.py": delSeed},
+			"Rename old.py to new.py and create report.py with the summary.",
+			func(i int) map[string]interface{} {
+				if i == 0 {
+					return dlMove("old.py", "new.py")
+				}
+				return map[string]interface{}{"type": "done", "summary": "renamed old.py"}
+			})
+		r.check(t, "5 unmet deliverable")
+		t.Logf("   summary=%.160s", r.terminal["summary"])
+		if NormalizeTerminalStatus(r.terminal["status"]).Completed() {
+			t.Errorf("completed with report.py never written: %q", r.terminal["reason"])
+		}
+		// The unmet obligation is what it names, not the move.
+		if r.terminal["reason"] == "delete_intent_unestablished" {
+			t.Error("the move is still being reported as an unexplained removal")
+		}
+		if claimsNothingWritten(r.terminal["summary"]) {
+			t.Errorf("summary claims nothing was written while %v is on disk:\n%s",
+				r.present(), r.terminal["summary"])
+		}
+	})
+
+	t.Run("7 several moves, one not demonstrated", func(t *testing.T) {
+		r := delLoopFixture(t, map[string]string{"a.py": delSeed, "b.py": delSeed},
+			"Rename a.py to x.py and b.py to y.py.",
+			func(i int) map[string]interface{} {
+				switch i {
+				case 0:
+					return dlMove("a.py", "x.py")
+				case 1:
+					return dlMove("b.py", "y.py")
+				case 2:
+					// y.py is removed again, so that move is no longer shown.
+					return dlDel("y.py")
+				}
+				return map[string]interface{}{"type": "done", "summary": "renamed both"}
+			})
+		r.check(t, "7 one incomplete")
+		if NormalizeTerminalStatus(r.terminal["status"]).Completed() {
+			t.Errorf("completed with one move undemonstrated: %q", r.terminal["reason"])
+		}
+	})
+
+	t.Run("8 alias spellings resolve to one pair", func(t *testing.T) {
+		r := delLoopFixture(t, map[string]string{"old.py": delSeed},
+			"Rename old.py to new.py.",
+			func(i int) map[string]interface{} {
+				if i == 0 {
+					return dlMove("./old.py", "./new.py")
+				}
+				return map[string]interface{}{"type": "done", "summary": "renamed"}
+			})
+		r.check(t, "8 aliases")
+		if r.terminal["status"] != string(TerminalCompleted) {
+			t.Errorf("alias spellings did not resolve: %q/%q",
+				r.terminal["status"], r.terminal["reason"])
+		}
+		if len(r.tombstones()) != 1 {
+			t.Errorf("aliases produced %d tombstones: %v", len(r.tombstones()), r.tombstones())
+		}
+	})
+
+	t.Run("10 source gone but destination never landed", func(t *testing.T) {
+		// The destination is removed straight after, which is the observable
+		// end state of a copy that did not survive.
+		r := delLoopFixture(t, map[string]string{"old.py": delSeed},
+			"Rename old.py to new.py.",
+			func(i int) map[string]interface{} {
+				switch i {
+				case 0:
+					return dlMove("old.py", "new.py")
+				case 1:
+					return dlDel("new.py")
+				}
+				return map[string]interface{}{"type": "done", "summary": "renamed"}
+			})
+		r.check(t, "10 destination gone")
+		if NormalizeTerminalStatus(r.terminal["status"]).Completed() {
+			t.Errorf("completed with neither source nor destination present: %q",
+				r.terminal["reason"])
+		}
+		if len(r.present()) != 0 {
+			t.Errorf("disk should be empty, got %v", r.present())
+		}
+	})
+}
+
+// claimsNothingWritten matches every phrasing the terminal uses to say the run
+// left disk untouched. A summary that says this while a deliverable is on disk
+// is false whichever wording it reaches for.
+func claimsNothingWritten(summary string) bool {
+	for _, phrase := range []string{
+		"Nothing was written to disk",
+		"Nothing was written —",
+		"no file was created or changed",
+	} {
+		if strings.Contains(summary, phrase) {
+			return true
+		}
+	}
+	return false
 }
