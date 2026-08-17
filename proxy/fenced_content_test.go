@@ -3116,17 +3116,18 @@ type syntaxCheck struct {
 }
 
 type c4Run struct {
-	ctx      *AgentContext
-	dir      string
-	turns    int
-	fetches  int
-	census   map[string]int
-	terminal map[string]string
-	refusals []string // syntax-gate diagnostics, in order
-	gates    []string
-	calls    []string
-	writes   int // successful write_file results
-	checks   []syntaxCheck
+	ctx        *AgentContext
+	dir        string
+	turns      int
+	fetches    int
+	census     map[string]int
+	terminal   map[string]string
+	refusals   []string // syntax-gate diagnostics, in order
+	gates      []string
+	calls      []string
+	writes     int // successful write_file results
+	checks     []syntaxCheck
+	recoveries []string
 }
 
 // c4Fixture runs the real loop with a genuine Python syntax check. fencedBodies
@@ -3227,6 +3228,9 @@ func c4Fixture(t *testing.T, fencedBodies []string,
 				r.writes++
 			}
 			var tr struct{ Error string }
+			if json.Unmarshal(b, &tr) == nil && strings.Contains(tr.Error, c4Marker) {
+				r.recoveries = append(r.recoveries, tr.Error)
+			}
 			// Only a real syntax-gate evaluation counts. The resend ban
 			// quotes the original refusal back, so it carries the same
 			// phrase without any proposal having been looked at.
@@ -3291,8 +3295,8 @@ func (r *c4Run) log(t *testing.T, name string) {
 			fail++
 		}
 	}
-	t.Logf("%s: turns=%d fetches=%d checks=%d (pass=%d fail=%d) refusals=%d status=%q reason=%q hash_matches=%v validation=%s/%s",
-		name, r.turns, r.fetches, len(r.checks), pass, fail, len(r.refusals),
+	t.Logf("%s: turns=%d fetches=%d checks=%d (pass=%d fail=%d) refusals=%d recoveries=%d status=%q reason=%q hash_matches=%v validation=%s/%s",
+		name, r.turns, r.fetches, len(r.checks), pass, fail, len(r.refusals), len(r.recoveries),
 		r.terminal["status"], r.terminal["reason"], hashOK, kind, status)
 	for i, c := range r.checks {
 		t.Logf("   check#%d %s %-5v %s [%s]", i+1, c.Hash, c.Valid, c.Detail, r.subject(c.Hash))
@@ -3367,6 +3371,15 @@ func TestFencedProposalsAreEvaluatedNotDeduplicatedByIntent(t *testing.T) {
 	}
 	if hashBytes([]byte(r.disk(t)))[:12] != r.checks[firstPass].Hash {
 		t.Error("the bytes on disk are not the bytes that passed the check")
+	}
+	// This fixture is also, incidentally, the C4 shape -- valid bytes on disk,
+	// more than one replacement refused against them -- so the refused-
+	// replacement recovery fires once here too. It is not what makes this run
+	// complete: the model above advances on r.writes and has no dependence on
+	// the recovery text at all, and the run completed identically before that
+	// recovery existed. Bounded to one, as everywhere else.
+	if n := len(r.recoveries); n > 1 {
+		t.Errorf("%d recoveries in one generation, want at most one", n)
 	}
 	// Each evaluation describes its OWN bytes, as the checker reported them.
 	for i, body := range []string{c4BadA, c4BadB, c4BadC} {
@@ -3568,5 +3581,493 @@ func TestC4IdentityChangeIntroducedNoAllowance(t *testing.T) {
 	t.Logf("consecutiveErrors reset sites: %d", resets)
 	if resets != 4 {
 		t.Errorf("%d reset sites; a new one would be an undeclared allowance", resets)
+	}
+}
+
+// --- C4 recovery: refused replacements over surviving known-good bytes -------
+//
+// The conditional models below correct themselves ONLY after the recovery text
+// arrives. Removing the marker restores the parent's failure, which is the
+// whole point: nothing here is a model that fixes itself because turns passed.
+
+const c4Marker = "The working version is still there"
+
+// c4RecoveryPlan repeats invalid replacements until it sees the recovery, then
+// sends one valid correction and verifies it. `bodies` is cycled; a single
+// entry reproduces the identical-proposal shape.
+func c4RecoveryPlan(marker string, bodies []string) func(int, *c4Run) map[string]interface{} {
+	corrected, verified := false, false
+	return func(i int, r *c4Run) map[string]interface{} {
+		switch {
+		case i == 0:
+			return c4Write("solve.py", c4Valid)
+		case marker != "" && r.sawRecovery(marker) && !corrected:
+			corrected = true
+			return c4Write("solve.py", c4Fixed)
+		case corrected && !verified:
+			verified = true
+			return map[string]interface{}{"type": "tool_call", "name": "run_command",
+				"args": map[string]string{"command": "python3 solve.py"}}
+		case corrected:
+			return map[string]interface{}{"type": "done", "summary": "solve.py prints 7"}
+		default:
+			return c4Write("solve.py", bodies[(i-1)%len(bodies)])
+		}
+	}
+}
+
+func (r *c4Run) sawRecovery(marker string) bool {
+	for _, e := range r.recoveries {
+		if strings.Contains(e, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *c4Run) recoveryCount(marker string) int {
+	n := 0
+	for _, e := range r.recoveries {
+		if strings.Contains(e, marker) {
+			n++
+		}
+	}
+	return n
+}
+
+func TestRefusedReplacementRecovery(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		bodies []string
+	}{
+		{"the same invalid proposal, repeated", []string{c4BadA}},
+		{"two distinct invalid proposals", []string{c4BadA, c4BadB}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := c4Fixture(t, nil, c4RecoveryPlan(c4Marker, c.bodies))
+			r.log(t, c.name)
+
+			if n := r.recoveryCount(c4Marker); n != 1 {
+				t.Fatalf("%d recoveries, want exactly one", n)
+			}
+			if r.terminal["status"] != string(TerminalCompleted) ||
+				r.terminal["reason"] != "deliverables_demonstrated" {
+				t.Fatalf("terminal %q/%q, want completed/deliverables_demonstrated",
+					r.terminal["status"], r.terminal["reason"])
+			}
+			if r.disk(t) != c4Fixed {
+				t.Errorf("the correction did not land: %q", r.disk(t))
+			}
+			d := r.ctx.Ledger[ledgerKey(r.ctx, "solve.py")]
+			if d == nil || d.CurrentHash != hashBytes([]byte(r.disk(t))) {
+				t.Fatal("the ledger does not describe the bytes on disk")
+			}
+			if kind, status := d.CurrentValidation(); status != ValidationPassed ||
+				kind != ValidationKindSyntax {
+				t.Errorf("validation on the current hash is %s/%s, want syntax/passed", kind, status)
+			}
+			if r.census["done"] != 1 {
+				t.Errorf("%d terminal events", r.census["done"])
+			}
+			if r.census["tool_call"] != r.census["tool_result"] {
+				t.Errorf("call/result balance: %d vs %d",
+					r.census["tool_call"], r.census["tool_result"])
+			}
+			// The recovery quotes the diagnostic for the bytes just refused.
+			for _, e := range r.recoveries {
+				if !strings.Contains(e, c4Marker) {
+					continue
+				}
+				last := c4Syntax(c.bodies[len(c.bodies)-1])
+				if !strings.Contains(e, last) {
+					t.Errorf("the recovery does not carry the diagnostic for the "+
+						"proposal that triggered it (want %q):\n%.400s", last, e)
+				}
+			}
+		})
+
+		t.Run(c.name+" — without the recovery", func(t *testing.T) {
+			// Same fixture, marker removed: the model never corrects itself.
+			r := c4Fixture(t, nil, c4RecoveryPlan("", c.bodies))
+			r.log(t, c.name+"/ignored")
+			if r.turns >= 30 {
+				t.Fatalf("%d turns without a terminal", r.turns)
+			}
+			if NormalizeTerminalStatus(r.terminal["status"]).Completed() {
+				t.Errorf("a run that never landed a valid replacement reported %q",
+					r.terminal["status"])
+			}
+			if r.disk(t) != c4Valid {
+				t.Errorf("the known-good bytes did not survive: %q", r.disk(t))
+			}
+			if r.census["done"] != 1 {
+				t.Errorf("%d terminal events", r.census["done"])
+			}
+			if r.census["tool_call"] != r.census["tool_result"] {
+				t.Errorf("call/result balance: %d vs %d",
+					r.census["tool_call"], r.census["tool_result"])
+			}
+		})
+	}
+}
+
+// c4State builds the one state C4 reads: a session-written file on disk whose
+// exact current bytes are syntax/passed, plus one refused proposal recorded
+// against them. Each case then breaks exactly one clause.
+func c4State(t *testing.T, mutate func(*AgentContext, *DeliverableState, string)) (
+	*AgentContext, *runState, string) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "solve.py")
+	os.WriteFile(path, []byte(c4Valid), 0o644)
+	ctx := NewAgentContext(dir, Tier2Medium)
+	if ctx.Ledger == nil {
+		ctx.Ledger = map[string]*DeliverableState{}
+	}
+	h := hashBytes([]byte(c4Valid))
+	d := &DeliverableState{
+		Path: "solve.py", CurrentHash: h, CurrentSize: len(c4Valid), Generation: 1,
+		ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationPassed,
+		ValidatedHash: h,
+	}
+	ctx.Ledger[ledgerKey(ctx, "solve.py")] = d
+	if mutate != nil {
+		mutate(ctx, d, path)
+	}
+	return ctx, &runState{}, hashBytes([]byte(c4BadA))
+}
+
+func c4Refusal(args string) (json.RawMessage, *ToolResult) {
+	return json.RawMessage(args), &ToolResult{
+		Success:          false,
+		MutationStatus:   MutationRefused,
+		ValidationKind:   ValidationKindSyntax,
+		ValidationStatus: ValidationFailed,
+		ValidationDetail: "invalid syntax (line 3)",
+	}
+}
+
+// Eligibility is a conjunction. Each case removes one clause and must record
+// nothing and recover nothing.
+func TestRefusedReplacementEligibility(t *testing.T) {
+	badA := `{"path":"solve.py","content":` + c4JSON(c4BadA) + `}`
+	for _, c := range []struct {
+		name   string
+		mutate func(*AgentContext, *DeliverableState, string)
+		result func(*ToolResult)
+	}{
+		{"surviving validation unknown", func(_ *AgentContext, d *DeliverableState, _ string) {
+			d.ValidationStatus, d.ValidationKind = ValidationUnknown, ValidationKindUnknown
+		}, nil},
+		{"surviving validation not_run", func(_ *AgentContext, d *DeliverableState, _ string) {
+			d.ValidationStatus = ValidationNotRun
+		}, nil},
+		{"surviving validation not_applicable", func(_ *AgentContext, d *DeliverableState, _ string) {
+			d.ValidationStatus = ValidationNotApplicable
+		}, nil},
+		{"surviving validation failed", func(_ *AgentContext, d *DeliverableState, _ string) {
+			d.ValidationStatus = ValidationFailed
+		}, nil},
+		{"surviving verdict describes older bytes", func(_ *AgentContext, d *DeliverableState, _ string) {
+			d.ValidatedHash = hashBytes([]byte("other"))
+		}, nil},
+		{"disk moved under the ledger", func(_ *AgentContext, _ *DeliverableState, path string) {
+			os.WriteFile(path, []byte(c4Fixed), 0o644)
+		}, nil},
+		{"path unreadable", func(_ *AgentContext, _ *DeliverableState, path string) {
+			os.Remove(path)
+		}, nil},
+		{"no known-good baseline was ever kept", func(ctx *AgentContext, _ *DeliverableState, _ string) {
+			delete(ctx.Ledger, ledgerKey(ctx, "solve.py"))
+		}, nil},
+		{"the write was not refused", nil, func(r *ToolResult) { r.MutationStatus = MutationApplied }},
+		{"the failure was not a syntax failure", nil, func(r *ToolResult) {
+			r.ValidationKind = ValidationKindUnknown
+		}},
+		{"no diagnostic for those bytes", nil, func(r *ToolResult) { r.ValidationDetail = "" }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx, st, _ := c4State(t, c.mutate)
+			args, res := c4Refusal(badA)
+			if c.result != nil {
+				c.result(res)
+			}
+			key, sha, n := noteRejectedProposal(ctx, st, "write_file", args, res)
+			if key != "" || n != 0 {
+				t.Fatalf("recorded evidence on %q: key=%q n=%d", c.name, key, n)
+			}
+			if msg := rejectedProposalRecovery(ctx, st, "solve.py", key, sha); msg != "" {
+				t.Errorf("recovered on %q: %.100s", c.name, msg)
+			}
+			if len(st.c4Rejected) != 0 {
+				t.Errorf("state was written anyway: %v", st.c4Rejected)
+			}
+		})
+	}
+}
+
+// The positive path, and everything the state must and must not do.
+func TestRefusedReplacementStateBounds(t *testing.T) {
+	badA := `{"path":"solve.py","content":` + c4JSON(c4BadA) + `}`
+	badB := `{"path":"solve.py","content":` + c4JSON(c4BadB) + `}`
+	aliasA := `{"path":"./solve.py","content":` + c4JSON(c4BadA) + `}`
+
+	t.Run("a diagnostic never describes a different proposal", func(t *testing.T) {
+		ctx, st, _ := c4State(t, nil)
+		a, ra := c4Refusal(badA)
+		noteRejectedProposal(ctx, st, "write_file", a, ra)
+		b, rb := c4Refusal(badB)
+		rb.ValidationDetail = "unmatched ']' (line 2)"
+		key, shaB, n := noteRejectedProposal(ctx, st, "write_file", b, rb)
+		if n != 2 {
+			t.Fatalf("distinct proposals = %d, want 2", n)
+		}
+		msg := rejectedProposalRecovery(ctx, st, "solve.py", key, shaB)
+		if !strings.Contains(msg, "unmatched ']' (line 2)") {
+			t.Errorf("the recovery does not carry this proposal's diagnostic:\n%s", msg)
+		}
+		if strings.Contains(msg, "invalid syntax (line 3)") {
+			t.Errorf("the recovery carried the OTHER proposal's diagnostic:\n%s", msg)
+		}
+	})
+
+	t.Run("an unknown proposal hash gets no diagnostic and no recovery", func(t *testing.T) {
+		ctx, st, _ := c4State(t, nil)
+		a, ra := c4Refusal(badA)
+		key, _, _ := noteRejectedProposal(ctx, st, "write_file", a, ra)
+		if msg := rejectedProposalRecovery(ctx, st, "solve.py", key,
+			hashBytes([]byte(c4BadC))); msg != "" {
+			t.Errorf("bytes that were never refused drew a recovery:\n%.150s", msg)
+		}
+	})
+
+	t.Run("aliases share one generation and one recovery", func(t *testing.T) {
+		ctx, st, _ := c4State(t, nil)
+		a, ra := c4Refusal(badA)
+		k1, _, _ := noteRejectedProposal(ctx, st, "write_file", a, ra)
+		al, ral := c4Refusal(aliasA)
+		k2, sha, n := noteRejectedProposal(ctx, st, "write_file", al, ral)
+		if k1 != k2 {
+			t.Errorf("alias spellings built separate generations:\n%q\n%q", k1, k2)
+		}
+		if n != 1 {
+			t.Errorf("the same bytes under another spelling counted as a new proposal (n=%d)", n)
+		}
+		if rejectedProposalRecovery(ctx, st, "solve.py", k2, sha) == "" {
+			t.Fatal("no recovery offered")
+		}
+		if again := rejectedProposalRecovery(ctx, st, "./solve.py", k2, sha); again != "" {
+			t.Error("the alias bought a second recovery")
+		}
+	})
+
+	t.Run("new surviving bytes are a new generation", func(t *testing.T) {
+		ctx, st, _ := c4State(t, nil)
+		a, ra := c4Refusal(badA)
+		k1, sha, _ := noteRejectedProposal(ctx, st, "write_file", a, ra)
+		if rejectedProposalRecovery(ctx, st, "solve.py", k1, sha) == "" {
+			t.Fatal("no recovery offered")
+		}
+		// The model lands something else valid; the old evidence is unreachable.
+		os.WriteFile(filepath.Join(ctx.WorkingDir, "solve.py"), []byte(c4Fixed), 0o644)
+		h := hashBytes([]byte(c4Fixed))
+		d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
+		d.CurrentHash, d.ValidatedHash = h, h
+		k2, sha2, n := noteRejectedProposal(ctx, st, "write_file", a, ra)
+		// One entry per path, so the key is stable; what must change is the
+		// generation inside it. The old hashes and diagnostics are released
+		// with the bytes they described.
+		if k2 != k1 {
+			t.Fatalf("the path's entry moved: %q -> %q", k1, k2)
+		}
+		ev := st.c4Rejected[k2]
+		if ev == nil || ev.diskHash != h {
+			t.Fatal("the entry still describes the previous surviving bytes")
+		}
+		if n != 1 || len(ev.order) != 1 {
+			t.Errorf("the new generation started at %d proposals, want 1", n)
+		}
+		if _, stale := ev.diagnostics[sha]; stale && sha != sha2 {
+			t.Error("a diagnostic from the previous generation survived")
+		}
+		if rejectedProposalRecovery(ctx, st, "solve.py", k2, sha2) == "" {
+			t.Error("the new generation was denied its own recovery")
+		}
+	})
+
+	t.Run("separate paths are independent", func(t *testing.T) {
+		ctx, st, _ := c4State(t, nil)
+		other := filepath.Join(ctx.WorkingDir, "helper.py")
+		os.WriteFile(other, []byte(c4Valid), 0o644)
+		h := hashBytes([]byte(c4Valid))
+		ctx.Ledger[ledgerKey(ctx, "helper.py")] = &DeliverableState{
+			Path: "helper.py", CurrentHash: h, Generation: 1,
+			ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationPassed,
+			ValidatedHash: h,
+		}
+		a, ra := c4Refusal(badA)
+		k1, sha1, _ := noteRejectedProposal(ctx, st, "write_file", a, ra)
+		rejectedProposalRecovery(ctx, st, "solve.py", k1, sha1)
+
+		o, ro := c4Refusal(`{"path":"helper.py","content":` + c4JSON(c4BadA) + `}`)
+		k2, sha2, n := noteRejectedProposal(ctx, st, "write_file", o, ro)
+		if k1 == k2 || n != 1 {
+			t.Errorf("helper.py inherited solve.py's generation (n=%d)", n)
+		}
+		if rejectedProposalRecovery(ctx, st, "helper.py", k2, sha2) == "" {
+			t.Error("solve.py's recovery spent helper.py's")
+		}
+	})
+
+	t.Run("a run that is ending or out of budget recovers nothing", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			set  func(*AgentContext)
+		}{
+			{"cancelled", func(ctx *AgentContext) {
+				c, cancel := context.WithCancel(context.Background())
+				cancel()
+				ctx.Ctx = c
+			}},
+			{"under the recovery floor", func(ctx *AgentContext) {
+				c, cancel := context.WithDeadline(context.Background(),
+					time.Now().Add(5*time.Second))
+				t.Cleanup(cancel)
+				ctx.Ctx = c
+			}},
+		} {
+			ctx, st, _ := c4State(t, nil)
+			a, ra := c4Refusal(badA)
+			key, sha, _ := noteRejectedProposal(ctx, st, "write_file", a, ra)
+			tc.set(ctx)
+			if msg := rejectedProposalRecovery(ctx, st, "solve.py", key, sha); msg != "" {
+				t.Errorf("%s: recovered anyway: %.100s", tc.name, msg)
+			}
+		}
+	})
+
+	t.Run("the state is bounded", func(t *testing.T) {
+		ctx, st, _ := c4State(t, nil)
+		for i := 0; i < maxC4Proposals+4; i++ {
+			body := c4BadA + fmt.Sprintf("# %d\n", i)
+			a, ra := c4Refusal(`{"path":"solve.py","content":` + c4JSON(body) + `}`)
+			noteRejectedProposal(ctx, st, "write_file", a, ra)
+		}
+		ev := st.c4Rejected[ledgerKey(ctx, "solve.py")]
+		if ev == nil || len(ev.order) > maxC4Proposals {
+			t.Errorf("proposal list is unbounded: %d", len(ev.order))
+		}
+		// Every retained hash still has its own diagnostic.
+		for _, h := range ev.order {
+			if ev.diagnostics[h] == "" {
+				t.Errorf("proposal %.12s is retained without its diagnostic", h)
+			}
+		}
+	})
+}
+
+// Lifecycle: a path's own history must never cost it a recovery.
+//
+// The state was first keyed on path AND surviving hash, under a session-wide
+// ceiling. Every correction a path lands is a new surviving hash, so one file
+// iterating eight times filled the map with obsolete entries and the ninth
+// generation -- the live one -- was refused a recovery by its own past.
+func TestRefusedReplacementGenerationsDoNotStarve(t *testing.T) {
+	ctx, st, _ := c4State(t, nil)
+	path := filepath.Join(ctx.WorkingDir, "solve.py")
+	d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
+
+	// Nine successive generations of the SAME path: land new valid bytes,
+	// have a replacement refused against them, take the recovery.
+	for gen := 0; gen < 9; gen++ {
+		body := fmt.Sprintf("%s# generation %d\n", c4Valid, gen)
+		os.WriteFile(path, []byte(body), 0o644)
+		h := hashBytes([]byte(body))
+		d.CurrentHash, d.ValidatedHash = h, h
+
+		args, res := c4Refusal(`{"path":"solve.py","content":` +
+			c4JSON(c4BadA+fmt.Sprintf("# try %d\n", gen)) + `}`)
+		canon, sha, n := noteRejectedProposal(ctx, st, "write_file", args, res)
+		if canon == "" {
+			t.Fatalf("generation %d recorded nothing", gen+1)
+		}
+		if n != 1 {
+			t.Errorf("generation %d started at %d proposals, want 1 — the previous "+
+				"generation's hashes were carried over", gen+1, n)
+		}
+		if msg := rejectedProposalRecovery(ctx, st, "solve.py", canon, sha); msg == "" {
+			t.Fatalf("generation %d was refused a recovery by the path's own history", gen+1)
+		}
+		if len(st.c4Rejected) != 1 {
+			t.Errorf("generation %d left %d entries for one path", gen+1, len(st.c4Rejected))
+		}
+	}
+}
+
+// The ceiling bounds live paths, and reaching it fails closed.
+func TestRefusedReplacementCeilingFailsClosed(t *testing.T) {
+	ctx, st, _ := c4State(t, nil)
+	mk := func(name string) {
+		p := filepath.Join(ctx.WorkingDir, name)
+		os.WriteFile(p, []byte(c4Valid), 0o644)
+		h := hashBytes([]byte(c4Valid))
+		ctx.Ledger[ledgerKey(ctx, name)] = &DeliverableState{
+			Path: name, CurrentHash: h, Generation: 1,
+			ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationPassed,
+			ValidatedHash: h,
+		}
+		args, res := c4Refusal(`{"path":"` + name + `","content":` + c4JSON(c4BadA) + `}`)
+		noteRejectedProposal(ctx, st, "write_file", args, res)
+	}
+	// solve.py plus seven more fills the ceiling with LIVE paths.
+	mk("solve.py")
+	for i := 0; i < maxC4Generations-1; i++ {
+		mk(fmt.Sprintf("m%d.py", i))
+	}
+	if len(st.c4Rejected) != maxC4Generations {
+		t.Fatalf("%d tracked paths, want %d", len(st.c4Rejected), maxC4Generations)
+	}
+	// A ninth LIVE path records nothing and recovers nothing — no diagnostic
+	// is borrowed from any of the eight.
+	mk("ninth.py")
+	if len(st.c4Rejected) != maxC4Generations {
+		t.Errorf("the ceiling was exceeded: %d", len(st.c4Rejected))
+	}
+	args, res := c4Refusal(`{"path":"ninth.py","content":` + c4JSON(c4BadA) + `}`)
+	canon, sha, n := noteRejectedProposal(ctx, st, "write_file", args, res)
+	if canon != "" || n != 0 {
+		t.Errorf("the ninth live path was recorded past the ceiling: %q n=%d", canon, n)
+	}
+	if msg := rejectedProposalRecovery(ctx, st, "ninth.py", canon, sha); msg != "" {
+		t.Errorf("a path with no evidence of its own drew a recovery:\n%.150s", msg)
+	}
+
+	// A tracked path whose bytes are gone is provably stale, and only that
+	// makes room.
+	os.Remove(filepath.Join(ctx.WorkingDir, "m0.py"))
+	canon, sha, n = noteRejectedProposal(ctx, st, "write_file", args, res)
+	if canon == "" || n != 1 {
+		t.Errorf("a provably stale entry did not make room: canon=%q n=%d", canon, n)
+	}
+	if len(st.c4Rejected) > maxC4Generations {
+		t.Errorf("eviction exceeded the ceiling: %d", len(st.c4Rejected))
+	}
+	if msg := rejectedProposalRecovery(ctx, st, "ninth.py", canon, sha); msg == "" {
+		t.Error("the ninth path was still denied after room was made")
+	}
+}
+
+// Evidence recorded against bytes that have since changed is never offered.
+func TestRefusedReplacementEvidenceMustMatchCurrentBytes(t *testing.T) {
+	ctx, st, _ := c4State(t, nil)
+	args, res := c4Refusal(`{"path":"solve.py","content":` + c4JSON(c4BadA) + `}`)
+	canon, sha, _ := noteRejectedProposal(ctx, st, "write_file", args, res)
+	// Disk moves without the recovery being taken.
+	os.WriteFile(filepath.Join(ctx.WorkingDir, "solve.py"), []byte(c4Fixed), 0o644)
+	h := hashBytes([]byte(c4Fixed))
+	d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
+	d.CurrentHash, d.ValidatedHash = h, h
+	if msg := rejectedProposalRecovery(ctx, st, "solve.py", canon, sha); msg != "" {
+		t.Errorf("evidence about older bytes was offered anyway:\n%.200s", msg)
 	}
 }

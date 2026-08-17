@@ -231,6 +231,11 @@ type runState struct {
 	// and a stale one unusable.
 	noopEditRepeats         map[string]int
 	brokenArtifactRecovered map[string]bool
+	// c4Rejected is what the session knows about replacements that were
+	// refused while the file they targeted stayed valid on disk. Keyed by
+	// canonical path AND the surviving disk hash, so new bytes are a new
+	// question and the old evidence cannot describe them.
+	c4Rejected map[string]*proposalRejection
 	// mutationDebt is what the session still owes on a per-path basis: a
 	// valid, permitted, in-workspace mutation the model asked for that has
 	// not reached a demonstrated resolved state. Canonically keyed, bounded,
@@ -1686,6 +1691,28 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// it and different only in the body the channel fetched for it.
 			// The lookup, the record and the clear all key on the intent, or
 			// they key on three different things and never meet.
+			// C4: this exact replacement was already refused against the
+			// bytes still on disk. It has to be answered BEFORE the resend
+			// ban, which would otherwise end the run with the model never
+			// having been shown the file it keeps trying to replace.
+			if sha := resolvedProposalHash(parsed.Name, parsed.Args); sha != "" {
+				rel := ledgerArgPath(parsed.Args, "path")
+				if canon, diskHash := survivingKnownGood(ctx, rel); canon != "" {
+					if ev := st.c4Rejected[canon]; ev != nil && ev.diskHash == diskHash {
+						if _, already := ev.diagnostics[sha]; already {
+							if msg := rejectedProposalRecovery(ctx, st, rel, canon, sha); msg != "" {
+								st.bounceToolCall(ctx, parsed.Name, msg)
+								if accountRefusedCall(parsed.Name, intentArgs, msg,
+									workspaceRefusalPath(ctx, parsed.Name, parsed.Args)) {
+									return nil
+								}
+								continue
+							}
+						}
+					}
+				}
+			}
+
 			// C3: the no-op edit over an artifact already shown to be broken.
 			// This has to come BEFORE the identical-resend ban, which would
 			// otherwise intercept the recurrence and end the run with the
@@ -1910,6 +1937,18 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				if authored := authoredContent(parsed.Args); authored != "" {
 					recordGateRejection(modelName, parsed.Name,
 						rejectedPath(parsed.Args), authored, result.Error)
+				}
+				// C4: a replacement refused while the file it targeted stayed
+				// valid. The second distinct proposal against one generation
+				// is the evidence that the refusal text alone is not landing,
+				// and the answer rides on the SAME result -- one call, one
+				// result, and the model reads it in the same message.
+				if key, sha, distinct := noteRejectedProposal(ctx, st, parsed.Name,
+					parsed.Args, result); distinct >= 2 {
+					rel := ledgerArgPath(parsed.Args, "path")
+					if msg := rejectedProposalRecovery(ctx, st, rel, key, sha); msg != "" {
+						result.Error += "\n\n" + msg
+					}
 				}
 			} else {
 				// A call can fail and later succeed — an edit rejected for a
@@ -6622,6 +6661,245 @@ func clearSteerState(ctx *AgentContext, st *runState, name string, args json.Raw
 	key := ledgerKey(ctx, workspaceRefusalPath(ctx, name, args))
 	delete(st.steerRepeats, key)
 	delete(st.steerRecovered, key)
+}
+
+// --- C4: replacements refused while the known-good bytes survive -------------
+//
+// Retained twice in Stage 1: a valid artifact was already on disk, every later
+// replacement was refused for a syntax failure before any byte moved, and the
+// model kept sending replacements until a breaker ended the run. Disk was
+// never damaged and the task was never finished.
+//
+// This is not C3, where the file on disk is itself broken and nothing valid
+// was ever kept, and it is not restoration, because the safer bytes never left
+// disk -- they need preserving, which the refusal already does. What is
+// missing is that the model is never shown what it is replacing, or told
+// plainly that its replacement was thrown away and the good version is intact.
+//
+// Two hashes, two purposes, deliberately not shared. The retry fingerprint
+// from the identity change is a NORMALISED sha1 -- trailing whitespace is
+// dropped -- which is right for "is this the same call" and wrong for "is this
+// diagnostic about these bytes". Evidence uses sha256 of the exact resolved
+// proposal, and a diagnostic is stored with its hash or not at all.
+const (
+	// Ceilings, both on LIVE state: how many paths are tracked at once, and
+	// how many distinct proposals are remembered for the bytes currently on
+	// one of them. A session doing more than this is not being helped by
+	// remembering more of it.
+	maxC4Generations = 8
+	maxC4Proposals   = 8
+)
+
+// proposalRejection is one canonical path's CURRENT generation: the surviving
+// bytes everything here is about, the exact proposals refused against them --
+// each with the diagnostic produced for those bytes -- and whether its one
+// recovery has been spent.
+//
+// One entry per path, never one per generation. Keying the map on path AND
+// surviving hash looked tidier and starved the thing it was meant to protect:
+// every correction a path lands is a new surviving hash, so a single file
+// iterating eight times filled a session-wide ceiling with obsolete entries
+// and the ninth generation -- the live one -- was refused a recovery by its
+// own history. New bytes now REPLACE the generation in place, which is what
+// "released when the surviving disk hash changes" has to mean.
+type proposalRejection struct {
+	diskHash    string            // the surviving bytes this generation is about
+	diagnostics map[string]string // proposal sha256 -> its own diagnostic
+	order       []string
+	recovered   bool
+}
+
+// reset re-arms an entry for a new generation of surviving bytes. The old
+// hashes and diagnostics go with the bytes they described.
+func (e *proposalRejection) reset(diskHash string) {
+	e.diskHash = diskHash
+	e.diagnostics = map[string]string{}
+	e.order = nil
+	e.recovered = false
+}
+
+// resolvedProposalHash is sha256 of the exact bytes a write_file would have
+// written, after fenced resolution. "" for anything else.
+func resolvedProposalHash(name string, args json.RawMessage) string {
+	if name != "write_file" {
+		return ""
+	}
+	var in WriteFileInput
+	if json.Unmarshal(args, &in) != nil || in.Content == "" {
+		return ""
+	}
+	return hashBytes([]byte(in.Content))
+}
+
+// survivingKnownGood returns the canonical path and the hash of its bytes on
+// disk, when those bytes are readable, are what the ledger describes, and are
+// demonstrably valid. Everything else -- unknown, not_run, not_applicable,
+// failed, a verdict about other bytes, an unreadable path -- returns "".
+func survivingKnownGood(ctx *AgentContext, relPath string) (canon, diskHash string) {
+	if ctx == nil {
+		return "", ""
+	}
+	key := ledgerKey(ctx, relPath)
+	data, ok := readLedgerBytes(key)
+	if !ok {
+		return "", ""
+	}
+	h := hashBytes(data)
+	ctx.LedgerMu.Lock()
+	d := ctx.Ledger[key]
+	var status ValidationStatus
+	var kind ValidationKind
+	var current string
+	if d != nil {
+		kind, status = d.CurrentValidation()
+		current = d.CurrentHash
+	}
+	ctx.LedgerMu.Unlock()
+	if current != h || status != ValidationPassed || kind != ValidationKindSyntax {
+		return "", ""
+	}
+	return key, h
+}
+
+// evictStaleGenerations drops entries whose surviving bytes are no longer the
+// bytes on disk. Only provable staleness is evicted -- a path still holding
+// the bytes its evidence describes is never touched -- so the ceiling bounds
+// how many LIVE paths are tracked rather than how many times the session has
+// been round the loop.
+func evictStaleGenerations(ctx *AgentContext, st *runState) {
+	for path, ev := range st.c4Rejected {
+		data, ok := readLedgerBytes(path)
+		if !ok || hashBytes(data) != ev.diskHash {
+			delete(st.c4Rejected, path)
+		}
+	}
+}
+
+// noteRejectedProposal records a refused replacement against the known-good
+// bytes that survived it, and reports how many distinct proposals this
+// generation has now refused.
+//
+// Every clause is about evidence that already exists. The diagnostic is the
+// one the checker produced for THESE bytes, carried on the result; no error
+// prose is parsed, no lens sample is read, and no historical verdict is reused.
+func noteRejectedProposal(ctx *AgentContext, st *runState, name string,
+	args json.RawMessage, result *ToolResult) (string, string, int) {
+	if st == nil || result == nil || name != "write_file" {
+		return "", "", 0
+	}
+	if result.MutationStatus != MutationRefused ||
+		result.ValidationStatus != ValidationFailed ||
+		result.ValidationKind != ValidationKindSyntax ||
+		result.ValidationDetail == "" {
+		return "", "", 0
+	}
+	sha := resolvedProposalHash(name, args)
+	if sha == "" {
+		return "", "", 0
+	}
+	rel := ledgerArgPath(args, "path")
+	canon, diskHash := survivingKnownGood(ctx, rel)
+	if canon == "" {
+		return "", "", 0
+	}
+	if st.c4Rejected == nil {
+		st.c4Rejected = map[string]*proposalRejection{}
+	}
+	ev := st.c4Rejected[canon]
+	switch {
+	case ev == nil:
+		if len(st.c4Rejected) >= maxC4Generations {
+			// Make room only where the evidence is provably about bytes that
+			// are gone. If every tracked path still holds what its evidence
+			// describes, this fails closed: nothing is recorded, so no
+			// diagnostic can be offered for these bytes at all.
+			evictStaleGenerations(ctx, st)
+			if len(st.c4Rejected) >= maxC4Generations {
+				return "", "", 0
+			}
+		}
+		ev = &proposalRejection{}
+		ev.reset(diskHash)
+		st.c4Rejected[canon] = ev
+	case ev.diskHash != diskHash:
+		// The surviving bytes changed: this is a new question, and the old
+		// hashes and diagnostics are released with the bytes they described.
+		ev.reset(diskHash)
+	}
+	if _, seen := ev.diagnostics[sha]; !seen {
+		if len(ev.order) >= maxC4Proposals {
+			return canon, sha, len(ev.order)
+		}
+		ev.order = append(ev.order, sha)
+	}
+	// Stored together, always: a hash without its own diagnostic would be a
+	// diagnostic waiting to be attached to the wrong bytes.
+	ev.diagnostics[sha] = result.ValidationDetail
+	return canon, sha, len(ev.order)
+}
+
+// rejectedProposalRecovery shows the model the file it is replacing and says
+// what happened to its replacement, once per path and surviving-bytes
+// generation.
+//
+// It mutates nothing, runs nothing, invents no selector and claims no
+// completion. The diagnostic it quotes is the one stored against this exact
+// proposal hash; a different proposal never inherits it.
+func rejectedProposalRecovery(ctx *AgentContext, st *runState, relPath, canon, sha string) string {
+	if ctx == nil || st == nil || canon == "" || sha == "" {
+		return ""
+	}
+	// A run that is already ending owns its own terminal.
+	if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
+		return ""
+	}
+	ev := st.c4Rejected[canon]
+	if ev == nil || ev.recovered {
+		return ""
+	}
+	// The evidence has to still be about the bytes that are there now.
+	if _, diskHash := survivingKnownGood(ctx, relPath); diskHash != ev.diskHash {
+		return ""
+	}
+	detail, bound := ev.diagnostics[sha]
+	if !bound || detail == "" {
+		// No diagnostic for THESE bytes. Saying nothing beats saying
+		// something true about a different proposal.
+		return ""
+	}
+	// Context nobody has time to act on is worse than stopping.
+	if ctx.Ctx != nil {
+		if deadline, ok := ctx.Ctx.Deadline(); ok && time.Until(deadline) < fencedRecoveryFloor {
+			log.Printf("[agent] skipping the refused-replacement recovery for %s — %v of budget left",
+				relPath, time.Until(deadline).Round(time.Second))
+			return ""
+		}
+	}
+	source, truncated, err := boundedCurrentSource(ctx, relPath)
+	if err != nil {
+		log.Printf("[agent] refused-replacement recovery for %s could not read it: %v", relPath, err)
+		return ""
+	}
+	ev.recovered = true
+	log.Printf("[agent] refused-replacement recovery for %s: %d proposal(s) refused against surviving valid bytes",
+		relPath, len(ev.order))
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Your replacement for %s failed its syntax check, so it was not written and "+
+		"nothing on disk changed. The working version is still there, exactly as it was.\n\n", relPath)
+	fmt.Fprintf(&sb, "%s currently contains", relPath)
+	if truncated {
+		fmt.Fprintf(&sb, " (first %d lines)", fencedRecoveryMaxLines)
+	}
+	sb.WriteString(":\n\n")
+	sb.WriteString(source)
+	fmt.Fprintf(&sb, "\n\nThe check on the bytes you just sent failed: %s\n\n", detail)
+	sb.WriteString("That is the version you are replacing. Send something materially different " +
+		"from what was just refused: a whole new file with write_file, or -- usually better here, " +
+		"since the file above already works -- a targeted change with edit_file, or structural_edit " +
+		"if you are replacing a whole function or element. Re-sending the same content will fail " +
+		"the same way.")
+	return sb.String()
 }
 
 // --- C3: the no-op edit over a demonstrably broken artifact ------------------
