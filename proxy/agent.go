@@ -216,6 +216,13 @@ type runState struct {
 	// a success elsewhere is not evidence that this path is unstuck.
 	steerRepeats   map[string]int
 	steerRecovered map[string]bool
+	// noopEditRepeats counts explicit old_str == new_str edits per canonical
+	// path AND the exact broken hash they were sent against; brokenArtifact-
+	// Recovered records which of those evidence generations have spent their
+	// one recovery. Keying on the hash is what makes a new generation re-arm
+	// and a stale one unusable.
+	noopEditRepeats         map[string]int
+	brokenArtifactRecovered map[string]bool
 	// mutationDebt is what the session still owes on a per-path basis: a
 	// valid, permitted, in-workspace mutation the model asked for that has
 	// not reached a demonstrated resolved state. Canonically keyed, bounded,
@@ -1671,6 +1678,23 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// it and different only in the body the channel fetched for it.
 			// The lookup, the record and the clear all key on the intent, or
 			// they key on three different things and never meet.
+			// C3: the no-op edit over an artifact already shown to be broken.
+			// This has to come BEFORE the identical-resend ban, which would
+			// otherwise intercept the recurrence and end the run with the
+			// broken file still on disk -- the retained shape exactly.
+			if relPath := noopEditIntent(parsed.Name, intentArgs); relPath != "" {
+				if msg := brokenArtifactRecovery(ctx, st, relPath); msg != "" {
+					st.bounceToolCall(ctx, parsed.Name, msg)
+					// Counted once, here. The call never reaches the tool, so
+					// no post-execution accounting runs for it, and the ban
+					// below is skipped by the continue.
+					if accountRefusedCall(parsed.Name, intentArgs, msg,
+						workspaceRefusalPath(ctx, parsed.Name, parsed.Args)) {
+						return nil
+					}
+					continue
+				}
+			}
 			if refusal := identicalRetryRefusal(ctx, parsed.Name, intentArgs); refusal != "" {
 				log.Printf("[agent] turn=%d refusing an identical re-send of a rejected %s", turn, parsed.Name)
 				// Escalate from refusing THIS call to removing the tool for
@@ -1883,6 +1907,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				// condition that caused it.
 				clearFailedToolCall(ctx, parsed.Name, intentArgs)
 				clearSteerState(ctx, st, parsed.Name, parsed.Args)
+				clearBrokenArtifactState(ctx, st, parsed.Name, intentArgs)
 			}
 
 			// Force-stop after destructive operations that shouldn't have
@@ -6589,6 +6614,193 @@ func clearSteerState(ctx *AgentContext, st *runState, name string, args json.Raw
 	key := ledgerKey(ctx, workspaceRefusalPath(ctx, name, args))
 	delete(st.steerRepeats, key)
 	delete(st.steerRecovered, key)
+}
+
+// --- C3: the no-op edit over a demonstrably broken artifact ------------------
+//
+// Retained twice in Stage 1, and identical both times: write_file lands a file
+// that does not parse and says so, verification reports the concrete failure,
+// edit_file demands a read, the model reads, and then it sends an edit whose
+// old_str and new_str are the same string -- over and over, until repetition
+// protection ends the run with the broken file on disk and no valid version to
+// fall back to.
+//
+// The class is already bounded, and a bound is not an outcome. The model is
+// copying a span it cannot reproduce with a change applied; edit_file already
+// tells it the two sides match, and being told that a second time is the one
+// thing already known not to work. So the recurrence gets the evidence
+// instead: the file as it is now, and the failure already recorded against
+// exactly those bytes.
+//
+// Nothing here mutates, runs, guesses the intended character, or converts the
+// edit. The model has to supply the correction; this only makes that possible.
+
+// c3RecoveryRepeat is the number of explicit no-op edits on one evidence
+// generation that arms the recovery. The first is an accident and gets the
+// tool's own answer unchanged; the second is evidence that answer did not work.
+const c3RecoveryRepeat = 2
+
+// noopEditIntent returns the path of an edit_file call whose old_str and
+// new_str are identical, and "" for anything else.
+//
+// Deliberately only the explicit form, which is the one the retained evidence
+// shows. edit_file also refuses edits that are merely INEFFECTIVE -- a
+// replacement that leaves the file byte-identical -- and that is a different
+// failure with different evidence, so it stays where it is.
+func noopEditIntent(name string, args json.RawMessage) string {
+	if name != "edit_file" {
+		return ""
+	}
+	var in struct {
+		Path   string `json:"path"`
+		OldStr string `json:"old_str"`
+		NewStr string `json:"new_str"`
+	}
+	if json.Unmarshal(args, &in) != nil {
+		return ""
+	}
+	if strings.TrimSpace(in.Path) == "" || in.OldStr != in.NewStr {
+		return ""
+	}
+	return in.Path
+}
+
+// brokenArtifactRecovery answers a repeated no-op edit with the current file
+// and the failure already bound to it, once per evidence generation.
+//
+// Every clause is an entry condition, and all of them are about evidence that
+// already exists: the ledger's verdict on the bytes that are on disk right
+// now. Nothing is inferred from error prose, and a verdict that describes
+// other bytes is not usable -- CurrentValidation is what enforces that.
+func brokenArtifactRecovery(ctx *AgentContext, st *runState, relPath string) string {
+	if ctx == nil || st == nil {
+		return ""
+	}
+	// A run that is already ending owns its own terminal.
+	if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
+		return ""
+	}
+	key := ledgerKey(ctx, relPath)
+	// The file as it is NOW. A path that cannot be read fabricates nothing:
+	// no source, no read state, no recovery.
+	data, ok := readLedgerBytes(key)
+	if !ok {
+		return ""
+	}
+	diskHash := hashBytes(data)
+	// The body has to have been in front of the model through the real read
+	// path. WasFileRead is weaker -- outline_file satisfies it while showing
+	// signatures only -- so a file whose contents were never displayed is not
+	// eligible.
+	if !ctx.WasBodySeen(key) {
+		return ""
+	}
+	hazardous := workspaceHazardous(ctx)
+
+	ctx.LedgerMu.Lock()
+	d := ctx.Ledger[key]
+	var status ValidationStatus
+	var kind ValidationKind
+	var detail string
+	var sessionWritten, restorable bool
+	if d != nil {
+		kind, status = d.CurrentValidation()
+		detail = d.ValidationDetail
+		// Generation > 0 is the ledger's own record that this session wrote
+		// the file, and it is canonical -- unlike SessionWrites, which is
+		// keyed on the path as the model spelled it.
+		sessionWritten = d.Generation > 0 && d.CurrentHash == diskHash
+		restorable, _ = checkpointRestorable(d, diskHash, hazardous)
+	}
+	ctx.LedgerMu.Unlock()
+
+	switch {
+	case !sessionWritten:
+		return ""
+	case status != ValidationFailed:
+		// unknown, not_run, not_applicable, passed, and every verdict that
+		// describes bytes no longer on disk, all end here.
+		return ""
+	case restorable:
+		// A path with an eligible safer checkpoint is Phase 3B's, not this.
+		return ""
+	}
+
+	genKey := key + "\x00" + diskHash
+	if st.noopEditRepeats == nil {
+		st.noopEditRepeats = map[string]int{}
+	}
+	st.noopEditRepeats[genKey]++
+	if st.noopEditRepeats[genKey] < c3RecoveryRepeat || st.brokenArtifactRecovered[genKey] {
+		return ""
+	}
+	// Context nobody has time to act on is worse than stopping.
+	if ctx.Ctx != nil {
+		if deadline, ok := ctx.Ctx.Deadline(); ok && time.Until(deadline) < fencedRecoveryFloor {
+			log.Printf("[agent] skipping the no-op-edit recovery for %s — %v of budget left",
+				relPath, time.Until(deadline).Round(time.Second))
+			return ""
+		}
+	}
+	source, truncated, err := boundedCurrentSource(ctx, relPath)
+	if err != nil {
+		log.Printf("[agent] no-op-edit recovery for %s could not read it: %v", relPath, err)
+		return ""
+	}
+	if st.brokenArtifactRecovered == nil {
+		st.brokenArtifactRecovered = map[string]bool{}
+	}
+	st.brokenArtifactRecovered[genKey] = true
+	if detail == "" {
+		detail = string(kind) + " check failed"
+	}
+	log.Printf("[agent] no-op-edit recovery for %s: %s/%s on the current bytes", relPath, kind, status)
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "That edit changes nothing: old_str and new_str are the same string, "+
+		"so %s would be left exactly as it is. It is still broken.\n\n", relPath)
+	fmt.Fprintf(&sb, "%s currently contains", relPath)
+	if truncated {
+		fmt.Fprintf(&sb, " (first %d lines)", fencedRecoveryMaxLines)
+	}
+	sb.WriteString(":\n\n")
+	sb.WriteString(source)
+	fmt.Fprintf(&sb, "\n\nThe %s check on exactly these bytes failed: %s\n\n", kind, detail)
+	sb.WriteString("Send an edit whose new_str actually differs from old_str and fixes that. " +
+		"Nothing has been changed for you, and nothing will be until you do.")
+	return sb.String()
+}
+
+// clearBrokenArtifactState releases a path's C3 state once a materially
+// different mutation on that same path reaches its normal result.
+//
+// Keyed, so an unrelated success elsewhere does not clear it, and narrow, so
+// another no-op does not either -- a no-op is the thing being recovered from.
+// A read does not clear it, and neither does a new turn. The hash is the other
+// release: different bytes are a different evidence generation and get their
+// own key.
+func clearBrokenArtifactState(ctx *AgentContext, st *runState, name string, args json.RawMessage) {
+	if st == nil || len(st.noopEditRepeats)+len(st.brokenArtifactRecovered) == 0 {
+		return
+	}
+	if noopEditIntent(name, args) != "" {
+		return
+	}
+	targets := mutationIntentTargets(ctx, name, args)
+	if len(targets) == 0 {
+		return
+	}
+	prefix := ledgerKey(ctx, targets[0].Rel) + "\x00"
+	for k := range st.noopEditRepeats {
+		if strings.HasPrefix(k, prefix) {
+			delete(st.noopEditRepeats, k)
+		}
+	}
+	for k := range st.brokenArtifactRecovered {
+		if strings.HasPrefix(k, prefix) {
+			delete(st.brokenArtifactRecovered, k)
+		}
+	}
 }
 
 // currentValidationDetail reports what the ledger knows about the bytes that
