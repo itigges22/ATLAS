@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -2045,5 +2046,276 @@ func TestTombstonedPathsAreSilentAndNeverResurrected(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "gone.py")); err == nil {
 		t.Error("a deleted file was resurrected")
+	}
+}
+
+// --- A successful delete must not end the session -----------------------------
+//
+// delete_file returned an internal `__FORCE_DONE__` sentinel and the loop
+// turned it into a terminal on the spot. The stated reason was to stop the
+// model narrating after a destructive op, but the cost is that the delete
+// swallows the rest of the task: asked to delete a.py AND write report.py, a
+// run that happens to delete first ends before report.py is ever attempted,
+// and the outcome depends on nothing but tool ordering.
+//
+// Removing the pre-empt does not make a deletion completable. The tombstone
+// rule at the real terminal is unchanged and still fail-closed; what changes
+// is that the run gets to finish the work it was asked for and be judged on
+// all of it.
+
+const delSeed = "def solve():\n    return 7\n\n\nprint(solve())\n"
+
+type delLoop struct {
+	dir      string
+	turns    int
+	census   map[string]int
+	terminal map[string]string
+	seq      []string
+	ctx      *AgentContext
+}
+
+func delLoopFixture(t *testing.T, seed map[string]string, prompt string,
+	plan func(i int) map[string]interface{}) *delLoop {
+	t.Helper()
+	r := &delLoop{dir: t.TempDir(), census: map[string]int{}, terminal: map[string]string{}}
+	for n, b := range seed {
+		p := filepath.Join(r.dir, n)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(b), 0o644)
+	}
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		switch {
+		case strings.HasPrefix(req.URL.Path, "/v3/"), strings.HasPrefix(req.URL.Path, "/internal/"):
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		case strings.HasSuffix(req.URL.Path, "/syntax-check"):
+			json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
+			return
+		case strings.HasSuffix(req.URL.Path, "/execute"):
+			var in struct{ Code string }
+			json.NewDecoder(req.Body).Decode(&in)
+			if strings.Contains(in.Code, ".atlas-mount-probe") {
+				b, _ := os.ReadFile(filepath.Join(r.dir, ".atlas-mount-probe"))
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": true, "stdout": string(b), "exit_code": 0})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "stdout": "", "exit_code": 0})
+			return
+		case !strings.HasSuffix(req.URL.Path, "/v1/chat/completions"):
+			http.NotFound(w, req)
+			return
+		}
+		io.ReadAll(req.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		mu.Lock()
+		i := r.turns
+		r.turns++
+		mu.Unlock()
+		if i >= 20 {
+			http.Error(w, "ceiling", http.StatusInsufficientStorage)
+			return
+		}
+		call, _ := json.Marshal(plan(i))
+		d, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{{"delta": map[string]string{"content": string(call)}}}})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+	}))
+	t.Cleanup(srv.Close)
+
+	r.ctx = NewAgentContext(r.dir, Tier2Medium)
+	r.ctx.InferenceURL, r.ctx.SandboxURL, r.ctx.V3URL = srv.URL, srv.URL, srv.URL
+	r.ctx.PermissionMode = PermissionYolo
+	r.ctx.TrustMode = trustFullyTrusted
+	r.ctx.VerifyOnHost = true
+	r.ctx.MaxTurns = 0
+	r.ctx.StreamFn = func(et string, data interface{}) {
+		b, _ := json.Marshal(data)
+		mu.Lock()
+		defer mu.Unlock()
+		r.census[et]++
+		switch et {
+		case "tool_call":
+			var tc struct{ Name string }
+			json.Unmarshal(b, &tc)
+			r.seq = append(r.seq, tc.Name)
+		case "done":
+			var m map[string]string
+			json.Unmarshal(b, &m)
+			for k, v := range m {
+				r.terminal[k] = v
+			}
+		}
+	}
+	runAgentLoop(r.ctx, prompt)
+	return r
+}
+
+func (r *delLoop) present() []string {
+	var out []string
+	filepath.Walk(r.dir, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		rel, _ := filepath.Rel(r.dir, p)
+		if !strings.HasPrefix(rel, ".") {
+			out = append(out, rel)
+		}
+		return nil
+	})
+	sort.Strings(out)
+	return out
+}
+
+func (r *delLoop) tombstones() []string {
+	var out []string
+	for k, d := range r.ctx.Ledger {
+		if d.Tombstoned {
+			out = append(out, fmt.Sprintf("%s{%s,prohibited=%v}",
+				filepath.Base(k), d.TombstoneReason, d.RestoreProhibited))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (r *delLoop) check(t *testing.T, name string) {
+	t.Helper()
+	t.Logf("%s: seq=%v disk=%v tombs=%v status=%q reason=%q calls=%d results=%d",
+		name, r.seq, r.present(), r.tombstones(), r.terminal["status"], r.terminal["reason"],
+		r.census["tool_call"], r.census["tool_result"])
+	if r.census["done"] != 1 {
+		t.Errorf("%d terminal events", r.census["done"])
+	}
+	if r.census["tool_call"] != r.census["tool_result"] {
+		t.Errorf("call/result imbalance %d vs %d", r.census["tool_call"], r.census["tool_result"])
+	}
+}
+
+func dlDel(p string) map[string]interface{} {
+	return map[string]interface{}{"type": "tool_call", "name": "delete_file",
+		"args": map[string]string{"path": p}}
+}
+func dlWrite(p, c string) map[string]interface{} {
+	return map[string]interface{}{"type": "tool_call", "name": "write_file",
+		"args": map[string]string{"path": p, "content": c}}
+}
+
+// The defect: the remaining requested write is never attempted.
+func TestDeleteDoesNotSwallowTheRestOfTheTask(t *testing.T) {
+	r := delLoopFixture(t, map[string]string{"a.py": delSeed},
+		"Delete a.py and create report.py with the summary.",
+		func(i int) map[string]interface{} {
+			switch i {
+			case 0:
+				return dlDel("a.py")
+			case 1:
+				return dlWrite("report.py", delSeed)
+			}
+			return map[string]interface{}{"type": "done", "summary": "deleted a.py, wrote report.py"}
+		})
+	r.check(t, "delete-first")
+
+	if len(r.seq) < 2 || r.seq[1] != "write_file" {
+		t.Fatalf("the run ended at the delete: %v — the requested write was never attempted", r.seq)
+	}
+	got := r.present()
+	if len(got) != 1 || got[0] != "report.py" {
+		t.Errorf("disk is %v, want only report.py", got)
+	}
+	// Deletion semantics are untouched: confirmed absence, tombstoned,
+	// restoration prohibited.
+	tomb := r.tombstones()
+	if len(tomb) != 1 || !strings.Contains(tomb[0], "a.py{deleted,prohibited=true}") {
+		t.Errorf("tombstone state changed: %v", tomb)
+	}
+	// And it still cannot claim the deletion was the task.
+	if NormalizeTerminalStatus(r.terminal["status"]).Completed() {
+		t.Errorf("a run with an unestablished deletion reported %q/%q",
+			r.terminal["status"], r.terminal["reason"])
+	}
+	if r.terminal["reason"] != "delete_intent_unestablished" {
+		t.Errorf("reason=%q, want the tombstone rule to own the terminal", r.terminal["reason"])
+	}
+}
+
+// Every other delete shape: the loop continues, and the terminal is decided at
+// the real terminal point by the rules that already exist.
+func TestDeleteContinuationMatrix(t *testing.T) {
+	for _, c := range []struct {
+		name, prompt string
+		seed         map[string]string
+		plan         func(i int) map[string]interface{}
+		wantSeq      int
+		wantReason   string
+	}{
+		{"write then delete", "Create report.py with the summary.",
+			map[string]string{"a.py": delSeed},
+			func(i int) map[string]interface{} {
+				switch i {
+				case 0:
+					return dlWrite("report.py", delSeed)
+				case 1:
+					return dlDel("a.py")
+				}
+				return map[string]interface{}{"type": "done", "summary": "wrote report.py"}
+			}, 2, "delete_intent_unestablished"},
+		{"delete only", "Delete a.py.",
+			map[string]string{"a.py": delSeed},
+			func(i int) map[string]interface{} {
+				if i == 0 {
+					return dlDel("a.py")
+				}
+				return map[string]interface{}{"type": "done", "summary": "deleted a.py"}
+			}, 1, "delete_intent_unestablished"},
+		{"delete then a read that only happens if the loop continues", "Delete a.py.",
+			map[string]string{"a.py": delSeed, "b.py": delSeed},
+			func(i int) map[string]interface{} {
+				switch i {
+				case 0:
+					return dlDel("a.py")
+				case 1:
+					return map[string]interface{}{"type": "tool_call", "name": "read_file",
+						"args": map[string]string{"path": "b.py"}}
+				}
+				return map[string]interface{}{"type": "done", "summary": "deleted a.py"}
+			}, 2, "delete_intent_unestablished"},
+		{"repeated delete of a now-absent path", "Delete a.py.",
+			map[string]string{"a.py": delSeed},
+			func(i int) map[string]interface{} {
+				return dlDel("a.py")
+			}, 2, ""},
+		{"non-empty directory is refused, unchanged", "Delete pkg.",
+			map[string]string{"pkg/mod.py": delSeed},
+			func(i int) map[string]interface{} {
+				if i == 0 {
+					return dlDel("pkg")
+				}
+				return map[string]interface{}{"type": "done", "summary": "removed pkg"}
+			}, 1, "unresolved_mutation_debt"},
+		{"missing path fails, unchanged", "Delete gone.py.",
+			map[string]string{},
+			func(i int) map[string]interface{} {
+				if i == 0 {
+					return dlDel("gone.py")
+				}
+				return map[string]interface{}{"type": "done", "summary": "not there"}
+			}, 1, "no_file_obligation"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := delLoopFixture(t, c.seed, c.prompt, c.plan)
+			r.check(t, c.name)
+			if len(r.seq) < c.wantSeq {
+				t.Errorf("%d tool calls, want at least %d — the loop stopped early", len(r.seq), c.wantSeq)
+			}
+			if c.wantReason != "" && r.terminal["reason"] != c.wantReason {
+				t.Errorf("reason=%q, want %q", r.terminal["reason"], c.wantReason)
+			}
+			if r.turns >= 20 {
+				t.Errorf("%d turns without a terminal", r.turns)
+			}
+		})
 	}
 }

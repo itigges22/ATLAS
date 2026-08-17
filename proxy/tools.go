@@ -3837,15 +3837,22 @@ func deleteFileTool() *ToolDef {
 			outBytes, _ := json.Marshal(out)
 			// Removal demonstrated. A delete validates nothing: there are no
 			// bytes left to have an opinion about.
-			result := &ToolResult{Success: true, Data: outBytes,
+			//
+			// This used to hand the loop a sentinel that ended the session on
+			// the spot, so the model could not narrate after a destructive
+			// operation. It also ended the TASK. Asked to delete a.py and
+			// write report.py, a run that happened to delete first stopped
+			// before report.py was ever attempted, and the outcome turned on
+			// nothing but which tool the model reached for first.
+			//
+			// The delete now returns like any other call. It still cannot
+			// authorise a completion -- the tombstone rule at the real
+			// terminal is unchanged and still fail-closed -- but the run gets
+			// to finish what it was asked to do and be judged on all of it.
+			return &ToolResult{Success: true, Data: outBytes,
 				MutationStatus:   MutationApplied,
 				ValidationKind:   ValidationKindNone,
-				ValidationStatus: ValidationNotApplicable}
-			// Signal the agent loop to stop after deletion — prevents the model
-			// from generating follow-up text that would render as a noisy edit
-			// suggestion in chat after a destructive operation.
-			result.Error = "__FORCE_DONE__"
-			return result, nil
+				ValidationStatus: ValidationNotApplicable}, nil
 		},
 	}
 }

@@ -1309,7 +1309,7 @@ func TestRestorationIsWiredToExactlyOneTerminal(t *testing.T) {
 	}
 	// The other terminal producers must not have gained it. They all route
 	// through the one emitter now, so the count to hold is theirs.
-	if n := strings.Count(body, "emitTerminal("); n < 13 {
+	if n := strings.Count(body, "emitTerminal("); n < 12 {
 		t.Errorf("found %d emitTerminal call sites, expected the full set of "+
 			"producers; if one was removed, re-check this scope deliberately", n)
 	}
@@ -1333,15 +1333,17 @@ func TestEveryTerminalProducerGoesThroughTheOneEmitter(t *testing.T) {
 	if n := strings.Count(body, `Stream("done"`); n != 1 {
 		t.Errorf("%d direct done payloads outside the emitter, want 0", n-1)
 	}
-	// 13 producers: 9 direct plus the 4 that share endStream.
+	// 12 producers: 8 direct plus the 4 that share endStream. It was 13 until
+	// the delete pre-empt was removed -- delete_file no longer ends the
+	// session on the spot, so file_operation_no_task_intent has no producer.
 	producers := strings.Count(body, "emitTerminal(") - 1 // the definition
-	if producers < 13 {
-		t.Errorf("found %d terminal producers, want at least 13; a producer "+
+	if producers < 12 {
+		t.Errorf("found %d terminal producers, want at least 12; a producer "+
 			"that stopped emitting is a session that ends in silence", producers)
 	}
 	for _, reason := range []string{
 		"workspace_misaligned", "inference_failed", "text_instead_of_work",
-		"unusable_model_output", "file_operation_no_task_intent",
+		"unusable_model_output",
 		"failure_ceiling", "same_target_failures", "turn_budget_exhausted",
 		"oversized_tool_content", "repeated_refusal", "repeat_detector",
 	} {
@@ -1611,7 +1613,6 @@ func TestEveryNonCompletedTerminalIsHonest(t *testing.T) {
 		{"deliverables_not_demonstrated", TerminalIncomplete, ""},
 		{"delete_intent_unestablished", TerminalIncomplete, ""},
 		{"text_reply", TerminalIncomplete, ""},
-		{"file_operation_no_task_intent", TerminalIncomplete, "The file operation ran and the session stopped there."},
 		{"failure_ceiling", TerminalStopped, "Stopped after 9 failed tool calls with nothing landing on disk."},
 		{"same_target_failures", TerminalStopped, "Wrote your changes to disk; couldn't verify them automatically."},
 		{"turn_budget_exhausted", TerminalIncomplete, "I ran out of turns for this request before finishing."},
@@ -1622,8 +1623,8 @@ func TestEveryNonCompletedTerminalIsHonest(t *testing.T) {
 		{"cancelled", TerminalIncomplete, "Stopped: the run was cancelled before the work finished."},
 		{"unclassified_producer", TerminalIncomplete, ""},
 	}
-	if len(producers) < 13 {
-		t.Fatalf("only %d producers covered; there are 13", len(producers))
+	if len(producers) < 12 {
+		t.Fatalf("only %d producers covered; there are 12", len(producers))
 	}
 	for _, p := range producers {
 		for _, wrote := range []bool{false, true} {

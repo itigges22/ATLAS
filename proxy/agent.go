@@ -1960,14 +1960,6 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				clearBrokenArtifactState(ctx, st, parsed.Name, intentArgs)
 			}
 
-			// Force-stop after destructive operations that shouldn't have
-			// follow-up. The sentinel is internal control flow — strip it
-			// before any event is emitted so it never reaches the client.
-			forceDone := result.Error == "__FORCE_DONE__"
-			if forceDone {
-				result.Error = ""
-			}
-
 			st.pendingToolCall = ""
 			ctx.Stream("tool_result", map[string]interface{}{
 				"tool":    parsed.Name,
@@ -1988,21 +1980,6 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					"error":   truncateStr(result.Error, 120),
 				},
 			})
-
-			if forceDone {
-				// The destructive op already happened on disk. Say so rather
-				// than ending the stream on a bare tool_result: a client has
-				// no way to tell a completed deletion from a dropped
-				// connection.
-				// The file operation ran. Whether REMOVING the file was the
-				// task is not knowable here, so this never claims completion:
-				// a delete authorising a done is the pair-1 defect.
-				emitTerminal(ctx, st, TerminalIncomplete, "file_operation_no_task_intent",
-					"The file operation ran and the session stopped there. Whether removing "+
-						"that file was the whole task is not something this run established, "+
-						"so it is not reported as finished."+liveBackgroundJobNote(ctx))
-				return nil
-			}
 
 			// Track productive state changes — write/edit/delete that landed.
 			// Used below to soften the error-loop exit when work was completed
