@@ -287,6 +287,8 @@ closes the gap Phase 2B left: a client that reads only `summary` — every clien
 written before `status` existed — now reads the same truth as one that reads
 both.
 
+A call refused by the pre-execution workspace-boundary check counts as the failed call it is, so a session whose workspace root cannot be opened stops in three turns instead of repeating one refusal until its budget runs out. `workspacePathFields` is the single registry of which arguments each tool treats as a path; the tests enumerate it rather than keeping a second copy.
+
 The workspace hazard is a set keyed by job identity, not a count of start attempts. A `run_background` the tool refused before dispatch owns nothing; a live job owns exactly one hazard that a duplicate id cannot double-raise; a job already gone by the settle window is settled immediately, with the same tracked-path rehash any exit requires; and a start that may have dispatched but returned no usable id raises an unidentified hazard nothing can reap, because a session cannot call the workspace quiet when it does not know what is running in it. Settling one job clears only that job, is idempotent, and cannot underflow.
 
 A deliverable with no applicable checker can still demonstrate completion, but only as existence-and-currency evidence and never relabelled as a syntax pass: the path must be prose (`isDocumentAsset` — the set `stripOneFenceLayer` has always used), the ledger must already own it, its record must read exactly `none`/`not_applicable`, and that record must describe the bytes on disk right now. An unsupported language, an unknown extension, or a template with embedded content all fall outside it, because "no checker ran" means something different for those than for a text file.

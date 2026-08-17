@@ -696,31 +696,36 @@ func readWorkspaceDir(ctx *AgentContext, path string) ([]os.DirEntry, error) {
 // validateToolWorkspacePaths applies workspace containment before any tool
 // handler can touch the filesystem. It is used by both the agent loop and the
 // shared dispatcher so parallel and direct dispatch paths follow one policy.
+// workspacePathFields is the single registry of which arguments each tool
+// treats as a workspace path. Package-scoped so a test can enumerate the real
+// owner instead of maintaining a second copy that drifts.
+var workspacePathFields = map[string][]string{
+	"read_file":       {"path"},
+	"outline_file":    {"path"},
+	"write_file":      {"path"},
+	"edit_file":       {"path"},
+	"structural_edit": {"path"},
+	// Both were absent, so the workspace-containment pre-check never ran on
+	// them even though their doc comments claim "same gates as every other
+	// write". Mitigated transitively by the read-first requirement, but the
+	// explicit gate belongs here.
+	"insert_after":   {"path"},
+	"replace_lines":  {"path"},
+	"delete_file":    {"path"},
+	"move_file":      {"source", "destination"},
+	"search_files":   {"path"},
+	"find_file":      {"path"},
+	"list_directory": {"path"},
+	"run_command":    {"cwd"},
+	"run_background": {"cwd"},
+}
+
 func validateToolWorkspacePaths(name string, args json.RawMessage, ctx *AgentContext) string {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(args, &fields); err != nil {
 		return ""
 	}
-	keys := map[string][]string{
-		"read_file":       {"path"},
-		"outline_file":    {"path"},
-		"write_file":      {"path"},
-		"edit_file":       {"path"},
-		"structural_edit": {"path"},
-		// Both were absent, so the workspace-containment pre-check never ran on
-		// them even though their doc comments claim "same gates as every other
-		// write". Mitigated transitively by the read-first requirement, but the
-		// explicit gate belongs here.
-		"insert_after":   {"path"},
-		"replace_lines":  {"path"},
-		"delete_file":    {"path"},
-		"move_file":      {"source", "destination"},
-		"search_files":   {"path"},
-		"find_file":      {"path"},
-		"list_directory": {"path"},
-		"run_command":    {"cwd"},
-		"run_background": {"cwd"},
-	}
+	keys := workspacePathFields
 	for _, key := range keys[name] {
 		raw, ok := fields[key]
 		if !ok {

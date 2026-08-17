@@ -3863,3 +3863,509 @@ func TestBackgroundHazardLifecycle(t *testing.T) {
 		}
 	})
 }
+
+// --- Workspace-boundary refusals must be bounded -----------------------------
+//
+// The retained C1 session ran host-side against a workspace root that did not
+// exist, so every byte-identical find_file was refused by the boundary check
+// before dispatch. That branch bounced, incremented consecutiveErrors, and
+// continued -- past the counter's only reader, past the retry ban and past the
+// repeat detector -- so 60 identical calls produced no intervention, no log
+// line and no terminal of its own. This is the fourth early-refusal branch
+// with that shape; the per-path ban, the retry ban and the fenced bounce were
+// the first three.
+
+const wsCeiling = 30
+
+// wsRefusalFixture drives the real loop with MaxTurns=0 against a workspace
+// root that cannot be opened. The ceiling lives in the server, so nothing
+// sleeps and an unbounded loop fails immediately.
+func wsRefusalFixture(t *testing.T, tool string, args map[string]interface{}) (
+	*AgentContext, *int, map[string]int, map[string]string, string) {
+	t.Helper()
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "missing-root") // never created
+	turns := 0
+	census := map[string]int{}
+	terminal := map[string]string{}
+	var mu sync.Mutex
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
+			return
+		case strings.HasSuffix(r.URL.Path, "/execute"):
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "stdout": "", "exit_code": 0})
+			return
+		case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
+			http.NotFound(w, r)
+			return
+		}
+		mu.Lock()
+		i := turns
+		turns++
+		mu.Unlock()
+		if i >= wsCeiling {
+			http.Error(w, "turn ceiling exceeded", http.StatusInsufficientStorage)
+			return
+		}
+		call, _ := json.Marshal(map[string]interface{}{
+			"type": "tool_call", "name": tool, "args": args})
+		d, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"delta": map[string]string{"content": string(call)}}}})
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+	}))
+	t.Cleanup(srv.Close)
+
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
+	ctx.PermissionMode = PermissionYolo
+	ctx.TrustMode = trustFullyTrusted
+	ctx.MaxTurns = 0
+	firstRefusal := ""
+	ctx.StreamFn = func(et string, data interface{}) {
+		b, _ := json.Marshal(data)
+		mu.Lock()
+		defer mu.Unlock()
+		census[et]++
+		if et == "tool_result" && firstRefusal == "" {
+			firstRefusal = string(b)
+		}
+		if et == "done" {
+			var m map[string]string
+			json.Unmarshal(b, &m)
+			for k, v := range m {
+				terminal[k] = v
+			}
+		}
+	}
+	runAgentLoop(ctx, "Add a /health route to app.py.")
+	return ctx, &turns, census, terminal, firstRefusal
+}
+
+// The retained C1 shape, exactly.
+func TestRepeatedWorkspaceRefusalIsBounded(t *testing.T) {
+	ctx, turns, census, terminal, refusal := wsRefusalFixture(t, "find_file",
+		map[string]interface{}{"path": "app.py"})
+
+	t.Logf("turns=%d tool_call=%d tool_result=%d status=%q reason=%q",
+		*turns, census["tool_call"], census["tool_result"],
+		terminal["status"], terminal["reason"])
+	t.Logf("refusal: %.140s", refusal)
+
+	if *turns >= wsCeiling {
+		t.Fatalf("the loop consumed %d main-loop turns without a terminal; production "+
+			"runs uncapped and spent the whole session budget here", *turns)
+	}
+	if census["done"] != 1 {
+		t.Fatalf("%d terminal events", census["done"])
+	}
+	st := NormalizeTerminalStatus(terminal["status"])
+	if st.Completed() {
+		t.Fatalf("a run that never dispatched anything reported %q", terminal["status"])
+	}
+	if terminal["reason"] != "repeated_refusal" {
+		t.Errorf("reason = %q, want repeated_refusal from the existing failure policy",
+			terminal["reason"])
+	}
+	// The refusal the model reads is unchanged.
+	if !strings.Contains(refusal, "workspace root") {
+		t.Errorf("the boundary diagnostic changed: %s", refusal)
+	}
+	if census["tool_call"] != census["tool_result"] {
+		t.Errorf("call/result balance: %d vs %d", census["tool_call"], census["tool_result"])
+	}
+	// Nothing was dispatched, created, or read.
+	if _, err := os.Stat(ctx.WorkingDir); err == nil {
+		t.Error("the missing workspace root was created")
+	}
+	if len(ctx.Ledger) != 0 {
+		t.Errorf("a refused path entered the ledger: %v", ctx.Ledger)
+	}
+}
+
+// Every tool the validator guards must be bounded the same way. The tool list
+// is ENUMERATED from workspacePathFields -- the registry the validator itself
+// keys on -- so a tool added there without a bounded refusal fails here rather
+// than silently gaining the old unaccounted behaviour.
+func TestEveryWorkspaceGuardedToolRefusesBoundedly(t *testing.T) {
+	// Non-path arguments a tool needs before its path is even looked at.
+	// Anything enumerated below must appear here, which is what makes a new
+	// tool fail loudly instead of being skipped.
+	extra := map[string]map[string]interface{}{
+		"read_file":       {},
+		"outline_file":    {},
+		"write_file":      {"content": "x = 1\n"},
+		"edit_file":       {"old_str": "a", "new_str": "b"},
+		"structural_edit": {"selector": "function:f", "content": "def f():\n    pass\n"},
+		"insert_after":    {"line": 1, "content": "x = 1"},
+		"replace_lines":   {"start_line": 1, "end_line": 1, "expected_first_line": "a", "expected_last_line": "a", "content": "b"},
+		"delete_file":     {},
+		"move_file":       {},
+		"search_files":    {"pattern": "def "},
+		"find_file":       {"pattern": "app"},
+		"list_directory":  {},
+		"run_command":     {"command": "ls"},
+		"run_background":  {"command": "python app.py"},
+	}
+	if len(workspacePathFields) != 13 {
+		t.Logf("validator now guards %d tools (was 13)", len(workspacePathFields))
+	}
+	names := make([]string, 0, len(workspacePathFields))
+	for name := range workspacePathFields {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			shape, known := extra[name]
+			if !known {
+				t.Fatalf("%s is guarded by the validator but this table has no argument "+
+					"shape for it; give it one so its refusal is proven bounded", name)
+			}
+			args := map[string]interface{}{}
+			for k, v := range shape {
+				args[k] = v
+			}
+			// Every path field the validator keys on, pointed at the same
+			// target so repeated refusals share one failure identity.
+			for _, field := range workspacePathFields[name] {
+				args[field] = "app.py"
+			}
+			ctx, turns, census, terminal, refusal := wsRefusalFixture(t, name, args)
+
+			t.Logf("%-16s turns=%d status=%q reason=%q", name, *turns,
+				terminal["status"], terminal["reason"])
+			if *turns >= wsCeiling {
+				t.Fatalf("%s: %d turns without a terminal", name, *turns)
+			}
+			if census["done"] != 1 {
+				t.Errorf("%d terminal events", census["done"])
+			}
+			if NormalizeTerminalStatus(terminal["status"]).Completed() {
+				t.Errorf("a session that only ever refused reported %q", terminal["status"])
+			}
+			if census["tool_call"] != census["tool_result"] {
+				t.Errorf("call/result balance: %d vs %d",
+					census["tool_call"], census["tool_result"])
+			}
+			// Refused before dispatch: nothing ran, nothing landed, and the
+			// missing root was not created.
+			if _, err := os.Stat(ctx.WorkingDir); err == nil {
+				t.Error("the missing workspace root was created")
+			}
+			if len(ctx.Ledger) != 0 {
+				t.Errorf("a refused path entered the ledger: %v", ctx.Ledger)
+			}
+			if refusal == "" {
+				t.Error("no refusal reached the model")
+			}
+		})
+	}
+}
+
+// Healthy-workspace controls: the aligned route is untouched.
+func TestAlignedWorkspaceRoutesAreUnchanged(t *testing.T) {
+	base := func(t *testing.T, plan func(i int, prompt string) map[string]interface{}) (
+		*AgentContext, *int, map[string]int, map[string]string, string) {
+		t.Helper()
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "app.py"), []byte("A = 1\n"), 0o644)
+		turns := 0
+		census := map[string]int{}
+		terminal := map[string]string{}
+		first := ""
+		var mu sync.Mutex
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
+				http.Error(w, "unavailable", http.StatusServiceUnavailable)
+				return
+			case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+				json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
+				return
+			case strings.HasSuffix(r.URL.Path, "/execute"):
+				var in struct{ Code string }
+				json.NewDecoder(r.Body).Decode(&in)
+				if strings.Contains(in.Code, ".atlas-mount-probe") {
+					b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
+					json.NewEncoder(w).Encode(map[string]interface{}{
+						"success": true, "stdout": string(b), "exit_code": 0})
+					return
+				}
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": true, "stdout": "", "exit_code": 0})
+				return
+			case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
+				http.NotFound(w, r)
+				return
+			}
+			raw, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			i := turns
+			turns++
+			mu.Unlock()
+			if i >= wsCeiling {
+				http.Error(w, "ceiling", http.StatusInsufficientStorage)
+				return
+			}
+			call, _ := json.Marshal(plan(i, string(raw)))
+			d, _ := json.Marshal(map[string]interface{}{
+				"choices": []map[string]interface{}{
+					{"delta": map[string]string{"content": string(call)}}}})
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+		}))
+		t.Cleanup(srv.Close)
+		ctx := NewAgentContext(dir, Tier2Medium)
+		ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
+		ctx.PermissionMode = PermissionYolo
+		ctx.TrustMode = trustFullyTrusted
+		ctx.VerifyOnHost = true
+		ctx.MaxTurns = 0
+		ctx.StreamFn = func(et string, data interface{}) {
+			b, _ := json.Marshal(data)
+			mu.Lock()
+			defer mu.Unlock()
+			census[et]++
+			if et == "tool_result" && first == "" {
+				first = string(b)
+			}
+			if et == "done" {
+				var m map[string]string
+				json.Unmarshal(b, &m)
+				for k, v := range m {
+					terminal[k] = v
+				}
+			}
+		}
+		runAgentLoop(ctx, "Look at app.py.")
+		return ctx, &turns, census, terminal, first
+	}
+
+	t.Run("aligned find_file dispatches and succeeds", func(t *testing.T) {
+		_, turns, _, terminal, first := base(t, func(i int, _ string) map[string]interface{} {
+			if i == 0 {
+				return map[string]interface{}{"type": "tool_call", "name": "find_file",
+					"args": map[string]string{"pattern": "app"}}
+			}
+			return map[string]interface{}{"type": "done", "summary": "found app.py"}
+		})
+		t.Logf("aligned success: turns=%d first=%.90s", *turns, first)
+		if !strings.Contains(first, `"success":true`) {
+			t.Errorf("a well-formed find_file did not dispatch: %s", first)
+		}
+		if strings.Contains(first, "workspace root") {
+			t.Error("an aligned call took the boundary-refusal path")
+		}
+		_ = terminal
+	})
+
+	t.Run("repeated aligned find_file uses the retry policy, not the boundary path", func(t *testing.T) {
+		_, turns, _, terminal, first := base(t, func(i int, _ string) map[string]interface{} {
+			return map[string]interface{}{"type": "tool_call", "name": "find_file",
+				"args": map[string]string{"path": "app.py"}}
+		})
+		t.Logf("aligned repeat: turns=%d status=%q reason=%q", *turns,
+			terminal["status"], terminal["reason"])
+		if strings.Contains(first, "workspace root") {
+			t.Fatal("an aligned repeat was refused by the boundary check")
+		}
+		if !strings.Contains(first, "not a directory") {
+			t.Errorf("the aligned diagnostic changed: %.140s", first)
+		}
+		if terminal["reason"] != "repeated_refusal" {
+			t.Errorf("reason = %q", terminal["reason"])
+		}
+	})
+
+	t.Run("path escape and deny-list diagnostics are verbatim", func(t *testing.T) {
+		for _, c := range []struct{ name, path, want string }{
+			{"escape", "../outside.py", "outside the workspace"},
+			{"deny-list", ".env", "refused"},
+		} {
+			_, _, _, _, first := base(t, func(i int, _ string) map[string]interface{} {
+				if i == 0 {
+					return map[string]interface{}{"type": "tool_call", "name": "write_file",
+						"args": map[string]string{"path": c.path, "content": "x = 1\n"}}
+				}
+				return map[string]interface{}{"type": "done", "summary": "done"}
+			})
+			t.Logf("%s: %.120s", c.name, first)
+			if !strings.Contains(strings.ToLower(first), c.want) {
+				t.Errorf("%s diagnostic changed: %s", c.name, first)
+			}
+		}
+	})
+}
+
+// alignedRepeatFixture: healthy workspace, one tool repeated byte-identically.
+func alignedRepeatFixture(t *testing.T, tool string, args map[string]interface{}, seed bool) (
+	*AgentContext, *int, map[string]int, map[string]string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	if seed {
+		os.WriteFile(filepath.Join(dir, "app.py"),
+			[]byte(strings.Repeat("A = 1\n", 40)), 0o644)
+	}
+	turns := 0
+	census := map[string]int{}
+	terminal := map[string]string{}
+	first := ""
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
+			return
+		case strings.HasSuffix(r.URL.Path, "/execute"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			if strings.Contains(in.Code, ".atlas-mount-probe") {
+				b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": true, "stdout": string(b), "exit_code": 0})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "stdout": "", "exit_code": 0})
+			return
+		case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
+			http.NotFound(w, r)
+			return
+		}
+		mu.Lock()
+		i := turns
+		turns++
+		mu.Unlock()
+		if i >= wsCeiling {
+			http.Error(w, "ceiling", http.StatusInsufficientStorage)
+			return
+		}
+		call, _ := json.Marshal(map[string]interface{}{
+			"type": "tool_call", "name": tool, "args": args})
+		d, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"delta": map[string]string{"content": string(call)}}}})
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+	}))
+	t.Cleanup(srv.Close)
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
+	ctx.PermissionMode = PermissionYolo
+	ctx.TrustMode = trustFullyTrusted
+	ctx.MaxTurns = 0
+	ctx.StreamFn = func(et string, data interface{}) {
+		b, _ := json.Marshal(data)
+		mu.Lock()
+		defer mu.Unlock()
+		census[et]++
+		if et == "tool_result" && first == "" {
+			first = string(b)
+		}
+		if et == "done" {
+			var m map[string]string
+			json.Unmarshal(b, &m)
+			for k, v := range m {
+				terminal[k] = v
+			}
+		}
+	}
+	runAgentLoop(ctx, "Rewrite app.py.")
+	return ctx, &turns, census, terminal, first
+}
+
+// Structural guard against a fifth instance. Every pre-execution bounce in the
+// tool-call branch must either be accounted (recorded and measured against the
+// stopping rule) or bounded by its own budget. Anything else is listed here
+// explicitly, with what is known about it, so a NEW unaccounted refusal fails
+// this test rather than shipping as another unbounded loop.
+//
+// Keyed on the rejection's own wording rather than line numbers, so ordinary
+// edits above it do not break the guard.
+func TestEveryPreExecutionBounceIsAccountedOrBounded(t *testing.T) {
+	src, err := os.ReadFile("agent.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(src), "\n")
+	start, ban := -1, -1
+	for i, l := range lines {
+		if start < 0 && strings.TrimSpace(l) == `case "tool_call":` && i > 1100 {
+			start = i
+		}
+		if start >= 0 && ban < 0 && strings.Contains(l, "identicalRetryRefusal(") {
+			ban = i
+		}
+	}
+	if start < 0 || ban < 0 {
+		t.Fatal("could not locate the tool-call branch and its accounting boundary")
+	}
+
+	// Bounces that are deliberately NOT failure-accounted, each with the
+	// mechanism that bounds them instead. A new entry needs a deliberate
+	// decision; an unlisted one fails.
+	known := map[string]string{
+		// Anchors are text visible in the SOURCE around the bounce, not the
+		// runtime message, because several rejections are composed elsewhere.
+		"isUnreadOverwrite(":                   "UNBOUNDED — same shape as the workspace refusal, measured at 31 turns; reported, not bundled",
+		"write_file is for creating new files": "UNBOUNDED — same shape; reported, not bundled",
+		"foregroundServerRejectionWithSource(": "unmeasured; reported",
+		"rejecting run_command":                "unmeasured; reported",
+		"rejecting run_background":             "unmeasured; reported",
+		"Your output was truncated":            "bounded by its own consecutiveErrors>=3 stop",
+		"fencedRunFirstRecovery(":              "bounded: one recovery per canonical path",
+		"fencedChannelRecovery(":               "bounded: one offer per canonical path",
+		"no fenced block followed":             "accounted since the fenced-bounce fix",
+		"toolBanNote(":                         "accounted by the per-path ban branch",
+		"identicalRetryRefusal(":               "accounted by the retry-ban branch",
+	}
+
+	var unlisted []string
+	for i := start; i < ban; i++ {
+		if !strings.Contains(lines[i], "st.bounceToolCall(") {
+			continue
+		}
+		// The rejection text is on this line or the few around it.
+		window := strings.Join(lines[max(start, i-16):min(len(lines), i+6)], "\n")
+		// Accounted right here?
+		after := strings.Join(lines[i:min(len(lines), i+30)], "\n")
+		if strings.Contains(after, "shouldStopForFailures(") ||
+			strings.Contains(after, "recordFailedToolCall(") {
+			continue
+		}
+		if strings.Contains(window, "chargeBounce(") {
+			continue
+		}
+		matched := false
+		for phrase := range known {
+			if strings.Contains(window, phrase) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			unlisted = append(unlisted, fmt.Sprintf("agent.go:%d", i+1))
+		}
+	}
+	if len(unlisted) > 0 {
+		t.Errorf("pre-execution bounces that are neither accounted nor bounded nor "+
+			"listed: %v — a refusal the model can repeat forever is how the "+
+			"workspace-boundary loop happened; account for it or record why it "+
+			"is bounded", unlisted)
+	}
+	t.Logf("audited pre-execution bounces between agent.go:%d and the retry ban at agent.go:%d",
+		start+1, ban+1)
+}

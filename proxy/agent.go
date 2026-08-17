@@ -1200,7 +1200,37 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// a path. executeToolCall repeats this check for parallel dispatch.
 			if rejection := validateToolWorkspacePaths(parsed.Name, parsed.Args, ctx); rejection != "" {
 				st.bounceToolCall(ctx, parsed.Name, rejection)
-				consecutiveErrors++
+				// A refusal here is a failed call, and this branch returned
+				// before everything that counts one -- including the only
+				// reader of the counter it incremented. It is the fourth
+				// early-refusal branch with that shape, after the per-path
+				// ban, the retry ban and the fenced bounce.
+				//
+				// Measured: a session whose workspace root did not exist
+				// refused the same byte-identical find_file 60 times over its
+				// whole budget, with no intervention, no log line and no
+				// terminal of its own.
+				//
+				// A run that ended because the client left or the deadline
+				// fired is not a model repeating itself, and those paths keep
+				// their own terminals.
+				if ctx.Ctx == nil || ctx.Ctx.Err() == nil {
+					recordFailedToolCall(ctx, parsed.Name, intentArgs, rejection)
+					consecutiveErrors++
+					totalFailures++
+					failPath := workspaceRefusalPath(ctx, parsed.Name, parsed.Args)
+					ctx.RecentFailurePaths = appendRecentFailurePath(ctx.RecentFailurePaths, failPath)
+					if shouldStopForFailures(totalFailures, consecutiveErrors, ctx.RecentFailurePaths) {
+						log.Printf("[agent] breaking at turn %d: %d refused/failed calls, %d consecutive on %q",
+							turn, totalFailures, consecutiveErrors, failPath)
+						endStream(TerminalStopped, "repeated_refusal",
+							repeatedRefusalSummary(parsed.Name, failPath, st.madeProductiveChange)+
+								liveBackgroundJobNote(ctx))
+						return nil
+					}
+				} else {
+					consecutiveErrors++
+				}
 				continue
 			}
 
@@ -6913,4 +6943,34 @@ func settleBackgroundHazard(ctx *AgentContext) []string {
 		invalidateTrackedValidation(ctx)
 	}
 	return live
+}
+
+// workspaceRefusalPath names the target a boundary refusal was about, for the
+// path-aware breaker. It uses the same field map the validator itself keys on,
+// so the two cannot disagree about which argument is the path, and it
+// canonicalises the same way every other failure identity does -- a refusal
+// spelled ./app.py is the same refusal as app.py.
+//
+// A workspace root that cannot be opened resolves nothing, so the canonical
+// form falls back to the raw spelling rather than inventing a path inside a
+// directory that does not exist.
+func workspaceRefusalPath(ctx *AgentContext, name string, args json.RawMessage) string {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(args, &fields) != nil {
+		return name
+	}
+	for _, key := range workspacePathFields[name] {
+		raw, ok := fields[key]
+		if !ok {
+			continue
+		}
+		var value string
+		if json.Unmarshal(raw, &value) != nil || strings.TrimSpace(value) == "" {
+			continue
+		}
+		return filepath.Clean(strings.TrimSpace(value))
+	}
+	// No usable path field: the tool itself is the identity, so repeated
+	// refusals of the same tool still converge on one failure target.
+	return name
 }
