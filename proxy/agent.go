@@ -192,12 +192,20 @@ type runState struct {
 	// verify-then-modify, warned-write and stale-evidence holes (third-party
 	// audit finding: evidence must be a contract tied to the final artifact).
 	verifiedHashes map[string]string
-	// pendingWarnedRun holds paths whose LAST landed write carried a parse
-	// warning and has not been executed since. A warned landing is pending
-	// work, not advice: measured, a session wrote six times without a single
-	// run, ignoring "Run it now" in four consecutive warnings, then died on
-	// edit repeats. Further writes to such a path bounce until any
+	// pendingWarnedRun is the SET of paths whose last landed write carried a
+	// parse warning and has not been executed since. A warned landing is
+	// pending work, not advice: measured, a session wrote six times without a
+	// single run, ignoring "Run it now" in four consecutive warnings, then
+	// died on edit repeats. Further writes to such a path bounce until any
 	// verification command runs.
+	//
+	// Membership IS the warning. It was briefly a map of booleans written
+	// with both values, and the exit gate reads it by ranging over keys, so a
+	// clean landing stored false and was then announced to the model as "on
+	// disk with a parse warning ... as written it cannot work" over a file
+	// that parsed. Both frozen Stage-1 sessions that spent themselves
+	// rewriting an already-valid file took that gate at turn 1. Go through
+	// markWarnedRun and the value is never anything but true.
 	pendingWarnedRun map[string]bool
 	// Phase 4B: how many times a raw @fenced write for a canonical path has
 	// met the run-first demand, and whether that path's one recovery has been
@@ -1971,10 +1979,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				if json.Unmarshal(parsed.Args, &wf) == nil {
 					var out WriteFileOutput
 					warned := json.Unmarshal(result.Data, &out) == nil && out.Warning != ""
-					if st.pendingWarnedRun == nil {
-						st.pendingWarnedRun = map[string]bool{}
-					}
-					st.pendingWarnedRun[wf.Path] = warned
+					st.markWarnedRun(ctx, wf.Path, warned)
 				}
 			}
 			if parsed.Name == "run_command" && result != nil {
@@ -6799,6 +6804,42 @@ func clearBrokenArtifactState(ctx *AgentContext, st *runState, name string, args
 	for k := range st.brokenArtifactRecovered {
 		if strings.HasPrefix(k, prefix) {
 			delete(st.brokenArtifactRecovered, k)
+		}
+	}
+}
+
+// markWarnedRun records or discharges a path's pending warned landing.
+//
+// One invariant, in one place: a warned landing puts the path in the set, and
+// anything else takes it out. Storing "not warned" as a value is what let a
+// key-only reader announce a parse warning over a file that parses.
+func (s *runState) markWarnedRun(ctx *AgentContext, path string, warned bool) {
+	if !warned {
+		s.clearWarnedRun(ctx, path)
+		return
+	}
+	if s.pendingWarnedRun == nil {
+		s.pendingWarnedRun = map[string]bool{}
+	}
+	s.pendingWarnedRun[path] = true
+}
+
+// clearWarnedRun drops every spelling of the same file.
+//
+// The set is keyed on the path as the model sent it, because the gate quotes
+// it back ("Run it first -- `python3 solve.py`") and executionAttempt matches
+// the command against it. So the identity used to DISCHARGE is the ledger's
+// canonical one, which is the identity the rest of the run already uses: a
+// clean rewrite of ./solve.py has to retire solve.py's warning, or the mark
+// outlives the bytes it describes.
+func (s *runState) clearWarnedRun(ctx *AgentContext, path string) {
+	if len(s.pendingWarnedRun) == 0 {
+		return
+	}
+	key := ledgerKey(ctx, path)
+	for p := range s.pendingWarnedRun {
+		if ledgerKey(ctx, p) == key {
+			delete(s.pendingWarnedRun, p)
 		}
 	}
 }

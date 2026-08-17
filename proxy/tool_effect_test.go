@@ -856,9 +856,19 @@ func TestDirectMutatorOutcomeTable(t *testing.T) {
 //
 // Verified against parent 5676e49 when Phase 3A landed: the same 52 events,
 // byte-identical. Phase 2B changed exactly ONE of those lines -- the terminal
-// gained the additive `status` and `reason` keys -- and the other 51 are still
-// byte-for-byte the parent's, with the terminal's own `summary` unchanged.
-const ledgerLoopTranscriptHash = "681a6ecf3835b6617c862553ca781a0e007d8d37fecdf6e31e5f1f51586653ca"
+// gained the additive `status` and `reason` keys -- and the other 51 were
+// still byte-for-byte the parent's, with the terminal's own `summary`
+// unchanged.
+//
+// The 52-event transcript carried a defect of its own, pinned along with
+// everything else: `A = 1\n` was written cleanly and the exit gate still
+// announced "solve.py warned and never executed" three times, because the
+// warned-run set stored a false value that a key-only reader took as a live
+// warning. Removing that drops 18 events -- three bounces, their tool
+// results, and the three turns spent on them -- and the run finishes at turn
+// 4 instead of turn 7. The 34 that remain are the parent's, in order and
+// byte-for-byte, which is what this pin is for.
+const ledgerLoopTranscriptHash = "77fb8fd44901a0573bcf752e8d49bc77e19d2c3123770cc8c853d1a11cc0a908"
 
 // prompt_tokens is elided for a fixture reason rather than a timing one: the
 // workspace path is part of the system prompt and t.TempDir() varies in
