@@ -1827,6 +1827,14 @@ func TestIdenticalFencedIntentIsOneSignature(t *testing.T) {
 }
 
 // Spelling the same target two ways must not buy a fresh budget.
+//
+// Measured through the failure window rather than the repeat detector: once
+// ignored write_file steering is failure-accounted, three refusals on one
+// canonical target end the run before the detector's own threshold is
+// reached. The property is unchanged and enforced sooner -- the two spellings
+// have to land on ONE target for that to happen, which is what this asserts.
+// TestDifferentFencedTargetsStayIndependent is the other half: distinct
+// targets must not collapse the same way.
 func TestCanonicalSpellingsShareTheIntentSignature(t *testing.T) {
 	dir := t.TempDir()
 	turns, fences := 0, 0
@@ -1844,10 +1852,23 @@ func TestCanonicalSpellingsShareTheIntentSignature(t *testing.T) {
 	if err := runAgentLoop(ctx, "Write solve.py."); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("turns=%d interventions=%d", turns, census["agent_repeat_intervention"])
-	if census["agent_repeat_intervention"] < 2 {
-		t.Errorf("alternating spellings evaded repetition tracking (%d interventions in %d turns)",
-			census["agent_repeat_intervention"], turns)
+	t.Logf("turns=%d interventions=%d status=%q reason=%q fences=%d", turns,
+		census["agent_repeat_intervention"], terminal["status"], terminal["reason"], fences)
+	if turns > 4 {
+		t.Errorf("alternating spellings evaded repetition tracking (%d turns)", turns)
+	}
+	if terminal["reason"] != "repeated_refusal" {
+		t.Errorf("reason=%q, want repeated_refusal", terminal["reason"])
+	}
+	for _, p := range ctx.RecentFailurePaths {
+		if p != "solve.py" {
+			t.Errorf("the two spellings were counted as different targets: %v",
+				ctx.RecentFailurePaths)
+			break
+		}
+	}
+	if len(ctx.RecentFailurePaths) == 0 {
+		t.Error("no refusal was accounted at all")
 	}
 }
 

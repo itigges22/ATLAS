@@ -800,6 +800,35 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 		emitTerminal(ctx, st, status, reason, summary)
 	}
 
+	// Several branches refuse a call before dispatch and continue. Every one of
+	// them is a failed call the model may ignore forever, so each has to reach
+	// the same path-aware accounting an executed failure reaches -- the raw
+	// pre-resolution intent, the canonical target, the counters, and the
+	// bounded failure policy that reads them. Returns true when the caller must
+	// stop; the caller keeps its own diagnostic, which is unchanged.
+	//
+	// A run that ended because the client left or the deadline fired is not a
+	// model repeating itself, and those paths keep their own terminals.
+	accountRefusedCall := func(name string, intent json.RawMessage, rejection, failPath string) bool {
+		if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
+			consecutiveErrors++
+			return false
+		}
+		recordFailedToolCall(ctx, name, intent, rejection)
+		consecutiveErrors++
+		totalFailures++
+		ctx.RecentFailurePaths = appendRecentFailurePath(ctx.RecentFailurePaths, failPath)
+		if !shouldStopForFailures(totalFailures, consecutiveErrors, ctx.RecentFailurePaths) {
+			return false
+		}
+		log.Printf("[agent] breaking at turn %d: %d refused/failed calls, %d consecutive on %q",
+			st.turn, totalFailures, consecutiveErrors, failPath)
+		endStream(TerminalStopped, "repeated_refusal",
+			repeatedRefusalSummary(name, failPath, st.madeProductiveChange)+
+				liveBackgroundJobNote(ctx))
+		return true
+	}
+
 	for turn := 0; ctx.MaxTurns <= 0 || turn < ctx.MaxTurns; turn++ {
 		st.turn = turn
 		// Budget hint — only relevant when there IS a turn cap.
@@ -1210,26 +1239,9 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				// refused the same byte-identical find_file 60 times over its
 				// whole budget, with no intervention, no log line and no
 				// terminal of its own.
-				//
-				// A run that ended because the client left or the deadline
-				// fired is not a model repeating itself, and those paths keep
-				// their own terminals.
-				if ctx.Ctx == nil || ctx.Ctx.Err() == nil {
-					recordFailedToolCall(ctx, parsed.Name, intentArgs, rejection)
-					consecutiveErrors++
-					totalFailures++
-					failPath := workspaceRefusalPath(ctx, parsed.Name, parsed.Args)
-					ctx.RecentFailurePaths = appendRecentFailurePath(ctx.RecentFailurePaths, failPath)
-					if shouldStopForFailures(totalFailures, consecutiveErrors, ctx.RecentFailurePaths) {
-						log.Printf("[agent] breaking at turn %d: %d refused/failed calls, %d consecutive on %q",
-							turn, totalFailures, consecutiveErrors, failPath)
-						endStream(TerminalStopped, "repeated_refusal",
-							repeatedRefusalSummary(parsed.Name, failPath, st.madeProductiveChange)+
-								liveBackgroundJobNote(ctx))
-						return nil
-					}
-				} else {
-					consecutiveErrors++
+				if accountRefusedCall(parsed.Name, intentArgs, rejection,
+					workspaceRefusalPath(ctx, parsed.Name, parsed.Args)) {
+					return nil
 				}
 				continue
 			}
@@ -1466,6 +1478,19 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 								wfInput.Path)
 							log.Printf("[agent] rejecting write_file over unread existing %q (%d lines)", wfInput.Path, existingLines)
 							st.bounceToolCall(ctx, "write_file", rejection)
+							// Steering, not a verdict on the work: the model
+							// is being sent to a better tool. But a model that
+							// ignores the steer repeats the same refused write
+							// forever -- measured at 31 turns in a healthy
+							// workspace with no terminal of ATLAS's own -- so
+							// the ignored steer is accounted like any other
+							// refused call. A model that follows it pays
+							// nothing further: the next call is a different
+							// action on the path and clears the state.
+							if accountRefusedCall("write_file", intentArgs, rejection,
+								workspaceRefusalPath(ctx, "write_file", parsed.Args)) {
+								return nil
+							}
 							continue
 						}
 						if existingLines > 5 && !corrupted && !sessionOwned {
@@ -1489,6 +1514,12 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 							// %q quotes + escapes the path (go/log-injection).
 							log.Printf("[agent] rejecting write_file for existing %q (%d lines)", wfInput.Path, existingLines)
 							st.bounceToolCall(ctx, "write_file", rejection)
+							// Same shape, same bound as the unread-overwrite
+							// steer above.
+							if accountRefusedCall("write_file", intentArgs, rejection,
+								workspaceRefusalPath(ctx, "write_file", parsed.Args)) {
+								return nil
+							}
 							continue
 						}
 						if existingLines > 5 {
