@@ -4529,13 +4529,17 @@ func TestIgnoredWriteSteeringIsBounded(t *testing.T) {
 				t.Errorf("call/result balance: %d vs %d",
 					census["tool_call"], census["tool_result"])
 			}
-			// The file is untouched and nothing was read on the model's behalf.
-			got, _ := os.ReadFile(filepath.Join(dir, "app.py"))
+			// The file is untouched and unowned.
+			const wfPath = "app.py"
+			got, _ := os.ReadFile(filepath.Join(dir, wfPath))
 			if string(got) != steerSeed {
 				t.Errorf("the refused write reached disk: %q", got)
 			}
-			if !c.preRead && len(ctx.FilesRead) != 0 {
-				t.Errorf("something was read automatically: %v", ctx.FilesRead)
+			// The bounded recovery does show the file once, on purpose --
+			// see TestUnreadSteerRecoveryShowsTheFile. What it must never do
+			// is hand the model ownership of a file it did not write.
+			if ctx.SessionWrites[wfPath] {
+				t.Error("a refused write manufactured session ownership")
 			}
 		})
 	}
@@ -4677,5 +4681,230 @@ func TestSuccessClearsSteeringState(t *testing.T) {
 	if len(ctx.FailedToolCalls) != 1 {
 		t.Errorf("%d remembered rejections after the successful edit, want 1",
 			len(ctx.FailedToolCalls))
+	}
+}
+
+// --- One bounded recovery for ignored write_file steering --------------------
+
+// The unread steer is ignored once, so the second refusal shows the file the
+// model kept trying to destroy — through the same reader read_file uses, and
+// recording exactly what was shown. It is a read, not ownership.
+func TestUnreadSteerRecoveryShowsTheFile(t *testing.T) {
+	ctx, dir, turns, _, terminal, bounces := steerFixture(t,
+		map[string]string{"app.py": steerSeed},
+		func(i int, _ string) map[string]interface{} {
+			return map[string]interface{}{"type": "tool_call", "name": "write_file",
+				"args": map[string]string{"path": "app.py", "content": "print(7)\n"}}
+		})
+	t.Logf("unread recovery: turns=%d status=%q reason=%q",
+		*turns, terminal["status"], terminal["reason"])
+
+	// Gate events carry a truncated reason for display; the tool result the
+	// model actually receives carries the whole thing.
+	var offers, shown int
+	for _, b := range *bounces {
+		if strings.HasPrefix(b, "gate|") && strings.Contains(b, "here it is") {
+			offers++
+		}
+		if strings.HasPrefix(b, "tool_result|") && strings.Contains(b, "here it is") {
+			if strings.Contains(b, "range(3)") && strings.Contains(b, "print(solve())") {
+				shown++
+			}
+		}
+	}
+	if offers != 1 {
+		t.Errorf("%d recovery offers, want exactly one", offers)
+	}
+	if shown != 1 {
+		t.Errorf("the recovery claimed to show the file but the model received %d bodies", shown)
+	}
+	// The model has genuinely seen the body now, and owns nothing more.
+	if !ctx.WasFileRead(filepath.Join(dir, "app.py")) {
+		t.Error("the shown file was not recorded as read")
+	}
+	if ctx.SessionWrites["app.py"] {
+		t.Error("the recovery manufactured session ownership of the file")
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "app.py")); string(got) != steerSeed {
+		t.Errorf("the refused write reached disk: %q", got)
+	}
+	// The recovery buys a better turn, not an extra one.
+	if *turns > 3 {
+		t.Errorf("the recovery loosened the bound: %d turns", *turns)
+	}
+	if terminal["reason"] != "repeated_refusal" {
+		t.Errorf("reason=%q, want repeated_refusal", terminal["reason"])
+	}
+}
+
+// The already-read steer fails for a different reason, so it gets a different
+// recovery: one reminder, no reread, both edit tools still on the table.
+func TestAlreadyReadSteerRecoveryRemindsWithoutRereading(t *testing.T) {
+	_, _, turns, _, terminal, bounces := steerFixture(t,
+		map[string]string{"app.py": steerSeed},
+		func(i int, _ string) map[string]interface{} {
+			if i == 0 {
+				return map[string]interface{}{"type": "tool_call", "name": "read_file",
+					"args": map[string]string{"path": "app.py"}}
+			}
+			return map[string]interface{}{"type": "tool_call", "name": "write_file",
+				"args": map[string]string{"path": "app.py", "content": "print(7)\n"}}
+		})
+	t.Logf("already-read recovery: turns=%d status=%q reason=%q",
+		*turns, terminal["status"], terminal["reason"])
+
+	var offers int
+	for _, b := range *bounces {
+		if !strings.Contains(b, "You do not need to read it again") {
+			continue
+		}
+		if strings.HasPrefix(b, "gate|") {
+			offers++
+			continue
+		}
+		if !strings.HasPrefix(b, "tool_result|") {
+			continue
+		}
+		if strings.Contains(b, "range(3)") {
+			t.Error("the reminder re-showed a file the model had already read")
+		}
+		// Both edit tools stay on the table; neither is imposed.
+		for _, tool := range []string{"edit_file", "structural_edit"} {
+			if !strings.Contains(b, tool) {
+				t.Errorf("the reminder does not leave %s available", tool)
+			}
+		}
+	}
+	if offers != 1 {
+		t.Errorf("%d reminders, want exactly one", offers)
+	}
+}
+
+// The recovery is per path and released only by a materially different action
+// on that same path.
+func TestSteerRecoveryIsPerPathAndReleasedByProgress(t *testing.T) {
+	write := func(path string) map[string]interface{} {
+		return map[string]interface{}{"type": "tool_call", "name": "write_file",
+			"args": map[string]string{"path": path, "content": "print(7)\n"}}
+	}
+	ctx, _, _, _, _, bounces := steerFixture(t,
+		map[string]string{"app.py": steerSeed, "util.py": steerSeed},
+		func(i int, _ string) map[string]interface{} {
+			switch i {
+			case 0, 1: // app.py: steer, then the ignored repeat -> recovery
+				return write("app.py")
+			case 2: // a materially different action on app.py, which succeeds
+				return map[string]interface{}{"type": "tool_call", "name": "read_file",
+					"args": map[string]string{"path": "util.py"}}
+			default:
+				return map[string]interface{}{"type": "done", "summary": "done"}
+			}
+		})
+	appOffers := 0
+	utilOffers := 0
+	for _, b := range *bounces {
+		if !strings.HasPrefix(b, "gate|") {
+			continue
+		}
+		if strings.Contains(b, "here it is") || strings.Contains(b, "You do not need to read it again") {
+			if strings.Contains(b, "util.py") {
+				utilOffers++
+			} else {
+				appOffers++
+			}
+		}
+	}
+	t.Logf("per-path recovery: app=%d util=%d", appOffers, utilOffers)
+	if appOffers != 1 {
+		t.Errorf("%d recoveries for app.py, want one", appOffers)
+	}
+	if utilOffers != 0 {
+		t.Errorf("app.py's recovery spent util.py's: %d", utilOffers)
+	}
+	// Reading util.py is not progress on app.py, so app.py's state stands.
+	if !ctx.WasFileRead(ledgerKey(ctx, "app.py")) {
+		t.Error("the recovery did not leave app.py read")
+	}
+}
+
+// Causal: the recovery is what makes the difference. The model only leaves the
+// loop after it has actually been shown the file — before that it repeats the
+// same refused write, exactly as it did in production.
+func TestSteerRecoveryCausesConvergence(t *testing.T) {
+	edited := false
+	ctx, dir, turns, census, terminal, _ := steerFixture(t,
+		map[string]string{"app.py": steerSeed},
+		func(i int, prompt string) map[string]interface{} {
+			// Nothing but the recovery moves it.
+			if !strings.Contains(prompt, "so here it is") {
+				return map[string]interface{}{"type": "tool_call", "name": "write_file",
+					"args": map[string]string{"path": "app.py", "content": "print(7)\n"}}
+			}
+			switch {
+			case !edited:
+				edited = true
+				// It edits the text the recovery put in front of it.
+				return map[string]interface{}{"type": "tool_call", "name": "edit_file",
+					"args": map[string]string{"path": "app.py",
+						"old_str": "return 1", "new_str": "return 7"}}
+			case i < 5:
+				return map[string]interface{}{"type": "tool_call", "name": "run_command",
+					"args": map[string]string{"command": "python3 app.py"}}
+			default:
+				return map[string]interface{}{"type": "done", "summary": "app.py returns 7"}
+			}
+		})
+	got, _ := os.ReadFile(filepath.Join(dir, "app.py"))
+	t.Logf("causal: turns=%d status=%q reason=%q disk=%q",
+		*turns, terminal["status"], terminal["reason"], string(got))
+
+	if terminal["status"] != string(TerminalCompleted) {
+		t.Fatalf("the recovery did not convert the loop: status=%q reason=%q",
+			terminal["status"], terminal["reason"])
+	}
+	if !strings.Contains(string(got), "return 7") {
+		t.Errorf("the edit did not land: %q", got)
+	}
+	// It edited the real file rather than replacing it with the model's guess.
+	if !strings.Contains(string(got), "range(3)") {
+		t.Errorf("the original content was destroyed: %q", got)
+	}
+	d := ctx.Ledger[ledgerKey(ctx, "app.py")]
+	if d == nil || d.CurrentHash != hashBytes(got) {
+		t.Error("the ledger does not describe the final bytes")
+	}
+	if census["done"] != 1 {
+		t.Errorf("%d terminal events", census["done"])
+	}
+}
+
+// The recovery is released by a materially different action on the SAME path,
+// and by nothing else, so a path that gets genuinely unstuck and later sticks
+// again is not left without one.
+func TestSteerRecoveryReleasedBySamePathProgress(t *testing.T) {
+	write := map[string]interface{}{"type": "tool_call", "name": "write_file",
+		"args": map[string]string{"path": "app.py", "content": "print(7)\n"}}
+	_, _, turns, _, _, bounces := steerFixture(t,
+		map[string]string{"app.py": steerSeed},
+		func(i int, _ string) map[string]interface{} {
+			if i == 2 {
+				// Materially different, same path, and it succeeds.
+				return map[string]interface{}{"type": "tool_call", "name": "edit_file",
+					"args": map[string]string{"path": "app.py",
+						"old_str": "return 1", "new_str": "return 7"}}
+			}
+			return write
+		})
+	offers := 0
+	for _, b := range *bounces {
+		if strings.HasPrefix(b, "gate|") &&
+			(strings.Contains(b, "so here it is") ||
+				strings.Contains(b, "You do not need to read it again")) {
+			offers++
+		}
+	}
+	t.Logf("released: turns=%d offers=%d", *turns, offers)
+	if offers != 2 {
+		t.Errorf("%d recoveries across a release, want one before and one after", offers)
 	}
 }

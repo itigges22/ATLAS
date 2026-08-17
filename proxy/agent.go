@@ -209,6 +209,13 @@ type runState struct {
 	// been declared spent to the model, so the offer is made once and a new
 	// turn, an alias, or an unrelated success cannot re-open it.
 	fencedChannelClosed map[string]bool
+	// steerRepeats counts, per canonical path, how many times a write_file
+	// steering refusal has been ignored and repeated; steerRecovered records
+	// which paths have already spent their one recovery. Both are cleared by
+	// a materially different action on the SAME path, and by nothing else --
+	// a success elsewhere is not evidence that this path is unstuck.
+	steerRepeats   map[string]int
+	steerRecovered map[string]bool
 	// mutationDebt is what the session still owes on a per-path basis: a
 	// valid, permitted, in-workspace mutation the model asked for that has
 	// not reached a demonstrated resolved state. Canonically keyed, bounded,
@@ -1477,6 +1484,9 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 								"%s already exists and this session has not read it. Use read_file first: if it holds input or configuration you were given, you need its real contents, not a replacement. If you have read it and still mean to replace the whole file, use edit_file or structural_edit.",
 								wfInput.Path)
 							log.Printf("[agent] rejecting write_file over unread existing %q (%d lines)", wfInput.Path, existingLines)
+							if r := steerRecovery(ctx, st, wfInput.Path, existingPath, true); r != "" {
+								rejection = r
+							}
 							st.bounceToolCall(ctx, "write_file", rejection)
 							// Steering, not a verdict on the work: the model
 							// is being sent to a better tool. But a model that
@@ -1513,6 +1523,9 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 								wfInput.Path, existingLines, structuralHint)
 							// %q quotes + escapes the path (go/log-injection).
 							log.Printf("[agent] rejecting write_file for existing %q (%d lines)", wfInput.Path, existingLines)
+							if r := steerRecovery(ctx, st, wfInput.Path, existingPath, false); r != "" {
+								rejection = r
+							}
 							st.bounceToolCall(ctx, "write_file", rejection)
 							// Same shape, same bound as the unread-overwrite
 							// steer above.
@@ -1869,6 +1882,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				// stale range works after a re-read. Drop the memory with the
 				// condition that caused it.
 				clearFailedToolCall(ctx, parsed.Name, intentArgs)
+				clearSteerState(ctx, st, parsed.Name, parsed.Args)
 			}
 
 			// Force-stop after destructive operations that shouldn't have
@@ -6455,6 +6469,126 @@ func boundedCurrentSource(ctx *AgentContext, relPath string) (string, bool, erro
 		fmt.Fprintf(&sb, "%d\t%s\n", i+1, l)
 	}
 	return strings.TrimRight(sb.String(), "\n"), truncated, nil
+}
+
+// steerRecoveryRepeat is the number of ignored steering refusals on one path
+// that buys the recovery. The first refusal is the steer itself; the second is
+// the model ignoring it, which is the only evidence that repeating the
+// diagnostic will not work.
+const steerRecoveryRepeat = 2
+
+// steerRecovery answers the second ignored write_file steer on a path with the
+// thing the model was missing, once.
+//
+// The two steering branches send a model that asked to overwrite an existing
+// file somewhere better: read it first, or edit it instead. Both are correct
+// and both are only text. A model that ignores the text repeats the identical
+// write, and repeating the identical diagnostic back cannot change that --
+// measured at 31 turns before the failure accounting bounded it, and the bound
+// is a stop, not an outcome. The two refusals fail for different reasons, so
+// they get different recoveries:
+//
+//   - unread: the model has never seen the file. Show it, bounded, through the
+//     same reader read_file uses, and record exactly what was shown the way
+//     read_file records a truncated read. It genuinely has the body now, so
+//     the read state is real -- but the file is still not session-owned, and
+//     the surgical-edit gate still stands.
+//   - already read: the model has the body and reached for the wrong tool.
+//     Re-showing it teaches nothing, so this is one reminder naming the tools
+//     that work on an existing file. Neither is imposed: edit_file stays right
+//     for a surgical change, structural_edit for a whole node.
+//
+// Bounded by construction: one recovery per canonical path, spent whether or
+// not the model takes it, and released only by a materially different action
+// on that same path. The refused call is still accounted as a failure, so the
+// recovery buys the model a better turn, never an extra one.
+func steerRecovery(ctx *AgentContext, st *runState, relPath, resolvedPath string, unread bool) string {
+	if ctx == nil || st == nil {
+		return ""
+	}
+	// A run that is already ending owns its own terminal.
+	if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
+		return ""
+	}
+	key := ledgerKey(ctx, relPath)
+	if st.steerRepeats == nil {
+		st.steerRepeats = map[string]int{}
+	}
+	st.steerRepeats[key]++
+	if st.steerRepeats[key] < steerRecoveryRepeat || st.steerRecovered[key] {
+		return ""
+	}
+	// Context nobody has time to act on is worse than stopping.
+	if ctx.Ctx != nil {
+		if deadline, ok := ctx.Ctx.Deadline(); ok && time.Until(deadline) < fencedRecoveryFloor {
+			log.Printf("[agent] skipping the write_file steering recovery for %s — %v of budget left",
+				relPath, time.Until(deadline).Round(time.Second))
+			return ""
+		}
+	}
+	if st.steerRecovered == nil {
+		st.steerRecovered = map[string]bool{}
+	}
+	st.steerRecovered[key] = true
+
+	var sb strings.Builder
+	if unread {
+		source, truncated, err := boundedCurrentSource(ctx, relPath)
+		if err != nil {
+			// The file was there a moment ago and is not readable now. Say
+			// nothing rather than something untrue; the plain steer stands.
+			log.Printf("[agent] steering recovery for %s could not read it: %v", relPath, err)
+			return ""
+		}
+		fmt.Fprintf(&sb, "You have asked to overwrite %s twice without reading it, so here it is",
+			relPath)
+		if truncated {
+			fmt.Fprintf(&sb, " (first %d lines)", fencedRecoveryMaxLines)
+		}
+		sb.WriteString(":\n\n")
+		sb.WriteString(source)
+		sb.WriteString("\n\n")
+		sb.WriteString("This is the real file. If it holds input or configuration you were given, " +
+			"your replacement would have destroyed it. Now that you have seen it, change it in " +
+			"place with edit_file (old_str/new_str) or structural_edit (a selector and the new " +
+			"body) — whichever fits the change you mean to make. write_file on this path will " +
+			"keep being refused.")
+		// Record only what was shown, exactly as read_file does for a
+		// truncated read: the model owns what it saw and nothing more.
+		shown := source
+		if !truncated {
+			if data, _, err := readWorkspaceFile(ctx, relPath); err == nil {
+				shown = string(data)
+			}
+		}
+		ctx.RecordFileRead(resolvedPath, shown)
+		ctx.RecordBodySeen(resolvedPath)
+		log.Printf("[agent] steering recovery for %s: showed the file (truncated=%v)", relPath, truncated)
+	} else {
+		fmt.Fprintf(&sb, "You have already read %s, and write_file will keep refusing it — "+
+			"repeating the same call cannot land. You do not need to read it again. Make the "+
+			"change in place: edit_file with old_str/new_str for a surgical change, or "+
+			"structural_edit with a selector and the new body for a whole function or element. "+
+			"If what you actually want is a different file, write_file works on a path that "+
+			"does not exist yet.", relPath)
+		log.Printf("[agent] steering recovery for %s: reminded once, no reread", relPath)
+	}
+	return sb.String()
+}
+
+// clearSteerState releases a path's steering state after a materially
+// different action succeeded on it.
+//
+// "Materially different" is doing something other than the refused write on
+// the same file. An unrelated success elsewhere is not evidence that this path
+// is unstuck, which is why this is keyed and not a global reset.
+func clearSteerState(ctx *AgentContext, st *runState, name string, args json.RawMessage) {
+	if st == nil || name == "write_file" {
+		return
+	}
+	key := ledgerKey(ctx, workspaceRefusalPath(ctx, name, args))
+	delete(st.steerRepeats, key)
+	delete(st.steerRecovered, key)
 }
 
 // currentValidationDetail reports what the ledger knows about the bytes that
