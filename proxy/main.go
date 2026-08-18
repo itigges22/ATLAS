@@ -20,15 +20,19 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -336,6 +340,148 @@ func handlePassthrough(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
+// --- Bounded graceful shutdown ----------------------------------------------
+//
+// main() blocked in ListenAndServe and died on log.Fatalf, so a SIGTERM cut the
+// process where it stood: an agent request lost its turn mid-write, the TUI's
+// permanent /events subscriber had no coordinated close, and ordered cleanup
+// had nowhere to run. Anything that must flush before exit -- a diagnostic
+// capture, a drained buffer -- needs that landing site to exist first.
+//
+// The budget is derived, not chosen. An agent request is already bounded by its
+// own session context, so the drain window is exactly that session total: a
+// signal arriving late in a session does not grant it a fresh 600 seconds, it
+// only means the server will wait up to that long for whatever remains. On top
+// sits a small margin for the close hooks.
+const shutdownHookMargin = 10 * time.Second
+
+// defaultShutdownGraceSec is what the shipped compose file allows. It is an
+// operator DECLARATION of the grace the environment will give this process --
+// the proxy cannot read an orchestrator's real termination budget, so the two
+// are pinned together and validated against the session configuration instead.
+const defaultShutdownGraceSec = 650
+
+type shutdownBudgetValues struct {
+	drain      time.Duration
+	hookMargin time.Duration
+}
+
+// shutdownBudget derives the drain window and validates it against the grace
+// the operator says the environment allows.
+//
+// Strict: the required window must be LESS than the declared grace, so there is
+// real headroom between the process finishing and the environment killing it.
+// A session raised beyond what the declared grace supports refuses to serve
+// rather than quietly running with a shutdown that cannot complete -- and
+// rather than quietly shortening the session the operator asked for.
+func shutdownBudget() (shutdownBudgetValues, error) {
+	total, _ := sessionBudget() // the 600s total already contains its reserve
+	need := total + shutdownHookMargin
+
+	graceSec := defaultShutdownGraceSec
+	if raw := strings.TrimSpace(os.Getenv("ATLAS_SHUTDOWN_GRACE_SEC")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			return shutdownBudgetValues{}, fmt.Errorf(
+				"ATLAS_SHUTDOWN_GRACE_SEC=%q is not a positive number of seconds", raw)
+		}
+		graceSec = n
+	}
+	grace := time.Duration(graceSec) * time.Second
+	if need >= grace {
+		return shutdownBudgetValues{}, fmt.Errorf(
+			"shutdown budget does not fit: session total %v + hook margin %v = %v, "+
+				"which is not less than ATLAS_SHUTDOWN_GRACE_SEC=%v. Raise "+
+				"ATLAS_SHUTDOWN_GRACE_SEC and the container/orchestrator grace period "+
+				"together, or lower ATLAS_AGENT_SESSION_TIMEOUT_SEC",
+			total, shutdownHookMargin, need, grace)
+	}
+	return shutdownBudgetValues{drain: total, hookMargin: shutdownHookMargin}, nil
+}
+
+// closeHook is ordered cleanup that runs once, after the listener has stopped
+// and request draining has been classified. A hook cannot extend shutdown and
+// cannot turn a completed request into a failure.
+type closeHook struct {
+	name string
+	fn   func(context.Context) error
+}
+
+// shutdownResult says what actually happened, so a forced close is never
+// mistaken for a clean one -- or for a listener failure.
+type shutdownResult struct {
+	signalled  bool
+	forced     bool // the drain deadline expired with requests still running
+	hooksRan   bool
+	hookErrors []string
+}
+
+// runServer serves until the listener fails or a signal arrives, then drains
+// within the budget and runs the hooks. Separated from main so a test can drive
+// a real listener, a real in-flight request and a real signal.
+func runServer(srv *http.Server, ln net.Listener, signals <-chan os.Signal,
+	hooks []closeHook, budget shutdownBudgetValues) (shutdownResult, error) {
+	var res shutdownResult
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.Serve(ln) }()
+
+	select {
+	case err := <-serveErr:
+		// A listener that never started must not sit waiting for a signal.
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return res, err
+		}
+		return res, nil
+	case <-signals:
+		res.signalled = true
+	}
+
+	// New connections stop here. Active handlers keep their own deadlines --
+	// an agent request is bounded by its session context, not by this.
+	log.Printf("[lifecycle] shutdown signal received — draining for up to %v", budget.drain)
+
+	// The infrastructure stream would otherwise hold the drain open for its
+	// whole budget: nothing ends /events but the client leaving.
+	defaultBroker.drain()
+
+	drainCtx, cancelDrain := context.WithTimeout(context.Background(), budget.drain)
+	defer cancelDrain()
+	if err := srv.Shutdown(drainCtx); err != nil {
+		// Requests outlived the window. Say so as its own outcome.
+		res.forced = true
+		log.Printf("[lifecycle] drain deadline reached with requests still active — forcing close")
+		_ = srv.Close()
+	}
+
+	hookCtx, cancelHooks := context.WithTimeout(context.Background(), budget.hookMargin)
+	defer cancelHooks()
+	res.hooksRan = true
+	for _, h := range hooks {
+		done := make(chan error, 1)
+		go func(h closeHook) { done <- h.fn(hookCtx) }(h)
+		select {
+		case err := <-done:
+			if err != nil {
+				res.hookErrors = append(res.hookErrors, h.name+": "+err.Error())
+			}
+		case <-hookCtx.Done():
+			res.hookErrors = append(res.hookErrors, h.name+": "+hookCtx.Err().Error())
+		}
+	}
+	for _, e := range res.hookErrors {
+		log.Printf("[lifecycle] close hook failed: %s", e)
+	}
+	// Drain whatever Serve reports after Shutdown; ErrServerClosed is normal.
+	select {
+	case err := <-serveErr:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return res, err
+		}
+	case <-time.After(time.Second):
+	}
+	return res, nil
+}
+
 func main() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 	// Private-value filtering: every log line passes through the
@@ -371,6 +517,15 @@ func main() {
 		log.Printf("  Keep-warm: pinging %s every 45s (set ATLAS_KEEP_LLAMA_WARM=0 to disable)", inferenceURL)
 	}
 
+	// Validated before the listener opens: a shutdown that cannot finish
+	// inside the environment's grace is a configuration error, not something
+	// to discover during a deploy.
+	budget, err := shutdownBudget()
+	if err != nil {
+		log.Fatalf("configuration: %v", err)
+	}
+	log.Printf("  Shutdown: drain up to %v, then %v for close hooks", budget.drain, budget.hookMargin)
+
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           http.MaxBytesHandler(withRequestID(requireServiceToken(newProxyMux())), maxRequestBodyBytes),
@@ -378,8 +533,26 @@ func main() {
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       90 * time.Second,
 	}
-	if err := server.ListenAndServe(); err != nil {
-		log.Fatalf("server error: %v", err)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("listen %s: %v", addr, err)
+	}
+	signals := make(chan os.Signal, 2)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(signals)
+
+	// No hooks yet. A nil hook set is the ordinary production path and costs
+	// nothing; this exists so ordered cleanup has somewhere to land.
+	res, serveErr := runServer(server, ln, signals, nil, budget)
+	if serveErr != nil {
+		log.Printf("server error: %v", serveErr)
+		os.Exit(1)
+	}
+	switch {
+	case res.forced:
+		log.Printf("[lifecycle] shutdown complete (forced: requests outlived the drain window)")
+	case res.signalled:
+		log.Printf("[lifecycle] shutdown complete")
 	}
 }
 

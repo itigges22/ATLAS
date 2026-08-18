@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -316,5 +317,92 @@ func TestHandleEventsStreamsEmittedEnvelopeToConnectedClient(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("emitted envelope didn't reach connected client within 2s")
+	}
+}
+
+// --- Draining the infrastructure event stream --------------------------------
+//
+// The TUI keeps /events connected for the life of the session, so a shutdown
+// that waits for subscribers to disconnect on their own waits forever. The
+// close path already exists -- handleEvents returns when its channel closes --
+// so draining is closing every registered channel once, under the lock that
+// owns the registry.
+
+func TestBrokerDrainClosesEverySubscriberOnce(t *testing.T) {
+	b := &broker{subscribers: map[chan Envelope]struct{}{}}
+	var chans []chan Envelope
+	for i := 0; i < 4; i++ {
+		chans = append(chans, b.subscribe())
+	}
+	b.drain()
+	for i, ch := range chans {
+		if _, open := <-ch; open {
+			t.Errorf("subscriber %d was not closed by drain", i)
+		}
+	}
+	// The handler's deferred unsubscribe must not double-close.
+	for _, ch := range chans {
+		b.unsubscribe(ch)
+	}
+	// A new subscriber is refused once draining has begun.
+	if ch := b.subscribe(); ch != nil {
+		t.Error("a subscriber was accepted after draining began")
+	}
+	if !b.isDraining() {
+		t.Error("the broker does not report draining")
+	}
+}
+
+// Concurrent subscribe/unsubscribe/drain must not panic or double-close.
+func TestBrokerDrainIsRaceSafe(t *testing.T) {
+	b := &broker{subscribers: map[chan Envelope]struct{}{}}
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ch := b.subscribe()
+			if ch == nil {
+				return // refused after drain: correct
+			}
+			b.emit(Envelope{Type: "x"})
+			b.unsubscribe(ch)
+		}()
+	}
+	wg.Add(1)
+	go func() { defer wg.Done(); b.drain() }()
+	wg.Wait()
+	// Emitting after drain is a no-op, never a send on a closed channel.
+	b.emit(Envelope{Type: "after"})
+}
+
+// A live handler returns promptly when the broker drains, and the event
+// schema is untouched.
+func TestHandleEventsReturnsOnDrain(t *testing.T) {
+	prev := defaultBroker
+	defaultBroker = &broker{subscribers: map[chan Envelope]struct{}{}}
+	defer func() { defaultBroker = prev }()
+
+	srv := httptest.NewServer(http.HandlerFunc(handleEvents))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	buf := make([]byte, 64)
+	if _, err := resp.Body.Read(buf); err != nil { // ": connected"
+		t.Fatalf("no opening chunk: %v", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		io.ReadAll(resp.Body)
+		close(done)
+	}()
+	defaultBroker.drain()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the handler did not return when the broker drained")
 	}
 }

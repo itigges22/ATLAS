@@ -356,6 +356,11 @@ services:
       - "host.docker.internal:host-gateway"
     image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-proxy:${ATLAS_IMAGE_TAG:-latest}
     restart: unless-stopped
+    # Must exceed the proxy's own shutdown budget (ATLAS_SHUTDOWN_GRACE_SEC,
+    # default 650s): session total 600s of request drain plus a 10s close-hook
+    # margin is 610s, and the proxy refuses to start if that does not fit. The
+    # extra 40s is headroom between the process finishing and Docker killing it.
+    stop_grace_period: 650s
     build:
       context: ./proxy
     # Run as the invoking user (same rationale as the sandbox's

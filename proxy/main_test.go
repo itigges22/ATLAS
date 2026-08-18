@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,7 +19,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestModelsFallsBackToConfiguredModel(t *testing.T) {
@@ -973,5 +978,261 @@ func TestLegacyRequestWithoutContractIsAccepted(t *testing.T) {
 	bad := &TaskContract{TaskMode: "explore"}
 	if _, err := validateTaskContract(bad, t.TempDir()); err == nil {
 		t.Error("an unsupported mode was accepted")
+	}
+}
+
+// --- Bounded graceful shutdown -----------------------------------------------
+//
+// main() blocked in ListenAndServe and died on log.Fatalf, so SIGTERM killed
+// the process where it stood: an active agent request was cut mid-turn, the
+// TUI's permanent /events subscriber had no coordinated close, and no ordered
+// cleanup had anywhere to run. A diagnostic sink that must drain and write a
+// footer needs that landing site to exist.
+
+func TestShutdownBudgetArithmetic(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		sessionSec string
+		graceSec   string
+		wantErr    bool
+	}{
+		{"defaults", "", "", false}, // 600 + 10 = 610 < 650
+		{"explicit shipped values", "600", "650", false},
+		{"session raised without grace", "3600", "650", true},
+		{"session raised with grace", "3600", "3700", false},
+		{"grace exactly equal to need", "600", "610", true}, // strict <
+		{"grace one second above need", "600", "611", false},
+		{"malformed grace", "", "abc", true},
+		{"zero grace", "", "0", true},
+		{"negative grace", "", "-5", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if c.sessionSec != "" {
+				t.Setenv("ATLAS_AGENT_SESSION_TIMEOUT_SEC", c.sessionSec)
+			}
+			if c.graceSec != "" {
+				t.Setenv("ATLAS_SHUTDOWN_GRACE_SEC", c.graceSec)
+			}
+			budget, err := shutdownBudget()
+			if (err != nil) != c.wantErr {
+				t.Fatalf("err=%v, wantErr=%v", err, c.wantErr)
+			}
+			if err != nil {
+				// The refusal must show the whole sum, not just complain.
+				for _, want := range []string{"ATLAS_SHUTDOWN_GRACE_SEC"} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("error does not name %s: %v", want, err)
+					}
+				}
+				return
+			}
+			total, _ := sessionBudget()
+			if budget.drain != total {
+				t.Errorf("drain=%v, want the session total %v", budget.drain, total)
+			}
+			if budget.hookMargin != shutdownHookMargin {
+				t.Errorf("hookMargin=%v", budget.hookMargin)
+			}
+		})
+	}
+}
+
+// The shipped compose grace must agree with the shipped default.
+func TestComposeGraceAgreesWithTheDefault(t *testing.T) {
+	b, err := os.ReadFile("../docker-compose.yml")
+	if err != nil {
+		t.Skipf("compose unavailable: %v", err)
+	}
+	if !strings.Contains(string(b), "stop_grace_period: 650s") {
+		t.Error("docker-compose.yml does not pin stop_grace_period: 650s to match " +
+			"the shipped ATLAS_SHUTDOWN_GRACE_SEC default")
+	}
+}
+
+// The production path: a real listener, a real in-flight request, a real
+// /events subscriber, and a signal.
+func TestRunServerDrainsAndRunsHooks(t *testing.T) {
+	prev := defaultBroker
+	defaultBroker = &broker{subscribers: map[chan Envelope]struct{}{}}
+	defer func() { defaultBroker = prev }()
+
+	released := make(chan struct{})
+	started := make(chan struct{})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/events", handleEvents)
+	mux.HandleFunc("/slow", func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-released // still running when the signal arrives
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "finished")
+	})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: mux}
+	base := "http://" + ln.Addr().String()
+
+	var hookRuns int32
+	hooks := []closeHook{{
+		name: "test-hook",
+		fn: func(ctx context.Context) error {
+			atomic.AddInt32(&hookRuns, 1)
+			return nil
+		},
+	}}
+	signals := make(chan os.Signal, 2)
+	result := make(chan shutdownResult, 1)
+	go func() {
+		r, _ := runServer(srv, ln, signals, hooks,
+			shutdownBudgetValues{drain: 10 * time.Second, hookMargin: 2 * time.Second})
+		result <- r
+	}()
+
+	// A permanent /events subscriber, exactly as the TUI keeps open.
+	evResp, err := http.Get(base + "/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer evResp.Body.Close()
+	evBuf := make([]byte, 32)
+	evResp.Body.Read(evBuf)
+
+	// An in-flight request.
+	slowDone := make(chan int, 1)
+	go func() {
+		resp, err := http.Get(base + "/slow")
+		if err != nil {
+			slowDone <- 0
+			return
+		}
+		defer resp.Body.Close()
+		io.ReadAll(resp.Body)
+		slowDone <- resp.StatusCode
+	}()
+	<-started
+
+	signals <- syscall.SIGTERM
+	signals <- syscall.SIGTERM // repeated signals must not double-run hooks
+
+	// The subscriber unblocks without consuming the drain budget.
+	evClosed := make(chan struct{})
+	go func() { io.ReadAll(evResp.Body); close(evClosed) }()
+	select {
+	case <-evClosed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("/events held the shutdown open")
+	}
+
+	// The in-flight request still finishes on its own terms.
+	close(released)
+	if code := <-slowDone; code != http.StatusOK {
+		t.Errorf("the in-flight request was cut off: status %d", code)
+	}
+
+	select {
+	case r := <-result:
+		if r.forced {
+			t.Errorf("a clean drain was reported as forced: %+v", r)
+		}
+		if !r.hooksRan {
+			t.Error("close hooks did not run")
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("runServer never returned")
+	}
+	if n := atomic.LoadInt32(&hookRuns); n != 1 {
+		t.Errorf("hooks ran %d times, want exactly one", n)
+	}
+	// New work is refused once draining began.
+	if _, err := http.Get(base + "/slow"); err == nil {
+		t.Error("the server accepted a new request after draining")
+	}
+}
+
+// A request that outlives the drain budget takes the forced-close path, and
+// that is reported as its own outcome -- not as a listener failure.
+func TestRunServerForcedCloseIsClassified(t *testing.T) {
+	prev := defaultBroker
+	defaultBroker = &broker{subscribers: map[chan Envelope]struct{}{}}
+	defer func() { defaultBroker = prev }()
+
+	block := make(chan struct{})
+	defer close(block)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/stuck", func(w http.ResponseWriter, r *http.Request) { <-block })
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	srv := &http.Server{Handler: mux}
+	signals := make(chan os.Signal, 1)
+	result := make(chan shutdownResult, 1)
+	go func() {
+		r, _ := runServer(srv, ln, signals, nil,
+			shutdownBudgetValues{drain: 300 * time.Millisecond, hookMargin: 200 * time.Millisecond})
+		result <- r
+	}()
+	go http.Get("http://" + ln.Addr().String() + "/stuck")
+	time.Sleep(100 * time.Millisecond)
+	signals <- syscall.SIGTERM
+
+	select {
+	case r := <-result:
+		if !r.forced {
+			t.Error("a request outliving the drain budget was not classified as forced")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("runServer never returned")
+	}
+}
+
+// A listener that cannot start returns immediately rather than waiting for a
+// signal, and ErrServerClosed is never an error.
+func TestRunServerStartupFailureReturns(t *testing.T) {
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	ln.Close() // already closed: Serve fails at once
+	srv := &http.Server{Handler: http.NewServeMux()}
+	done := make(chan error, 1)
+	go func() {
+		_, err := runServer(srv, ln, make(chan os.Signal, 1), nil,
+			shutdownBudgetValues{drain: time.Second, hookMargin: time.Second})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("a listener failure was reported as success")
+		}
+		if errors.Is(err, http.ErrServerClosed) {
+			t.Error("ErrServerClosed leaked out as a failure")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runServer waited for a signal after a startup failure")
+	}
+}
+
+// A hook that hangs is cut off by its own margin, and a failing hook is
+// reported without hanging the process.
+func TestCloseHooksAreBounded(t *testing.T) {
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	srv := &http.Server{Handler: http.NewServeMux()}
+	signals := make(chan os.Signal, 1)
+	hooks := []closeHook{
+		{name: "hangs", fn: func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }},
+		{name: "fails", fn: func(ctx context.Context) error { return errors.New("boom") }},
+	}
+	result := make(chan shutdownResult, 1)
+	go func() {
+		r, _ := runServer(srv, ln, signals, hooks,
+			shutdownBudgetValues{drain: time.Second, hookMargin: 200 * time.Millisecond})
+		result <- r
+	}()
+	time.Sleep(50 * time.Millisecond)
+	signals <- syscall.SIGTERM
+	select {
+	case r := <-result:
+		if len(r.hookErrors) != 2 {
+			t.Errorf("hook errors=%v, want both reported", r.hookErrors)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a blocked hook hung the shutdown")
 	}
 }
