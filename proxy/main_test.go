@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -1235,4 +1236,884 @@ func TestCloseHooksAreBounded(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("a blocked hook hung the shutdown")
 	}
+}
+
+// --- The private shadow capture ----------------------------------------------
+//
+// ATLAS still decides what the user demanded by reading their English. The
+// client now declares it structurally, and nothing compares the two. This is
+// that comparison, written to a private file and read by nobody: it decides
+// nothing, reaches no wire, and exists only so a later corpus can say how often
+// the two disagree and why.
+
+func shadowEnv(t *testing.T, dir, name string) {
+	t.Helper()
+	t.Setenv("ATLAS_DIAGNOSTIC_DIR", dir)
+	t.Setenv("ATLAS_SHADOW_CAPTURE", name)
+}
+
+func readShadowRecords(t *testing.T, path string) []map[string]interface{} {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("capture unreadable: %v", err)
+	}
+	var out []map[string]interface{}
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var m map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("malformed JSONL line %q: %v", line, err)
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// Disabled is the deployed default: nothing opens, nothing is written.
+func TestShadowSinkDisabledByDefault(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("ATLAS_DIAGNOSTIC_DIR", dir)
+	// ATLAS_SHADOW_CAPTURE deliberately unset.
+	sink, err := openShadowSink()
+	if err != nil {
+		t.Fatalf("disabled must not error: %v", err)
+	}
+	if sink != nil {
+		t.Fatal("a sink was opened with no capture configured")
+	}
+	if !sink.enabled() { // nil receiver must answer false, not panic
+		// expected
+	} else {
+		t.Error("a nil sink reports enabled")
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 0 {
+		t.Errorf("disabled mode created %d file(s)", len(entries))
+	}
+}
+
+// Initialization refuses anything it cannot own: an existing destination, or
+// one outside the capture root.
+func TestShadowSinkInitializationRefusals(t *testing.T) {
+	t.Run("existing destination", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "run.jsonl"), []byte("old\n"), 0o644)
+		shadowEnv(t, dir, "run.jsonl")
+		if _, err := openShadowSink(); err == nil {
+			t.Error("an existing capture was accepted; a mixed run would look like one run")
+		}
+	})
+	for _, escape := range []string{"../outside.jsonl", "/etc/passwd", "sub/../../out.jsonl"} {
+		t.Run("escape "+escape, func(t *testing.T) {
+			dir := t.TempDir()
+			shadowEnv(t, dir, escape)
+			if _, err := openShadowSink(); err == nil {
+				t.Errorf("%q escaped the capture root and was accepted", escape)
+			}
+		})
+	}
+}
+
+// A full queue drops, counts, and never blocks the caller.
+func TestShadowSinkDropsWhenFull(t *testing.T) {
+	dir := t.TempDir()
+	f, err := os.Create(filepath.Join(dir, "run.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The writer is not started, so nothing drains the queue while it fills.
+	sink := newShadowSink(f)
+	for i := 0; i < shadowQueueDepth*4; i++ {
+		sink.submit(map[string]interface{}{"record_kind": "x", "i": i})
+	}
+	go sink.run()
+	if err := sink.close(context.Background(), 5*time.Second); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	recs := readShadowRecords(t, filepath.Join(dir, "run.jsonl"))
+	footer := recs[len(recs)-1]
+	if footer["record_kind"] != "task_contract_shadow_footer" {
+		t.Fatalf("last record is not a footer: %v", footer["record_kind"])
+	}
+	if footer["dropped"].(float64) <= 0 {
+		t.Error("a saturated queue reported no drops")
+	}
+	if footer["accepted"].(float64) != float64(shadowQueueDepth*4) {
+		t.Errorf("accepted=%v", footer["accepted"])
+	}
+}
+
+// Duplicate request IDs are a capture defect, never merged.
+func TestShadowSinkFlagsDuplicateRequestIDs(t *testing.T) {
+	dir := t.TempDir()
+	shadowEnv(t, dir, "run.jsonl")
+	sink, _ := openShadowSink()
+	sink.noteRequest("req-1")
+	sink.noteRequest("req-2")
+	sink.noteRequest("req-1") // same id twice in one capture
+	sink.close(context.Background(), 5*time.Second)
+	recs := readShadowRecords(t, filepath.Join(dir, "run.jsonl"))
+	footer := recs[len(recs)-1]
+	if footer["duplicate_request_ids"].(float64) != 1 {
+		t.Errorf("duplicate_request_ids=%v, want 1", footer["duplicate_request_ids"])
+	}
+}
+
+// A capture with no footer is detectable as incomplete.
+func TestShadowCaptureWithoutFooterIsIncomplete(t *testing.T) {
+	dir := t.TempDir()
+	shadowEnv(t, dir, "run.jsonl")
+	sink, _ := openShadowSink()
+	sink.submit(map[string]interface{}{"record_kind": "task_contract_shadow_request"})
+	sink.abandonForTest() // ungraceful: writer stops, no footer
+	recs := readShadowRecords(t, filepath.Join(dir, "run.jsonl"))
+	for _, r := range recs {
+		if r["record_kind"] == "task_contract_shadow_footer" {
+			t.Error("an abandoned capture wrote a footer")
+		}
+	}
+}
+
+// shadowLoopRun drives the real agent loop with capture optionally enabled and
+// returns the emitted records plus everything a causal comparison needs.
+func shadowLoopRun(t *testing.T, capture bool, contract *TaskContract, prompt string,
+	plan func(i int) map[string]interface{}) ([]map[string]interface{}, string, []string, string, []string) {
+	t.Helper()
+	dir := t.TempDir()
+	capDir := t.TempDir()
+	if capture {
+		shadowEnv(t, capDir, "run.jsonl")
+		sink, err := openShadowSink()
+		if err != nil {
+			t.Fatalf("sink: %v", err)
+		}
+		activeShadowSink.Store(sink)
+		t.Cleanup(func() {
+			sink.close(context.Background(), 5*time.Second)
+			activeShadowSink.Store(nil)
+		})
+	} else {
+		activeShadowSink.Store(nil)
+	}
+
+	turns := 0
+	var mu sync.Mutex
+	var events []string
+	var modelBodies []string
+	terminal := map[string]string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
+			return
+		case strings.HasSuffix(r.URL.Path, "/execute"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			if strings.Contains(in.Code, ".atlas-mount-probe") {
+				b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": true, "stdout": string(b), "exit_code": 0})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "stdout": "", "exit_code": 0})
+			return
+		case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
+			http.NotFound(w, r)
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		modelBodies = append(modelBodies, string(raw))
+		i := turns
+		turns++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		call, _ := json.Marshal(plan(i))
+		d, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"delta": map[string]string{"content": string(call)}}}})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+	}))
+	defer srv.Close()
+
+	reqCtx := context.WithValue(context.Background(), requestIDKey, "req-shadow-1")
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.Ctx = reqCtx
+	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
+	ctx.PermissionMode = PermissionYolo
+	ctx.TrustMode = trustFullyTrusted
+	ctx.VerifyOnHost = true
+	ctx.MaxTurns = 0
+	ctx.TaskContract = contract
+	ctx.StreamFn = func(et string, data interface{}) {
+		b, _ := json.Marshal(data)
+		mu.Lock()
+		defer mu.Unlock()
+		var m map[string]interface{}
+		line := et + "|" + string(b)
+		if json.Unmarshal(b, &m) == nil {
+			for _, k := range []string{"elapsed", "prompt_ms", "ms", "elapsed_ms",
+				"duration_ms", "wall_s"} {
+				delete(m, k)
+			}
+			c, _ := json.Marshal(m)
+			line = et + "|" + string(c)
+		}
+		events = append(events, line)
+		if et == "done" {
+			var mm map[string]string
+			json.Unmarshal(b, &mm)
+			for k, v := range mm {
+				terminal[k] = v
+			}
+		}
+	}
+	runAgentLoop(ctx, prompt)
+
+	// Each run gets its own TempDir, so the workspace path is not a property of
+	// the run; canonicalise it before anything compares two runs.
+	for i, e := range events {
+		events[i] = strings.ReplaceAll(e, dir, "<ws>")
+	}
+	for i, b := range modelBodies {
+		modelBodies[i] = strings.ReplaceAll(b, dir, "<ws>")
+	}
+
+	var disk []string
+	filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		rel, _ := filepath.Rel(dir, p)
+		if !strings.HasPrefix(rel, ".") {
+			b, _ := os.ReadFile(p)
+			disk = append(disk, rel+"="+hashBytes(b)[:12])
+		}
+		return nil
+	})
+	sort.Strings(disk)
+
+	var recs []map[string]interface{}
+	if capture {
+		if s := activeShadowSink.Load(); s != nil {
+			s.close(context.Background(), 5*time.Second)
+			recs = readShadowRecords(t, filepath.Join(capDir, "run.jsonl"))
+		}
+	}
+	norm := make([]string, 0, len(modelBodies))
+	for _, b := range modelBodies {
+		norm = append(norm, canonPromptBody(b))
+	}
+	return recs, strings.Join(events, "\n"), disk,
+		terminal["status"] + "/" + terminal["reason"], norm
+}
+
+// canonPromptBody puts one upstream request body into a form two runs can be
+// compared byte for byte in.
+//
+// Three places already build the wire by ranging toolRegistry, a Go map, so
+// their order is randomised per request independently of anything under test:
+// the response_format tool-name enum (tools.go buildToolCallSchemaForTools),
+// the GBNF tool-name alternation (buildToolCallGrammar), and the "### <tool>"
+// documentation blocks in the system prompt (buildToolsDoc). Exactly those
+// three orderings are canonicalised here and nothing else: any added, removed
+// or altered prompt byte still shows up as a difference, and the ordering of
+// the messages array, which carries meaning, is left alone.
+func canonPromptBody(raw string) string {
+	var body interface{}
+	if err := json.Unmarshal([]byte(raw), &body); err != nil {
+		return raw
+	}
+	var walk func(v interface{}) interface{}
+	walk = func(v interface{}) interface{} {
+		switch t := v.(type) {
+		case map[string]interface{}:
+			for k, e := range t {
+				t[k] = walk(e)
+			}
+			return t
+		case []interface{}:
+			allStrings := len(t) > 0
+			for i, e := range t {
+				t[i] = walk(e)
+				if _, ok := e.(string); !ok {
+					allStrings = false
+				}
+			}
+			if allStrings {
+				sort.Slice(t, func(i, j int) bool {
+					return t[i].(string) < t[j].(string)
+				})
+			}
+			return t
+		case string:
+			return canonPromptString(t)
+		}
+		return v
+	}
+	out, err := json.Marshal(walk(body))
+	if err != nil {
+		return raw
+	}
+	return string(out)
+}
+
+func canonPromptString(s string) string {
+	if strings.Contains(s, "\n### ") {
+		parts := strings.Split(s, "\n### ")
+		// Whatever follows the last tool block belongs to the section after
+		// the tool list, not to the block it happens to trail; detach it so
+		// sorting cannot carry it to a random position.
+		tail := ""
+		for i, seg := range parts[1:] {
+			if idx := strings.Index(seg, "\n## "); idx >= 0 {
+				tail, parts[i+1] = seg[idx:], seg[:idx]
+			}
+		}
+		sort.Strings(parts[1:])
+		s = strings.Join(parts, "\n### ") + tail
+	}
+	if !strings.Contains(s, "::=") || !strings.Contains(s, " | ") {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		head, body, ok := strings.Cut(line, "::=")
+		if !ok || !strings.Contains(body, " | ") {
+			continue
+		}
+		alts := strings.Split(body, " | ")
+		sort.Strings(alts)
+		lines[i] = head + "::=" + strings.Join(alts, " | ")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func shadowWorkPlan(i int) map[string]interface{} {
+	switch i {
+	case 0:
+		return map[string]interface{}{"type": "tool_call", "name": "list_directory",
+			"args": map[string]string{"path": "."}}
+	case 1:
+		return map[string]interface{}{"type": "tool_call", "name": "write_file",
+			"args": map[string]string{"path": "app.py", "content": "A = 1\n"}}
+	}
+	return map[string]interface{}{"type": "done", "summary": "wrote app.py"}
+}
+
+// The two record kinds, the two gate sites, and the value production consumed.
+func TestShadowRecordsCaptureBothGateSites(t *testing.T) {
+	contract := &TaskContract{TaskMode: TaskModeWork}
+	recs, _, _, term, _ := shadowLoopRun(t, true, contract, "Create app.py.", shadowWorkPlan)
+	t.Logf("terminal=%s records=%d", term, len(recs))
+
+	var snapshots, gates []map[string]interface{}
+	sites := map[string]bool{}
+	seqs := map[float64]bool{}
+	for _, r := range recs {
+		switch r["record_kind"] {
+		case "task_contract_shadow_request":
+			snapshots = append(snapshots, r)
+		case "task_contract_shadow_gate":
+			gates = append(gates, r)
+			sites[r["call_site"].(string)] = true
+			seqs[r["gate_seq"].(float64)] = true
+		}
+	}
+	if len(snapshots) != 1 {
+		t.Fatalf("%d request snapshots, want exactly one", len(snapshots))
+	}
+	if len(gates) == 0 {
+		t.Fatal("no gate evaluations were observed")
+	}
+	for _, r := range append(snapshots, gates...) {
+		if r["influences_live_decision"] != false {
+			t.Error("a record does not declare itself inert")
+		}
+		if r["request_id"] != "req-shadow-1" {
+			t.Errorf("request_id=%v", r["request_id"])
+		}
+	}
+	// Gate sequences are per-request and strictly increasing.
+	if len(seqs) != len(gates) {
+		t.Errorf("gate_seq collided across %d gates", len(gates))
+	}
+	// Every gate carries the live boolean and a closed comparison.
+	for _, g := range gates {
+		if _, ok := g["legacy_wants_state_change"].(bool); !ok {
+			t.Error("a gate record has no live decision")
+		}
+		switch g["comparison"] {
+		case shadowAgreeWork, shadowAgreeQuestion, shadowContractWorkLegacyQuestion,
+			shadowContractQuestionLegacyWork, shadowUnmeasured:
+		default:
+			t.Errorf("comparison %q is outside the closed vocabulary", g["comparison"])
+		}
+	}
+	t.Logf("gate sites observed: %v", sites)
+}
+
+// A contractless request is unmeasured, never inferred.
+func TestShadowContractlessGateIsUnmeasured(t *testing.T) {
+	recs, _, _, _, _ := shadowLoopRun(t, true, nil, "Create app.py.", shadowWorkPlan)
+	saw := false
+	for _, r := range recs {
+		if r["record_kind"] != "task_contract_shadow_gate" {
+			continue
+		}
+		saw = true
+		if r["comparison"] != shadowUnmeasured {
+			t.Errorf("a contractless gate was classified %q", r["comparison"])
+		}
+	}
+	if !saw {
+		t.Fatal("no gate records")
+	}
+	for _, r := range recs {
+		if r["record_kind"] == "task_contract_shadow_request" &&
+			r["contract_present"] != false {
+			t.Error("a contractless request claimed a contract")
+		}
+	}
+}
+
+// Undeclared lists stay non-comparable; verification never claims equality.
+func TestShadowUndeclaredListsAreNonComparable(t *testing.T) {
+	recs, _, _, _, _ := shadowLoopRun(t, true, &TaskContract{TaskMode: TaskModeWork},
+		"Create app.py.", shadowWorkPlan)
+	for _, r := range recs {
+		if r["record_kind"] != "task_contract_shadow_request" {
+			continue
+		}
+		if r["output_comparison"] != shadowNotDeclared {
+			t.Errorf("output_comparison=%v, want contract_not_declared", r["output_comparison"])
+		}
+		if r["verification_comparison"] != shadowNotDeclared {
+			t.Errorf("verification_comparison=%v", r["verification_comparison"])
+		}
+	}
+	// A declared verification never reports command equality with a boolean.
+	recs2, _, _, _, _ := shadowLoopRun(t, true,
+		&TaskContract{TaskMode: TaskModeWork, Verification: []string{"go test ./..."}},
+		"Fix the failing test.", shadowWorkPlan)
+	for _, r := range recs2 {
+		if r["record_kind"] != "task_contract_shadow_request" {
+			continue
+		}
+		got := r["verification_comparison"]
+		if got != shadowVerifyLegacyRequires && got != shadowVerifyLegacyDoesNot {
+			t.Errorf("verification_comparison=%v", got)
+		}
+		if strings.Contains(fmt.Sprint(got), "exact") {
+			t.Error("verification claimed exact command agreement with a boolean heuristic")
+		}
+	}
+}
+
+// Aliases collapse to one canonical identity through the existing resolver.
+func TestShadowOutputAliasesShareIdentity(t *testing.T) {
+	recs, _, _, _, _ := shadowLoopRun(t, true,
+		&TaskContract{TaskMode: TaskModeWork, ExpectedOutputs: []string{"app.py", "./app.py"}},
+		"Create app.py.", shadowWorkPlan)
+	for _, r := range recs {
+		if r["record_kind"] != "task_contract_shadow_request" {
+			continue
+		}
+		hashes := r["output_hashes"].([]interface{})
+		if len(hashes) != 1 {
+			t.Errorf("aliases produced %d identities, want 1: %v", len(hashes), hashes)
+		}
+	}
+}
+
+// No raw prose, path, command, or token reaches the file.
+func TestShadowRecordsCarryNoRawText(t *testing.T) {
+	const secret = "Create app.py with the SECRETMARKER inside."
+	recs, _, _, _, _ := shadowLoopRun(t, true,
+		&TaskContract{TaskMode: TaskModeWork, ExpectedOutputs: []string{"app.py"},
+			Verification: []string{"pytest --marker=SECRETCMD"}},
+		secret, shadowWorkPlan)
+	blob, _ := json.Marshal(recs)
+	for _, banned := range []string{"SECRETMARKER", "SECRETCMD", "pytest", "app.py",
+		"Create app.py"} {
+		if strings.Contains(string(blob), banned) {
+			t.Errorf("the capture leaked %q", banned)
+		}
+	}
+}
+
+// The whole point: enabling capture changes nothing the user can observe.
+func TestShadowCaptureIsCausallyInert(t *testing.T) {
+	contract := &TaskContract{TaskMode: TaskModeWork,
+		ExpectedOutputs: []string{"app.py"}, Verification: []string{"pytest"}}
+	_, evOff, diskOff, termOff, promptOff := shadowLoopRun(t, false, contract, "Create app.py.", shadowWorkPlan)
+	recs, evOn, diskOn, termOn, promptOn := shadowLoopRun(t, true, contract, "Create app.py.", shadowWorkPlan)
+	t.Logf("off=%s on=%s records=%d", termOff, termOn, len(recs))
+	if len(recs) == 0 {
+		t.Fatal("capture was enabled but recorded nothing")
+	}
+	if termOff != termOn {
+		t.Errorf("terminal differs: %q vs %q", termOff, termOn)
+	}
+	if strings.Join(diskOff, ",") != strings.Join(diskOn, ",") {
+		t.Errorf("disk differs:\n  %v\n  %v", diskOff, diskOn)
+	}
+	if len(promptOff) != len(promptOn) {
+		t.Fatalf("turn count differs: %d vs %d", len(promptOff), len(promptOn))
+	}
+	for i := range promptOff {
+		if promptOff[i] != promptOn[i] {
+			k := 0
+			for k < len(promptOff[i]) && k < len(promptOn[i]) && promptOff[i][k] == promptOn[i][k] {
+				k++
+			}
+			lo := k - 60
+			if lo < 0 {
+				lo = 0
+			}
+			clip := func(v string) string {
+				hi := k + 100
+				if hi > len(v) {
+					hi = len(v)
+				}
+				return v[lo:hi]
+			}
+			t.Fatalf("model prompt bytes differ on turn %d at byte %d:\n  off: %s\n  on:  %s",
+				i, k, clip(promptOff[i]), clip(promptOn[i]))
+		}
+	}
+	if evOff != evOn {
+		a, b := strings.Split(evOff, "\n"), strings.Split(evOn, "\n")
+		for i := 0; i < len(a) || i < len(b); i++ {
+			var x, y string
+			if i < len(a) {
+				x = a[i]
+			}
+			if i < len(b) {
+				y = b[i]
+			}
+			if x != y {
+				j := 0
+				for j < len(x) && j < len(y) && x[j] == y[j] {
+					j++
+				}
+				lo := j - 80
+				if lo < 0 {
+					lo = 0
+				}
+				clip := func(v string) string {
+					hi := j + 120
+					if hi > len(v) {
+						hi = len(v)
+					}
+					if lo > len(v) {
+						return "<short>"
+					}
+					return v[lo:hi]
+				}
+				t.Fatalf("event/model stream differs at entry %d byte %d:\n  off: %s\n  on:  %s",
+					i, j, clip(x), clip(y))
+			}
+		}
+	}
+}
+
+// Capture off costs a run nothing: no sink, no goroutine, no allocation on the
+// gate path, and the gate still returns exactly what production asked for.
+func TestShadowDisabledCostsNothing(t *testing.T) {
+	activeShadowSink.Store(nil)
+	before := runtime.NumGoroutine()
+	_, _, _, term, _ := shadowLoopRun(t, false, &TaskContract{TaskMode: TaskModeWork},
+		"Create app.py.", shadowWorkPlan)
+	t.Logf("terminal=%s", term)
+	deadline := time.Now().Add(2 * time.Second)
+	after := runtime.NumGoroutine()
+	for after > before && time.Now().Before(deadline) {
+		runtime.Gosched()
+		after = runtime.NumGoroutine()
+	}
+	if after > before {
+		t.Errorf("goroutines grew with capture off: %d -> %d", before, after)
+	}
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	st := &runState{}
+	for _, live := range []bool{true, false} {
+		if got := observeStateChangeGate(ctx, st, shadowGateActionGate, live); got != live {
+			t.Errorf("the disabled gate returned %v for %v", got, live)
+		}
+	}
+	allocs := testing.AllocsPerRun(100, func() {
+		observeStateChangeGate(ctx, st, shadowGateActionGate, true)
+	})
+	if allocs != 0 {
+		t.Errorf("the disabled gate allocated %v per call", allocs)
+	}
+	if st.shadowGate.n != 0 {
+		t.Errorf("the disabled gate advanced its sequence to %d", st.shadowGate.n)
+	}
+}
+
+// The recorded value follows the workspace-inspection state production was
+// holding at the moment of evaluation, not the request text.
+//
+// Both gate sites are evaluated at the completion boundary, so a single
+// request cannot straddle the transition: by the time the gate runs, any
+// inspection this turn has already happened. The transition is therefore shown
+// where production has it, across two runs of the identical neutral request
+// that differ only in whether the workspace was inspected.
+func TestShadowGateFollowsInspectionNotRequestText(t *testing.T) {
+	const neutral = "app.py numbers"
+	noInspect := func(i int) map[string]interface{} {
+		return map[string]interface{}{"type": "done", "summary": "nothing to do"}
+	}
+	report := func(recs []map[string]interface{}) []string {
+		var out []string
+		for _, r := range recs {
+			if r["record_kind"] != "task_contract_shadow_gate" {
+				continue
+			}
+			out = append(out, fmt.Sprintf("%v/live=%v/insp=%v/%v",
+				r["gate_seq"], r["legacy_wants_state_change"], r["inspected_workspace"],
+				r["comparison"]))
+			// The comparison is derived from the value production consumed.
+			want := shadowContractWorkLegacyQuestion
+			if r["legacy_wants_state_change"].(bool) {
+				want = shadowAgreeWork
+			}
+			if r["comparison"] != want {
+				t.Errorf("live=%v recorded comparison %q, want %q",
+					r["legacy_wants_state_change"], r["comparison"], want)
+			}
+			// The gate records inspection state and the live value together,
+			// so a disagreement between them is visible in the capture.
+			if r["legacy_wants_state_change"] != r["inspected_workspace"] {
+				t.Errorf("live=%v with inspected=%v on a neutral request",
+					r["legacy_wants_state_change"], r["inspected_workspace"])
+			}
+		}
+		if len(out) == 0 {
+			t.Fatal("no gate records")
+		}
+		return out
+	}
+	contract := &TaskContract{TaskMode: TaskModeWork}
+	cold, _, _, termCold, _ := shadowLoopRun(t, true, contract, neutral, noInspect)
+	warm, _, _, termWarm, _ := shadowLoopRun(t, true, contract, neutral, shadowWorkPlan)
+	coldSeq, warmSeq := report(cold), report(warm)
+	t.Logf("uninspected %s: %v", termCold, coldSeq)
+	t.Logf("inspected   %s: %v", termWarm, warmSeq)
+	for _, e := range coldSeq {
+		if !strings.Contains(e, "live=false") {
+			t.Errorf("an uninspected run recorded %s", e)
+		}
+	}
+	for _, e := range warmSeq {
+		if !strings.Contains(e, "live=true") {
+			t.Errorf("an inspected run recorded %s", e)
+		}
+	}
+}
+
+// A request rejected at the boundary never produces a snapshot claiming a
+// contract the run does not have.
+func TestShadowRejectedContractProducesNoSnapshot(t *testing.T) {
+	capDir := t.TempDir()
+	shadowEnv(t, capDir, "reject.jsonl")
+	sink, err := openShadowSink()
+	if err != nil {
+		t.Fatalf("sink: %v", err)
+	}
+	activeShadowSink.Store(sink)
+	defer activeShadowSink.Store(nil)
+
+	dir := t.TempDir()
+	for _, bad := range []string{
+		`{"task_mode":"explore"}`,
+		`{"task_mode":"work","expected_outputs":["../../etc/passwd"]}`,
+		`{"task_mode":""}`,
+	} {
+		var in TaskContract
+		if err := json.Unmarshal([]byte(bad), &in); err != nil {
+			t.Fatalf("fixture %s: %v", bad, err)
+		}
+		if _, err := validateTaskContract(&in, dir); err == nil {
+			t.Fatalf("%s was accepted", bad)
+		}
+	}
+	sink.close(context.Background(), 5*time.Second)
+	for _, r := range readShadowRecords(t, filepath.Join(capDir, "reject.jsonl")) {
+		if r["record_kind"] != "task_contract_shadow_footer" {
+			t.Errorf("a rejected contract produced %v", r["record_kind"])
+		}
+	}
+}
+
+// Structural: the shadow path cannot reach a live decision.
+//
+// Three properties, each read off the syntax tree rather than trusted:
+//   - observeStateChangeGate returns its live argument and nothing else, and
+//     never assigns to it, so instrumenting a gate cannot change its value.
+//   - wantsStateChange is called exactly once per live site, and each call is
+//     an argument to observeStateChangeGate, so the recorded value is the
+//     value production consumed and the heuristic runs once.
+//   - outside the shadow implementation itself, no shadow identifier appears
+//     anywhere in production code, so no shadow state can be branched on.
+func TestShadowHasNoPathIntoPolicy(t *testing.T) {
+	fset := token.NewFileSet()
+	files := map[string]*ast.File{}
+	entries, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range entries {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		files[name] = f
+	}
+
+	// 1. the observer is an identity function on its live argument
+	var observer *ast.FuncDecl
+	for _, f := range files {
+		for _, d := range f.Decls {
+			if fd, ok := d.(*ast.FuncDecl); ok && fd.Name.Name == "observeStateChangeGate" {
+				observer = fd
+			}
+		}
+	}
+	if observer == nil {
+		t.Fatal("observeStateChangeGate is gone")
+	}
+	returns := 0
+	ast.Inspect(observer.Body, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.ReturnStmt:
+			returns++
+			if len(v.Results) != 1 {
+				t.Errorf("a return yields %d values", len(v.Results))
+				return true
+			}
+			id, ok := v.Results[0].(*ast.Ident)
+			if !ok || id.Name != "live" {
+				t.Errorf("a return does not yield the live value: %T", v.Results[0])
+			}
+		case *ast.AssignStmt:
+			for _, lhs := range v.Lhs {
+				if id, ok := lhs.(*ast.Ident); ok && id.Name == "live" {
+					t.Error("the observer assigns to the live value")
+				}
+			}
+		}
+		return true
+	})
+	if returns == 0 {
+		t.Error("the observer never returns")
+	}
+
+	// 2. every live wantsStateChange call is an argument to the observer
+	sites := 0
+	for name, f := range files {
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			id, ok := call.Fun.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			switch id.Name {
+			case "wantsStateChange":
+				sites++
+			case "observeStateChangeGate":
+				inner := 0
+				for _, a := range call.Args {
+					ast.Inspect(a, func(m ast.Node) bool {
+						if c, ok := m.(*ast.CallExpr); ok {
+							if ci, ok := c.Fun.(*ast.Ident); ok && ci.Name == "wantsStateChange" {
+								inner++
+							}
+						}
+						return true
+					})
+				}
+				if inner != 1 {
+					t.Errorf("%s: an observed gate wraps %d wantsStateChange calls, want 1",
+						name, inner)
+				}
+			}
+			return true
+		})
+	}
+	if sites != 2 {
+		t.Errorf("%d live wantsStateChange calls, want the 2 observed gate sites", sites)
+	}
+
+	// 3. shadow identifiers stay inside the shadow implementation
+	allowed := map[string]bool{
+		"observeStateChangeGate":    true,
+		"emitShadowRequestSnapshot": true,
+		"contractOutputs":           true,
+		"shadowCanonicalSet":        true,
+		"shadowHashes":              true,
+		"shadowCompareSets":         true,
+		"shadowHash":                true,
+		"openShadowSink":            true,
+		"newShadowSink":             true,
+		"shadowCaptureRoot":         true,
+		"main":                      true,
+		"enabled":                   true,
+		"run":                       true,
+		"submit":                    true,
+		"noteRequest":               true,
+		"close":                     true,
+		"pauseWriterForTest":        true,
+		"resumeWriterForTest":       true,
+		"abandonForTest":            true,
+	}
+	// The two call sites and the snapshot call may name the entry points.
+	entryPoints := map[string]bool{
+		"observeStateChangeGate":    true,
+		"emitShadowRequestSnapshot": true,
+		"shadowGateActionDemanded":  true,
+		"shadowGateActionGate":      true,
+	}
+	for name, f := range files {
+		for _, d := range f.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok || allowed[fd.Name.Name] || fd.Body == nil {
+				continue
+			}
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				id, ok := n.(*ast.Ident)
+				if !ok || !strings.HasPrefix(strings.ToLower(id.Name), "shadow") {
+					return true
+				}
+				if entryPoints[id.Name] {
+					return true
+				}
+				t.Errorf("%s: %s reads shadow state %q outside the shadow path",
+					name, fd.Name.Name, id.Name)
+				return true
+			})
+		}
+	}
+}
+
+// abandonForTest stops the writer without a footer, the way a SIGKILL would.
+func (s *shadowSink) abandonForTest() {
+	close(s.queue)
+	<-s.done
+	s.f.Close()
 }

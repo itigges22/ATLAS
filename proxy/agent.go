@@ -159,6 +159,9 @@ type runState struct {
 	// as work from one it answered conversationally, without consulting
 	// a vocabulary list. See wantsStateChange.
 	inspectedWorkspace bool
+	// shadowGate is bounded diagnostic-only sequencing. Nothing but the
+	// shadow emitter reads it.
+	shadowGate shadowGateSeq
 	// Files the prompt explicitly asks the model to produce
 	// ("save your solution in X"). Checked against disk before `done` is
 	// allowed — a model can satisfy the generic action gate with a
@@ -398,7 +401,8 @@ func (s *runState) verificationDemandedAndUnmet() bool {
 // with that code as its summary — the user is shown a block of code that
 // was never applied, with no indication it was not.
 func (s *runState) actionDemandedAndUnmet(ctx *AgentContext, userMessage string) bool {
-	return wantsStateChange(userMessage, ctx.Tier, s.inspectedWorkspace) &&
+	return observeStateChangeGate(ctx, s, shadowGateActionDemanded,
+		wantsStateChange(userMessage, ctx.Tier, s.inspectedWorkspace)) &&
 		!s.madeProductiveChange
 }
 
@@ -501,7 +505,9 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 			s.gateBounces["plan_gate"], maxGateBounces)
 		return "plan_gate", msg
 	}
-	if wantsStateChange(userMessage, ctx.Tier, s.inspectedWorkspace) && !s.madeProductiveChange && s.chargeBounce("action_gate") {
+	if observeStateChangeGate(ctx, s, shadowGateActionGate,
+		wantsStateChange(userMessage, ctx.Tier, s.inspectedWorkspace)) &&
+		!s.madeProductiveChange && s.chargeBounce("action_gate") {
 		log.Printf("[agent] done-without-action gate: bouncing exit at turn %d (user prompt %q wants a state change, no successful write/edit/structural_edit this loop, bounce %d/%d)",
 			s.turn, truncateStr(userMessage, 60), s.gateBounces["action_gate"], maxGateBounces)
 		return "action_gate", actionWithoutProductiveChangeMessage(userMessage)
@@ -600,6 +606,9 @@ func fetchPatternContext(ctx *AgentContext, userMessage string) (string, []strin
 }
 
 func runAgentLoop(ctx *AgentContext, userMessage string) error {
+	// One snapshot per validated request, before any turn runs. Only the
+	// immutable inputs: the live decision belongs to the gate records.
+	emitShadowRequestSnapshot(ctx, userMessage)
 	// Capture the human's actual instruction before the loop appends
 	// anything: correctives, manifests and re-injected content all ride
 	// user-role messages, and everything downstream that needs "what was
@@ -3682,6 +3691,249 @@ func validateTaskContract(in *TaskContract, workingDir string) (*TaskContract, e
 	sort.Strings(out.ExpectedOutputs)
 	sort.Strings(out.Verification)
 	return out, nil
+}
+
+// --- Shadow comparison: what the client declared vs what ATLAS inferred ------
+//
+// Two records, because one cannot represent both. The request snapshot holds
+// the immutable inputs -- the contract, the tier production already chose, each
+// heuristic's own answer. The gate record holds an actual live decision, and
+// there may be zero, one or several of those in a run: wantsStateChange reads
+// inspectedWorkspace, which flips true once a read-only tool succeeds, so the
+// same request legitimately answers false early and true later. A request-start
+// approximation would be a different number from the one production used.
+//
+// Nothing here decides anything. Every function is called for its existing
+// answer and the answer is recorded, not consulted.
+const shadowSchemaVersion = 1
+
+// shadowGateSite names the two live call sites, as a closed set.
+type shadowGateSite string
+
+const (
+	shadowGateActionDemanded shadowGateSite = "action_demanded_and_unmet"
+	shadowGateActionGate     shadowGateSite = "exit_action_gate"
+)
+
+// shadowComparison is the closed task-mode vocabulary. Only a gate record gets
+// one, because only a gate record holds a live legacy decision.
+const (
+	shadowAgreeWork                  = "agree_work"
+	shadowAgreeQuestion              = "agree_question"
+	shadowContractWorkLegacyQuestion = "contract_work_legacy_question"
+	shadowContractQuestionLegacyWork = "contract_question_legacy_work"
+	shadowUnmeasured                 = "unmeasured"
+)
+
+// Declaration state and the two set-comparison vocabularies. There is no
+// "invalid" state: an invalid contract is rejected at the request boundary and
+// never reaches a run, so a record can only describe a contract that was
+// declared or one that was absent.
+const (
+	shadowNotDeclared = "contract_not_declared"
+	shadowDeclared    = "contract_declared"
+
+	shadowOutputsExact        = "exact_agreement"
+	shadowOutputsContractOnly = "contract_only"
+	shadowOutputsLegacyOnly   = "legacy_only"
+	shadowOutputsPartial      = "partial_overlap"
+	shadowOutputsIncomparable = "incomparable"
+
+	shadowVerifyLegacyRequires = "contract_declared_legacy_requires_verification"
+	shadowVerifyLegacyDoesNot  = "contract_declared_legacy_does_not_require_verification"
+)
+
+// shadowHash is the stable identity used for joining and set comparison. It is
+// never authority and never reversible to the original text.
+func shadowHash(s string) string { return hashBytes([]byte(s))[:16] }
+
+// shadowGateSeq is bounded per-request diagnostic state. Structurally unable to
+// reach policy: nothing but the emitter reads it.
+type shadowGateSeq struct{ n int }
+
+// emitShadowRequestSnapshot records the immutable comparison inputs once per
+// validated request. Every heuristic below is the existing function, called for
+// the answer it already gives; no word list, regex or path rule is duplicated.
+func emitShadowRequestSnapshot(ctx *AgentContext, userMessage string) {
+	sink := activeShadowSink.Load()
+	if !sink.enabled() {
+		return // disabled: no hashing, no resolution, no heuristic calls
+	}
+	requestID := ""
+	if ctx.Ctx != nil {
+		requestID = requestIDFromContext(ctx.Ctx)
+	}
+	sink.noteRequest(requestID)
+
+	tc := ctx.TaskContract
+	rec := map[string]interface{}{
+		"schema_version":           shadowSchemaVersion,
+		"record_kind":              "task_contract_shadow_request",
+		"request_id":               requestID,
+		"user_message_sha256":      hashBytes([]byte(userMessage)),
+		"contract_present":         tc != nil,
+		"tier":                     ctx.Tier.String(),
+		"heuristic_action_intent":  isActionIntentMessage(userMessage),
+		"heuristic_read_only":      isReadOnlyRequest(userMessage),
+		"heuristic_explain_only":   isExplainOnlyMessage(strings.ToLower(userMessage)),
+		"heuristic_question":       isQuestionMessage(userMessage),
+		"heuristic_fix_intent":     isFixIntentMessage(userMessage),
+		"influences_live_decision": false,
+		"build_version":            APIVersion,
+	}
+	if tc != nil {
+		rec["contract_provenance"] = "client"
+		rec["task_mode"] = string(tc.TaskMode)
+	}
+
+	// Legacy deliverables, canonicalised through the resolver every tool uses.
+	legacy := expectedOutputPaths(userMessage)
+	legacyCanon, legacyFails := shadowCanonicalSet(ctx, legacy)
+	rec["legacy_output_count"] = len(legacy)
+	rec["legacy_output_hashes"] = shadowHashes(legacyCanon)
+
+	declared := tc != nil && len(tc.ExpectedOutputs) > 0
+	contractCanon, contractFails := shadowCanonicalSet(ctx, contractOutputs(tc))
+	rec["canonicalization_failures"] = legacyFails + contractFails
+	if declared {
+		rec["output_declaration_state"] = shadowDeclared
+		rec["output_count"] = len(tc.ExpectedOutputs)
+		rec["output_hashes"] = shadowHashes(contractCanon)
+		rec["output_comparison"] = shadowCompareSets(contractCanon, legacyCanon,
+			contractFails+legacyFails > 0)
+	} else {
+		rec["output_declaration_state"] = shadowNotDeclared
+		rec["output_count"] = 0
+		rec["output_comparison"] = shadowNotDeclared
+	}
+
+	// Verification: the legacy side is a boolean demand and never a command,
+	// so exact agreement is not a claim this can make.
+	if tc != nil && len(tc.Verification) > 0 {
+		rec["verification_declaration_state"] = shadowDeclared
+		rec["verification_count"] = len(tc.Verification)
+		rec["verification_hashes"] = shadowHashes(tc.Verification)
+		if isFixIntentMessage(userMessage) {
+			rec["verification_comparison"] = shadowVerifyLegacyRequires
+		} else {
+			rec["verification_comparison"] = shadowVerifyLegacyDoesNot
+		}
+	} else {
+		rec["verification_declaration_state"] = shadowNotDeclared
+		rec["verification_count"] = 0
+		rec["verification_comparison"] = shadowNotDeclared
+	}
+	sink.submit(rec)
+}
+
+func contractOutputs(tc *TaskContract) []string {
+	if tc == nil {
+		return nil
+	}
+	return tc.ExpectedOutputs
+}
+
+// shadowCanonicalSet resolves each path through resolveWorkspacePath -- the one
+// canonicalisation rule -- and counts what could not be resolved.
+func shadowCanonicalSet(ctx *AgentContext, paths []string) ([]string, int) {
+	seen := map[string]bool{}
+	var out []string
+	fails := 0
+	for _, p := range paths {
+		canon, err := resolveWorkspacePath(ctx, p)
+		if err != nil {
+			fails++
+			continue
+		}
+		if !seen[canon] {
+			seen[canon] = true
+			out = append(out, canon)
+		}
+	}
+	sort.Strings(out)
+	return out, fails
+}
+
+func shadowHashes(items []string) []string {
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		out = append(out, shadowHash(it))
+	}
+	return out
+}
+
+// shadowCompareSets classifies two canonical sets.
+func shadowCompareSets(contract, legacy []string, failed bool) string {
+	if failed {
+		return shadowOutputsIncomparable
+	}
+	inLegacy := map[string]bool{}
+	for _, l := range legacy {
+		inLegacy[l] = true
+	}
+	overlap := 0
+	for _, c := range contract {
+		if inLegacy[c] {
+			overlap++
+		}
+	}
+	switch {
+	case overlap == len(contract) && overlap == len(legacy):
+		return shadowOutputsExact
+	case overlap == 0 && len(legacy) == 0:
+		return shadowOutputsContractOnly
+	case overlap == 0 && len(contract) == 0:
+		return shadowOutputsLegacyOnly
+	case overlap == 0:
+		return shadowOutputsIncomparable
+	default:
+		return shadowOutputsPartial
+	}
+}
+
+// observeStateChangeGate records one live evaluation. The value handed in is
+// the one production already computed and is returned unchanged; this function
+// cannot re-run the heuristic and cannot alter the answer.
+func observeStateChangeGate(ctx *AgentContext, st *runState, site shadowGateSite,
+	live bool) bool {
+	sink := activeShadowSink.Load()
+	if !sink.enabled() {
+		return live
+	}
+	st.shadowGate.n++
+	requestID := ""
+	if ctx.Ctx != nil {
+		requestID = requestIDFromContext(ctx.Ctx)
+	}
+	comparison := shadowUnmeasured
+	mode := ""
+	if tc := ctx.TaskContract; tc != nil {
+		mode = string(tc.TaskMode)
+		switch {
+		case tc.TaskMode == TaskModeWork && live:
+			comparison = shadowAgreeWork
+		case tc.TaskMode == TaskModeQuestion && !live:
+			comparison = shadowAgreeQuestion
+		case tc.TaskMode == TaskModeWork && !live:
+			comparison = shadowContractWorkLegacyQuestion
+		case tc.TaskMode == TaskModeQuestion && live:
+			comparison = shadowContractQuestionLegacyWork
+		}
+	}
+	sink.submit(map[string]interface{}{
+		"schema_version":            shadowSchemaVersion,
+		"record_kind":               "task_contract_shadow_gate",
+		"request_id":                requestID,
+		"gate_seq":                  st.shadowGate.n,
+		"call_site":                 string(site),
+		"inspected_workspace":       st.inspectedWorkspace,
+		"tier":                      ctx.Tier.String(),
+		"legacy_wants_state_change": live,
+		"contract_task_mode":        mode,
+		"comparison":                comparison,
+		"influences_live_decision":  false,
+	})
+	return live
 }
 
 // needsPermission returns true if the tool call requires user confirmation.

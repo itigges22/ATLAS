@@ -32,6 +32,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -340,6 +342,193 @@ func handlePassthrough(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
+// --- Private shadow capture --------------------------------------------------
+//
+// ATLAS still works out what the user demanded by reading their English, and
+// the client now declares it structurally. Nothing compares the two. This sink
+// exists so a later corpus can measure how often they disagree and why -- and
+// nothing else: no record it writes is read by any decision, and none reaches a
+// wire. It is off unless an operator names a capture file.
+//
+// Deliberately not /events: that stream is a documented public contract with a
+// permanently connected TUI subscriber and no per-session filter, so anything
+// emitted there would be both a schema expansion and a disclosure. Deliberately
+// not the lens corpus either -- that is training data.
+
+// shadowQueueDepth bounds what a wedged or slow disk can cost. A full queue
+// drops and counts rather than pushing back on an agent request: a diagnostic
+// that can stall a user's run is worse than a diagnostic with a hole in it.
+const shadowQueueDepth = 1024
+
+// maxTrackedShadowRequests bounds duplicate detection. Beyond it, new ids stop
+// being remembered and the footer says so, rather than growing without limit.
+const maxTrackedShadowRequests = 100000
+
+// shadowCaptureRoot is the only directory a capture may live in, following the
+// same envOr convention as the lens data dir.
+func shadowCaptureRoot() string {
+	return envOr("ATLAS_DIAGNOSTIC_DIR", "/data/diagnostics")
+}
+
+type shadowSink struct {
+	queue chan []byte
+	done  chan struct{}
+	f     *os.File
+
+	accepted  atomic.Int64
+	written   atomic.Int64
+	dropped   atomic.Int64
+	errors    atomic.Int64
+	duplicate atomic.Int64
+	overflow  atomic.Bool // duplicate tracking stopped growing
+
+	mu   sync.Mutex
+	seen map[string]bool
+
+	closeOnce sync.Once
+}
+
+// activeShadowSink is written once before the listener opens and never again,
+// so every later access is a read of an immutable value.
+var activeShadowSink atomic.Pointer[shadowSink]
+
+// openShadowSink prepares the capture, or returns nil when none is configured.
+//
+// Refuses anything it cannot own: a destination outside the capture root, or
+// one that already exists. Appending to a previous capture would silently merge
+// two runs into what looks like one, and a corpus cannot tell them apart later.
+func openShadowSink() (*shadowSink, error) {
+	name := strings.TrimSpace(os.Getenv("ATLAS_SHADOW_CAPTURE"))
+	if name == "" {
+		return nil, nil
+	}
+	root, err := filepath.Abs(shadowCaptureRoot())
+	if err != nil {
+		return nil, fmt.Errorf("shadow capture root: %w", err)
+	}
+	target, err := filepath.Abs(filepath.Join(root, name))
+	if err != nil {
+		return nil, fmt.Errorf("shadow capture path: %w", err)
+	}
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) ||
+		filepath.IsAbs(name) {
+		return nil, fmt.Errorf("ATLAS_SHADOW_CAPTURE=%q resolves outside %s", name, root)
+	}
+	if _, err := os.Stat(target); err == nil {
+		return nil, fmt.Errorf("ATLAS_SHADOW_CAPTURE=%q already exists; a capture must be "+
+			"fresh so two runs cannot merge into one file", target)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return nil, fmt.Errorf("shadow capture dir: %w", err)
+	}
+	f, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("shadow capture: %w", err)
+	}
+	s := newShadowSink(f)
+	go s.run()
+	return s, nil
+}
+
+// newShadowSink builds a sink whose writer has not started, so nothing drains
+// the queue until run() is called.
+func newShadowSink(f *os.File) *shadowSink {
+	return &shadowSink{
+		queue: make(chan []byte, shadowQueueDepth),
+		done:  make(chan struct{}),
+		f:     f,
+		seen:  map[string]bool{},
+	}
+}
+
+func (s *shadowSink) enabled() bool { return s != nil }
+
+func (s *shadowSink) run() {
+	defer close(s.done)
+	for line := range s.queue {
+		if _, err := s.f.Write(line); err != nil {
+			// Counted, never retried, never surfaced: a capture failure is a
+			// defective capture, not a failed user run.
+			s.errors.Add(1)
+			continue
+		}
+		s.written.Add(1)
+	}
+}
+
+// submit enqueues without blocking. A full queue drops and counts.
+func (s *shadowSink) submit(rec map[string]interface{}) {
+	if s == nil {
+		return
+	}
+	s.accepted.Add(1)
+	line, err := json.Marshal(rec)
+	if err != nil {
+		s.errors.Add(1)
+		return
+	}
+	select {
+	case s.queue <- append(line, '\n'):
+	default:
+		s.dropped.Add(1)
+	}
+}
+
+// noteRequest records a request id and reports a duplicate within one capture.
+func (s *shadowSink) noteRequest(id string) {
+	if s == nil || id == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.seen[id] {
+		s.duplicate.Add(1)
+		return
+	}
+	if len(s.seen) >= maxTrackedShadowRequests {
+		s.overflow.Store(true)
+		return
+	}
+	s.seen[id] = true
+}
+
+// close drains within the deadline, writes the footer, and closes once.
+func (s *shadowSink) close(ctx context.Context, wait time.Duration) error {
+	if s == nil {
+		return nil
+	}
+	var err error
+	s.closeOnce.Do(func() {
+		close(s.queue)
+		select {
+		case <-s.done:
+		case <-time.After(wait):
+			s.errors.Add(1)
+		case <-ctx.Done():
+			s.errors.Add(1)
+		}
+		footer, _ := json.Marshal(map[string]interface{}{
+			"schema_version":            shadowSchemaVersion,
+			"record_kind":               "task_contract_shadow_footer",
+			"accepted":                  s.accepted.Load(),
+			"written":                   s.written.Load(),
+			"dropped":                   s.dropped.Load(),
+			"errors":                    s.errors.Load(),
+			"duplicate_request_ids":     s.duplicate.Load(),
+			"request_tracking_overflow": s.overflow.Load(),
+			"influences_live_decision":  false,
+		})
+		if _, werr := s.f.Write(append(footer, '\n')); werr != nil {
+			err = werr
+		}
+		if cerr := s.f.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	})
+	return err
+}
+
 // --- Bounded graceful shutdown ----------------------------------------------
 //
 // main() blocked in ListenAndServe and died on log.Fatalf, so a SIGTERM cut the
@@ -533,6 +722,24 @@ func main() {
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       90 * time.Second,
 	}
+	// Opened before the listener: a capture that cannot be created is a
+	// configuration error to discover now, not mid-acquisition.
+	sink, err := openShadowSink()
+	if err != nil {
+		log.Fatalf("configuration: %v", err)
+	}
+	var hooks []closeHook
+	if sink != nil {
+		activeShadowSink.Store(sink)
+		log.Printf("  Shadow capture: enabled (%s)", os.Getenv("ATLAS_SHADOW_CAPTURE"))
+		hooks = append(hooks, closeHook{
+			name: "shadow-capture",
+			fn: func(hctx context.Context) error {
+				return sink.close(hctx, budget.hookMargin)
+			},
+		})
+	}
+
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Fatalf("listen %s: %v", addr, err)
@@ -541,9 +748,9 @@ func main() {
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(signals)
 
-	// No hooks yet. A nil hook set is the ordinary production path and costs
-	// nothing; this exists so ordered cleanup has somewhere to land.
-	res, serveErr := runServer(server, ln, signals, nil, budget)
+	// hooks is empty unless a diagnostic capture is configured, which is the
+	// ordinary production path and costs nothing.
+	res, serveErr := runServer(server, ln, signals, hooks, budget)
 	if serveErr != nil {
 		log.Printf("server error: %v", serveErr)
 		os.Exit(1)
