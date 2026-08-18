@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // Effect classification is a property of the tool, declared on its ToolDef,
@@ -2081,6 +2082,20 @@ type delLoop struct {
 	ctx      *AgentContext
 }
 
+// delLoopApprove selects whether the fixture answers deletion prompts. It is
+// package-level rather than a parameter so the existing call sites keep their
+// shape; delLoopFixtureApprove sets it for one run.
+var delLoopApprove = true
+
+func delLoopFixtureApprove(t *testing.T, seed map[string]string, prompt string,
+	plan func(i int) map[string]interface{}, approve bool) *delLoop {
+	t.Helper()
+	prev := delLoopApprove
+	delLoopApprove = approve
+	t.Cleanup(func() { delLoopApprove = prev })
+	return delLoopFixture(t, seed, prompt, plan)
+}
+
 func delLoopFixture(t *testing.T, seed map[string]string, prompt string,
 	plan func(i int) map[string]interface{}) *delLoop {
 	t.Helper()
@@ -2138,6 +2153,11 @@ func delLoopFixture(t *testing.T, seed map[string]string, prompt string,
 	r.ctx.TrustMode = trustFullyTrusted
 	r.ctx.VerifyOnHost = true
 	r.ctx.MaxTurns = 0
+	if delLoopApprove {
+		autoApproveDeletes(t, r.ctx, "delloop-"+filepath.Base(r.dir))
+	} else {
+		autoAnswerDeletes(t, r.ctx, "delloop-deny-"+filepath.Base(r.dir), "deny")
+	}
 	r.ctx.StreamFn = func(et string, data interface{}) {
 		b, _ := json.Marshal(data)
 		mu.Lock()
@@ -2294,6 +2314,9 @@ func TestDeleteContinuationMatrix(t *testing.T) {
 			func(i int) map[string]interface{} {
 				return dlDel("a.py")
 			}, 2, ""},
+		// The refusal is unchanged and so is the terminal: the structured
+		// intent is recorded before the target is judged, so a refused
+		// deletion still owes something and cannot report completed.
 		{"non-empty directory is refused, unchanged", "Delete pkg.",
 			map[string]string{"pkg/mod.py": delSeed},
 			func(i int) map[string]interface{} {
@@ -2637,4 +2660,146 @@ func claimsNothingWritten(summary string) bool {
 		}
 	}
 	return false
+}
+
+// autoApproveDeletes answers every delete_file permission request with a
+// one-time allow, so a fixture testing the LOOP is not also testing the
+// handshake. Deleting now always asks -- yolo included -- and these fixtures
+// exist to measure continuation and completion, not confirmation.
+func autoApproveDeletes(t *testing.T, ctx *AgentContext, sessionID string) {
+	t.Helper()
+	autoAnswerDeletes(t, ctx, sessionID, "allow")
+}
+
+// autoAnswerDeletes answers every pending prompt for this session with the
+// given decision, so a fixture never waits out the real fail-safe.
+func autoAnswerDeletes(t *testing.T, ctx *AgentContext, sessionID, decision string) {
+	t.Helper()
+	ctx.PassID = sessionID
+	stop := make(chan struct{})
+	t.Cleanup(func() { close(stop) })
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(2 * time.Millisecond):
+			}
+			pendingPermissions.Range(func(k, _ any) bool {
+				key, _ := k.(string)
+				if !strings.HasPrefix(key, sessionID+"|") {
+					return true
+				}
+				callID := strings.TrimPrefix(key, sessionID+"|")
+				body := fmt.Sprintf(
+					`{"session_id":%q,"tool_call_id":%q,"decision":%q,"scope":"once"}`,
+					sessionID, callID, decision)
+				r := httptest.NewRequest(http.MethodPost, "/v1/permission",
+					strings.NewReader(body))
+				handlePermission(httptest.NewRecorder(), r)
+				return true
+			})
+		}
+	}()
+}
+
+// A refused deletion owes something, and nothing about the refusal retires it.
+//
+// The structured intent is recorded once the path parses, canonicalises and
+// clears the workspace boundary -- before the target is judged and before the
+// user is asked -- so a preflight refusal, a denial, a timeout and a cancel
+// all leave the debt standing. Recording the model's tool intent is not user
+// authorisation, and no word in the prompt is consulted anywhere here.
+func TestRefusedDeletionCannotAuthoriseCompletion(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		seed       map[string]string
+		plan       func(i int) map[string]interface{}
+		approve    bool
+		wantStatus TerminalStatus
+		wantReason string
+		wantOnDisk []string
+	}{
+		{"denied deletion then done", map[string]string{"a.py": delSeed},
+			func(i int) map[string]interface{} {
+				if i == 0 {
+					return dlDel("a.py")
+				}
+				return map[string]interface{}{"type": "done", "summary": "removed a.py"}
+			}, false, TerminalIncomplete, "unresolved_mutation_debt", []string{"a.py"}},
+
+		{"denied deletion then unrelated success", map[string]string{"a.py": delSeed},
+			func(i int) map[string]interface{} {
+				switch i {
+				case 0:
+					return dlDel("a.py")
+				case 1:
+					return dlWrite("report.py", delSeed)
+				}
+				return map[string]interface{}{"type": "done", "summary": "wrote report.py"}
+			}, false, TerminalIncomplete, "unresolved_mutation_debt",
+			[]string{"a.py", "report.py"}},
+
+		// A rewrite is not a retirement of a delete debt: that debt retires on
+		// the path being confirmed ABSENT, and rewriting it leaves it present.
+		// The existing causal rule converts content-then-delete, not the other
+		// way round, so a denied deletion followed by a same-path write still
+		// owes the deletion and the run stays incomplete. Fail-closed, and the
+		// alternative would let any later write launder a denied removal.
+		{"denied deletion then a same-path rewrite still owes the deletion",
+			map[string]string{"a.py": delSeed},
+			func(i int) map[string]interface{} {
+				switch i {
+				case 0:
+					return dlDel("a.py")
+				case 1:
+					return dlWrite("a.py", "def solve():\n    return 8\n\n\nprint(solve())\n")
+				}
+				return map[string]interface{}{"type": "done", "summary": "rewrote a.py"}
+			}, false, TerminalIncomplete, "unresolved_mutation_debt", []string{"a.py"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := delLoopFixtureApprove(t, c.seed, "Tidy the workspace.", c.plan, c.approve)
+			r.check(t, c.name)
+			got := NormalizeTerminalStatus(r.terminal["status"])
+			if got != c.wantStatus {
+				t.Errorf("status=%q reason=%q, want %s",
+					r.terminal["status"], r.terminal["reason"], c.wantStatus)
+			}
+			if c.wantReason != "" && r.terminal["reason"] != c.wantReason {
+				t.Errorf("reason=%q, want %q", r.terminal["reason"], c.wantReason)
+			}
+			for _, want := range c.wantOnDisk {
+				if _, err := os.Stat(filepath.Join(r.dir, want)); err != nil {
+					t.Errorf("%s is missing: %v", want, err)
+				}
+			}
+		})
+	}
+}
+
+// Timeout and cancel are refusals too, and leave the same debt standing.
+func TestUnansweredDeletionCannotAuthoriseCompletion(t *testing.T) {
+	for _, mode := range []string{"timeout", "cancel"} {
+		t.Run(mode, func(t *testing.T) {
+			if mode == "timeout" {
+				t.Setenv("ATLAS_PERMISSION_TIMEOUT_SEC", "1")
+			}
+			r := delLoopFixtureApprove(t, map[string]string{"a.py": delSeed},
+				"Tidy the workspace.",
+				func(i int) map[string]interface{} {
+					if i == 0 {
+						return dlDel("a.py")
+					}
+					return map[string]interface{}{"type": "done", "summary": "removed a.py"}
+				}, false)
+			r.check(t, mode)
+			if NormalizeTerminalStatus(r.terminal["status"]).Completed() {
+				t.Errorf("%s reported %q/%q", mode, r.terminal["status"], r.terminal["reason"])
+			}
+			if _, err := os.Stat(filepath.Join(r.dir, "a.py")); err != nil {
+				t.Errorf("the file was removed without an answer: %v", err)
+			}
+		})
+	}
 }

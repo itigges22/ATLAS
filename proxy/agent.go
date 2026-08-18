@@ -1207,30 +1207,83 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// denies it (via POST /v1/permission). Yolo mode and pre-approved
 			// tools short-circuit needsPermission and never reach here. The
 			// legacy PermissionFn is still honored for non-interactive callers.
-			if needsPermission(ctx, parsed.Name, parsed.Args) {
-				allowed := true
-				if ctx.PermissionFn != nil {
-					allowed = ctx.PermissionFn(parsed.Name, parsed.Args)
-				} else {
-					allowed = awaitPermission(ctx, parsed.Name, permCallID(turn), parsed.Args)
+			//
+			// Deletion runs this LATER -- see below. It has to be asked after
+			// the path is canonicalised and its structured intent is on the
+			// record, or a refusal leaves nothing owed and a run whose only
+			// act was a refused deletion reports completed.
+			permissionGate := func() int { // 0 proceed, 1 continue, 2 stop
+				if !needsPermission(ctx, parsed.Name, parsed.Args) {
+					return 0
 				}
-				if !allowed {
-					ctx.Stream("permission_denied", map[string]string{
-						"tool": parsed.Name,
-					})
-					// Bespoke bounce: the permission flow keys its tool-call
-					// ID via permCallID so the TUI can match the decision.
-					ctx.Messages = append(ctx.Messages, AgentMessage{
-						Role:    "assistant",
-						Content: response,
-					})
-					ctx.Messages = append(ctx.Messages, AgentMessage{
-						Role:       "tool",
-						Content:    `{"success":false,"error":"permission denied by user"}`,
-						ToolCallID: permCallID(turn),
-						ToolName:   parsed.Name,
-					})
+				{
+					allowed := true
+					// A deletion always goes through the interactive handshake.
+					// PermissionFn is a programmatic approver -- yolo installs one
+					// that says yes to everything -- and a function returning true
+					// is not a user deciding about a file. Routing deletion around
+					// it is what makes the yolo bypass actually closed rather than
+					// closed-looking: needsPermission alone would just hand the
+					// call to that function.
+					if ctx.PermissionFn != nil && parsed.Name != "delete_file" {
+						allowed = ctx.PermissionFn(parsed.Name, parsed.Args)
+					} else {
+						allowed = awaitPermission(ctx, parsed.Name, permCallID(turn), parsed.Args)
+					}
+					if !allowed {
+						ctx.Stream("permission_denied", map[string]string{
+							"tool": parsed.Name,
+						})
+						// A refusal here is a failed call like any other, and this
+						// branch returned before everything that counts one. It
+						// matters more now that a deletion always reaches the
+						// handshake: a model repeating a delete of a path the
+						// preflight refuses gets denied every time, and without
+						// accounting it repeats until the turn cap -- measured at
+						// 21 turns with no terminal of ATLAS's own.
+						if stop := accountRefusedCall(parsed.Name, intentArgs,
+							"permission denied by user",
+							workspaceRefusalPath(ctx, parsed.Name, parsed.Args)); stop {
+							return 2
+						}
+						// A denied call still produced a result the model reads,
+						// so it owes the stream one too. Without this the run
+						// emits more tool_calls than tool_results, which every
+						// balance check treats as a dropped call -- invisible
+						// until deletion started always routing through here.
+						// The call is answered, so it is no longer pending; the
+						// terminal must not flush a second "not run" result for it.
+						st.pendingToolCall = ""
+						ctx.Stream("tool_result", map[string]interface{}{
+							"tool":    parsed.Name,
+							"success": false,
+							"data":    json.RawMessage("null"),
+							"error":   "permission denied by user",
+							"elapsed": "0s",
+						})
+						// Bespoke bounce: the permission flow keys its tool-call
+						// ID via permCallID so the TUI can match the decision.
+						ctx.Messages = append(ctx.Messages, AgentMessage{
+							Role:    "assistant",
+							Content: response,
+						})
+						ctx.Messages = append(ctx.Messages, AgentMessage{
+							Role:       "tool",
+							Content:    `{"success":false,"error":"permission denied by user"}`,
+							ToolCallID: permCallID(turn),
+							ToolName:   parsed.Name,
+						})
+						return 1
+					}
+					return 0
+				}
+			}
+			if parsed.Name != "delete_file" {
+				switch permissionGate() {
+				case 1:
 					continue
+				case 2:
+					return nil
 				}
 			}
 
@@ -1280,6 +1333,22 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// the pre-dispatch failures are exactly the ones that used to
 			// disappear.
 			noteMutationIntent(ctx, st, parsed.Name, parsed.Args)
+
+			// Deletion asks here, not with the others. By this point the path
+			// has parsed, canonicalised and cleared the workspace boundary,
+			// and the structured intent is recorded -- so a refusal, a denial,
+			// a timeout or a cancel all leave the debt standing and the run
+			// cannot call itself finished. Asking earlier meant a refused
+			// deletion owed nothing: a session whose only act was trying to
+			// remove a non-empty directory reported completed.
+			if parsed.Name == "delete_file" {
+				switch permissionGate() {
+				case 1:
+					continue
+				case 2:
+					return nil
+				}
+			}
 
 			// Surgical-edit gate: reject write_file on existing files
 			// outright. write_file is for *creating* files; edits to an
@@ -3552,6 +3621,15 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 
 // needsPermission returns true if the tool call requires user confirmation.
 func needsPermission(ctx *AgentContext, toolName string, args json.RawMessage) bool {
+	// Deleting is decided per object, so no blanket answer substitutes for it.
+	// yolo, the yolo flag and session_allowed_tools all answer "may this TOOL
+	// run", which is a different question from "may this file be removed", and
+	// a session that cannot ask therefore cannot delete. That is the intended
+	// cost: the alternative is an unattended run destroying a file nobody
+	// approved. Every other tool keeps its existing semantics.
+	if toolName == "delete_file" {
+		return true
+	}
 	if ctx.YoloMode || ctx.PermissionMode == PermissionYolo {
 		return false
 	}
@@ -7328,6 +7406,13 @@ func finalizeCompletion(ctx *AgentContext, st *runState, userMessage, completedR
 	if len(liveJobs) > 0 || workspaceHazardous(ctx) {
 		return TerminalIncomplete, "background_work_unresolved"
 	}
+	// Settle first, from the workspace as it is now. A debt can become
+	// resolved without another tool call -- a deletion of a path that was
+	// already absent is owed and discharged by the same fact -- and settling
+	// only after an execution meant those never retired. This is the existing
+	// structural rule (confirmed absence, demonstrated bytes, a completed
+	// move), evaluated at the moment the decision is made.
+	settleMutationDebt(ctx, st)
 	// Work the model asked for, that the system permitted, and that never
 	// reached a state anything could check. A success elsewhere does not
 	// settle it.

@@ -771,6 +771,14 @@ type AgentContext struct {
 	PermissionMode PermissionMode
 	YoloMode       bool
 
+	// approvedDelete is the single outstanding user approval for a deletion,
+	// bound to one canonical target in one exact state. It is set only by the
+	// permission handshake and consumed by the first execution attempt, so an
+	// answer about one file can never authorise another. Nil means no
+	// deletion is approved, which is the state a session spends almost all of
+	// its life in.
+	approvedDelete *approvedDeletion
+
 	// AllowedTools names tools the client has pre-approved for this session
 	// (seeded from the request's session_allowed_tools) plus any the user
 	// approves with session scope during this turn. A named tool skips the
@@ -1492,4 +1500,15 @@ type PermissionRequest struct {
 	Args       json.RawMessage `json:"args"`
 	Message    string          `json:"message"`      // human-readable description
 	ToolCallID string          `json:"tool_call_id"` // echoed back on POST /v1/permission
+
+	// Additive, and populated only for a deletion, which is confirmed against
+	// an inspected target rather than against a call. A client that does not
+	// know these fields reads exactly the event it always did; one that does
+	// can show the user what is about to be removed and refuse to offer a
+	// session-wide answer. Every value is structured -- a resolved path, a
+	// stat, a hash -- never prose.
+	CanonicalPath string `json:"canonical_path,omitempty"`
+	TargetType    string `json:"target_type,omitempty"`
+	ContentSHA256 string `json:"content_sha256,omitempty"`
+	OneTimeOnly   bool   `json:"one_time_only,omitempty"`
 }

@@ -3821,6 +3821,28 @@ func deleteFileTool() *ToolDef {
 					return refusedNoCheck(fmt.Sprintf("directory not empty: %s (%d entries) — delete_file only removes files or empty directories", input.Path, len(entries))), nil
 				}
 			}
+			// The approval was granted against an inspected object. Re-inspect
+			// now, next to the removal, and compare: bytes, type, link text,
+			// emptiness. If any of it moved while the prompt was on screen,
+			// the user's answer was about a different thing and is spent
+			// rather than reused. A fresh tool call can ask again.
+			//
+			// This narrows the window between check and remove; it does not
+			// close it. There is no portable way to remove a directory entry
+			// conditional on the inode behind it, so a change landing inside
+			// that window is still possible. What is ruled out is honouring an
+			// approval for bytes that were already different when the user
+			// answered.
+			if approved, held := takeDeleteApproval(ctx, path); held {
+				now, refusal := inspectDeleteTarget(ctx, rawInput)
+				if refusal != "" || !approved.identityMatches(now) {
+					log.Printf("[delete_file] approval is stale for %s — not deleting", logPath(input.Path))
+					return refusedNoCheck(fmt.Sprintf(
+						"%s changed after you were asked about it, so the approval no longer "+
+							"describes what is on disk and nothing was deleted. Ask again if "+
+							"you still want it removed.", input.Path)), nil
+				}
+			}
 			if rmErr := os.Remove(path); rmErr != nil {
 				// The removal was attempted and the entry may or may not
 				// still be there, so the producer says failed, not none.

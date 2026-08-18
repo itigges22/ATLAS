@@ -1,8 +1,11 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -311,24 +314,65 @@ func awaitPermission(ctx *AgentContext, toolName, callID string, args json.RawMe
 		return false
 	}
 
+	// A deletion is confirmed against an inspected target, not against a call.
+	// Everything the tool would refuse is refused HERE, before the user is
+	// asked: a path escape, a blank or malformed path, a deny-listed target, a
+	// missing file, a non-empty directory and an unsupported type all return
+	// without a prompt, because asking about an operation the proxy will then
+	// decline teaches the user nothing and trains them to click through.
+	var target deleteTarget
+	if toolName == "delete_file" {
+		t, refusal := inspectDeleteTarget(ctx, args)
+		if refusal != "" {
+			log.Printf("[permission] not asking about %s: %s", toolName, refusal)
+			return false
+		}
+		target = t
+	}
+
 	entry := &pendingPermission{decision: make(chan permDecision, 1)}
 	key := permKey(ctx.PassID, callID)
 	pendingPermissions.Store(key, entry)
 	defer pendingPermissions.CompareAndDelete(key, entry)
 
-	ctx.Stream("permission_request", PermissionRequest{
+	req := PermissionRequest{
 		ToolName:   toolName,
 		Args:       args,
 		Message:    describeToolCall(toolName, args),
 		ToolCallID: callID,
-	})
+	}
+	if toolName == "delete_file" {
+		req.Message = describeDeleteTarget(target)
+		req.CanonicalPath = target.Canonical
+		req.TargetType = string(target.Kind)
+		req.ContentSHA256 = target.SHA256
+		req.OneTimeOnly = true
+	}
+	ctx.Stream("permission_request", req)
 
 	select {
 	case d := <-entry.decision:
-		if d.allow && d.scope == "session" {
+		if !d.allow {
+			return false
+		}
+		if toolName == "delete_file" {
+			// Session scope is refused for deletion, and refused by
+			// downgrading rather than denying: the user said yes to THIS
+			// file, and that answer is honoured for exactly this attempt.
+			// Adding delete_file to the turn allowlist would let one answer
+			// authorise every later deletion, which is the thing this exists
+			// to prevent.
+			if d.scope == "session" {
+				log.Printf("[permission] delete_file approval is one-time; " +
+					"session scope downgraded for this call")
+			}
+			grantDeleteApproval(ctx, callID, target)
+			return true
+		}
+		if d.scope == "session" {
 			ctx.allowToolForTurn(toolName)
 		}
-		return d.allow
+		return true
 	case <-ctx.Ctx.Done():
 		return false
 	case <-time.After(permissionTimeout()):
@@ -445,3 +489,212 @@ const untrustedRefusal = "command execution is disabled: ATLAS_TRUST_MODE=untrus
 	"This repository's commands are treated as untrusted content. Set " +
 	"ATLAS_TRUST_MODE=trusted to run them in the isolated sandbox, or " +
 	"fully-trusted to allow host execution."
+
+// --- Deleting a named target ------------------------------------------------
+//
+// The permission flow confirms a CALL. For a deletion that is not enough: the
+// user was shown the bare string "delete_file" with no path, was asked before
+// the target had been canonicalised or bounded -- so a path escape, a blank
+// path and a non-empty directory all produced prompts for operations the proxy
+// would then refuse -- and one session-scoped answer put delete_file on the
+// turn allowlist, so approving a.py authorised deleting b.py without asking.
+// Nothing noticed the file changing while the prompt sat on screen.
+//
+// So a deletion is confirmed against an inspected TARGET, once. Everything
+// here is structured: a resolved path, a stat, a hash. No sentence the user or
+// the model wrote takes part in the decision.
+
+// deleteTargetKind is the set of things this confirmation can honour. Anything
+// else fails closed rather than asking for approval it cannot bind.
+type deleteTargetKind string
+
+const (
+	deleteTargetFile     deleteTargetKind = "regular file"
+	deleteTargetSymlink  deleteTargetKind = "symlink"
+	deleteTargetEmptyDir deleteTargetKind = "empty directory"
+)
+
+// deleteTarget is what the user was actually shown, and what must still be
+// true at execution. Identity is the exact bytes for a file, the exact link
+// text for a symlink, and emptiness for a directory.
+type deleteTarget struct {
+	Canonical string // absolute, workspace-validated
+	Rel       string // as the model spelled it, for the message
+	Kind      deleteTargetKind
+	Size      int64
+	SHA256    string // regular files only
+	LinkText  string // symlinks only
+
+	// info is the inspected object itself, compared with os.SameFile. Bytes
+	// are not identity: a file deleted and rewritten with the same contents is
+	// a different object, and an approval for the first must not remove the
+	// second. Kept internal -- inode and device numbers never reach the event,
+	// the model, or the wire.
+	info os.FileInfo
+}
+
+// identityMatches reports whether two inspections describe the same object in
+// the same state: the same path, the same kind, the same bytes or link text,
+// and -- decisively -- the same filesystem object.
+//
+// os.SameFile is what makes "same bytes" insufficient. Replacing a file with
+// an identical copy changes the object while leaving every content check
+// happy, and an approval to delete the original must not remove the
+// replacement. Where the platform cannot answer, this fails closed.
+func (d deleteTarget) identityMatches(other deleteTarget) bool {
+	if d.info == nil || other.info == nil {
+		return false // no object identity available: refuse rather than guess
+	}
+	if !os.SameFile(d.info, other.info) {
+		return false
+	}
+	return d.Canonical == other.Canonical && d.Kind == other.Kind &&
+		d.SHA256 == other.SHA256 && d.LinkText == other.LinkText &&
+		d.Size == other.Size
+}
+
+// maxDeleteHashBytes bounds the identity hash. A target larger than this is
+// not refused -- it is hashed in full, streamed, never loaded whole -- this is
+// only the read buffer.
+const deleteHashBufferBytes = 64 * 1024
+
+// inspectDeleteTarget runs every non-mutating check delete_file itself would
+// run, and returns the target the user should be asked about.
+//
+// It is the same policy, not a restatement: resolveWorkspacePath for
+// containment, denyWritePathReason for the safety list, and the tool's own
+// rules for what is deletable. Nothing here opens mutation debt, touches the
+// ledger, tombstones anything, or writes to disk.
+func inspectDeleteTarget(ctx *AgentContext, args json.RawMessage) (deleteTarget, string) {
+	var input DeleteFileInput
+	if err := json.Unmarshal(args, &input); err != nil {
+		return deleteTarget{}, "delete_file: arguments are not usable"
+	}
+	if strings.TrimSpace(input.Path) == "" {
+		return deleteTarget{}, "delete_file: path cannot be empty"
+	}
+	canonical, err := resolveWorkspacePath(ctx, input.Path)
+	if err != nil {
+		return deleteTarget{}, "delete_file: " + err.Error()
+	}
+	if reason := denyWritePathReason(input.Path); reason != "" {
+		return deleteTarget{}, "delete_file: " + reason
+	}
+	// Lstat, never Stat: a symlink is its own object and deleting it must
+	// never be presented as deleting whatever it points at.
+	info, err := os.Lstat(canonical)
+	if err != nil {
+		return deleteTarget{}, fmt.Sprintf("file not found: %s", input.Path)
+	}
+	t := deleteTarget{Canonical: canonical, Rel: input.Path, Size: info.Size(), info: info}
+	switch {
+	case info.Mode()&os.ModeSymlink != 0:
+		link, lerr := os.Readlink(canonical)
+		if lerr != nil {
+			return deleteTarget{}, "delete_file: the link could not be read"
+		}
+		t.Kind, t.LinkText = deleteTargetSymlink, link
+	case info.IsDir():
+		entries, derr := os.ReadDir(canonical)
+		if derr != nil {
+			return deleteTarget{}, "delete_file: the directory could not be read"
+		}
+		if len(entries) > 0 {
+			return deleteTarget{}, fmt.Sprintf(
+				"directory not empty: %s (%d entries) — delete_file only removes files or empty directories",
+				input.Path, len(entries))
+		}
+		t.Kind, t.Size = deleteTargetEmptyDir, 0
+	case info.Mode().IsRegular():
+		sum, size, herr := hashFileIdentity(ctx, canonical)
+		if herr != nil {
+			return deleteTarget{}, "delete_file: the file could not be read"
+		}
+		t.Kind, t.SHA256, t.Size = deleteTargetFile, sum, size
+	default:
+		// Devices, sockets, pipes: an approval this cannot honour is worse
+		// than no approval.
+		return deleteTarget{}, "delete_file: unsupported target type"
+	}
+	return t, ""
+}
+
+// hashFileIdentity streams the file, so a large target costs a buffer rather
+// than its own size in memory, and a cancelled run stops promptly.
+func hashFileIdentity(ctx *AgentContext, path string) (string, int64, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", 0, err
+	}
+	defer f.Close()
+	// The handle and the inspected path must describe the same object.
+	fi, err := f.Stat()
+	if err != nil || !fi.Mode().IsRegular() {
+		return "", 0, fmt.Errorf("not a regular file")
+	}
+	h := sha256.New()
+	buf := make([]byte, deleteHashBufferBytes)
+	var total int64
+	for {
+		if ctx != nil && ctx.Ctx != nil && ctx.Ctx.Err() != nil {
+			return "", 0, ctx.Ctx.Err()
+		}
+		n, rerr := f.Read(buf)
+		if n > 0 {
+			h.Write(buf[:n])
+			total += int64(n)
+		}
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			return "", 0, rerr
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil)), total, nil
+}
+
+// describeDeleteTarget is protocol presentation over an inspected object. It
+// is assembled from the stat, never from anything anyone wrote.
+func describeDeleteTarget(t deleteTarget) string {
+	if t.Kind == deleteTargetSymlink {
+		return fmt.Sprintf("ATLAS wants to delete %s (symlink to %q — the link is removed, "+
+			"not what it points at). Allow this one deletion?", t.Canonical, t.LinkText)
+	}
+	return fmt.Sprintf("ATLAS wants to delete %s (%s). Allow this one deletion?",
+		t.Canonical, t.Kind)
+}
+
+// approvedDeletion is the one-shot grant. It is consumed by the first
+// execution attempt whatever the outcome, so an approval can never authorise
+// a second deletion.
+type approvedDeletion struct {
+	target deleteTarget
+	callID string
+}
+
+// grantDeleteApproval records the user's decision against the exact target.
+func grantDeleteApproval(ctx *AgentContext, callID string, t deleteTarget) {
+	if ctx == nil {
+		return
+	}
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	ctx.approvedDelete = &approvedDeletion{target: t, callID: callID}
+}
+
+// takeDeleteApproval consumes the grant for a canonical path. It returns the
+// approved target and whether one was held; either way the grant is gone.
+func takeDeleteApproval(ctx *AgentContext, canonical string) (deleteTarget, bool) {
+	if ctx == nil {
+		return deleteTarget{}, false
+	}
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	held := ctx.approvedDelete
+	ctx.approvedDelete = nil
+	if held == nil || held.target.Canonical != canonical {
+		return deleteTarget{}, false
+	}
+	return held.target, true
+}
