@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -2028,6 +2029,214 @@ func TestToolBanNoteNamesTheRemainingTools(t *testing.T) {
 	for _, s := range []string{py, js} {
 		if !strings.Contains(s, "no longer available") {
 			t.Errorf("ban must state the tool is gone, not suggest: %s", s)
+		}
+	}
+}
+
+// --- The locked delete-intent corpus -----------------------------------------
+//
+// The extractor exists to answer one question -- did the user explicitly ask
+// for named files to be made absent -- and it has no consumer yet. What is
+// measured here is precision: a false positive on this table is a path a later
+// completion slice would treat as an authorised deletion, so the acceptance bar
+// is zero of them, and anything the grammar cannot read must fail closed rather
+// than return the part it understood.
+
+type deleteCorpusCase struct {
+	msg  string
+	want deleteIntentStatus
+	// paths, workspace-relative, only for the explicit cases
+	paths []string
+}
+
+var deleteIntentCorpus = []deleteCorpusCase{
+	// --- supported positives ---
+	{"Delete obsolete.py.", deleteIntentExplicit, []string{"obsolete.py"}},
+	{"delete ./obsolete.py", deleteIntentExplicit, []string{"obsolete.py"}},
+	{"Remove a.py and b.py.", deleteIntentExplicit, []string{"a.py", "b.py"}},
+	{"Remove the files a.py, b.py, and c.py.", deleteIntentExplicit,
+		[]string{"a.py", "b.py", "c.py"}},
+	{"Delete the file src/old.py.", deleteIntentExplicit, []string{"src/old.py"}},
+	{"Please remove build/old.json.", deleteIntentExplicit, []string{"build/old.json"}},
+	{"If obsolete.py exists, delete obsolete.py.", deleteIntentExplicit,
+		[]string{"obsolete.py"}},
+	{"Create report.py, then delete obsolete.py.", deleteIntentExplicit,
+		[]string{"obsolete.py"}},
+	{"Delete `obsolete.py`.", deleteIntentExplicit, []string{"obsolete.py"}},
+	{"Delete \"obsolete.py\".", deleteIntentExplicit, []string{"obsolete.py"}},
+	{"DELETE OBSOLETE.PY", deleteIntentExplicit, []string{"OBSOLETE.PY"}},
+	{"delete obsolete.py", deleteIntentExplicit, []string{"obsolete.py"}},
+	// Aliases collapse to one obligation.
+	{"Delete obsolete.py and ./obsolete.py.", deleteIntentExplicit, []string{"obsolete.py"}},
+	// Mixed clauses, both orders.
+	{"Delete obsolete.py; do not delete config.py.", deleteIntentExplicit,
+		[]string{"obsolete.py"}},
+	{"Do not delete config.py; delete obsolete.py.", deleteIntentExplicit,
+		[]string{"obsolete.py"}},
+
+	// --- negation: no authority ---
+	{"Do not delete config.py.", deleteIntentNone, nil},
+	{"Don't remove a.py.", deleteIntentNone, nil},
+	{"Never delete config.py.", deleteIntentNone, nil},
+	{"Delete neither a.py nor b.py.", deleteIntentNone, nil},
+	{"Instead of deleting old.py, modify it.", deleteIntentNone, nil},
+
+	// --- read-only / questions ---
+	{"What happens if I delete obsolete.py?", deleteIntentUnsupported, nil},
+	{"Tell me whether obsolete.py should be removed.", deleteIntentUnsupported, nil},
+
+	// --- optional language ---
+	{"You may delete cache.py if needed.", deleteIntentUnsupported, nil},
+	{"Feel free to remove old.py.", deleteIntentUnsupported, nil},
+
+	// --- not a file deletion at all ---
+	{"Clean up the old implementation.", deleteIntentNone, nil},
+	{"Remove the unused import from app.py.", deleteIntentUnsupported, nil},
+	{"Remove function foo from app.py.", deleteIntentUnsupported, nil},
+	{"Delete lines 10-20 from app.py.", deleteIntentUnsupported, nil},
+	{"Delete the contents of app.py.", deleteIntentUnsupported, nil},
+	{"Remove the key from config.json.", deleteIntentUnsupported, nil},
+	{"Delete tests in tests.py.", deleteIntentUnsupported, nil},
+
+	// --- rename / move are not deletions ---
+	{"Rename old.py to new.py.", deleteIntentNone, nil},
+	{"Move old.py to new.py.", deleteIntentNone, nil},
+
+	// --- ambiguity ---
+	{"Delete a.py or b.py.", deleteIntentUnsupported, nil},
+	{"Delete every *.tmp file.", deleteIntentUnsupported, nil},
+	{"Delete whichever file is obsolete.", deleteIntentUnsupported, nil},
+	{"Delete it.", deleteIntentUnsupported, nil},
+
+	// --- unsafe / unusable paths ---
+	{"Delete ../../etc/passwd.", deleteIntentUnsupported, nil},
+	{"Delete /etc/passwd.", deleteIntentUnsupported, nil},
+
+	// --- overflow ---
+	{"Remove a1.py, a2.py, a3.py, a4.py, a5.py, a6.py, a7.py, a8.py, and a9.py.",
+		deleteIntentUnsupported, nil},
+
+	// --- no deletion language at all ---
+	{"Create report.py with the summary.", deleteIntentNone, nil},
+	{"Make the tests pass.", deleteIntentNone, nil},
+	{"Rewrite solve.py so it prints 7.", deleteIntentNone, nil},
+}
+
+func TestExplicitDeleteIntentCorpus(t *testing.T) {
+	dir := t.TempDir()
+	ctx := NewAgentContext(dir, Tier2Medium)
+
+	var truePos, falsePos, trueNeg, falseNeg, unsupported int
+	for _, c := range deleteIntentCorpus {
+		got := explicitDeleteIntent(ctx, c.msg)
+		// Determinism: the same message twice is the same answer.
+		if again := explicitDeleteIntent(ctx, c.msg); again.Status != got.Status ||
+			strings.Join(again.Paths, "|") != strings.Join(got.Paths, "|") {
+			t.Errorf("%q is not deterministic", c.msg)
+		}
+		var want []string
+		for _, p := range c.paths {
+			want = append(want, filepath.Join(dir, p))
+		}
+		sort.Strings(want)
+
+		switch {
+		case got.Status == deleteIntentExplicit && c.want == deleteIntentExplicit:
+			truePos++
+			if strings.Join(got.Paths, "|") != strings.Join(want, "|") {
+				t.Errorf("%q\n  got   %v\n  want  %v", c.msg, got.Paths, want)
+			}
+		case got.Status == deleteIntentExplicit:
+			// Authority granted where the corpus says there is none. This is
+			// the only error class that matters for the acceptance bar.
+			falsePos++
+			t.Errorf("FALSE POSITIVE %q authorised %v", c.msg, got.Paths)
+		case c.want == deleteIntentExplicit:
+			falseNeg++
+			t.Errorf("%q was not recognised (status=%d reason=%q)",
+				c.msg, got.Status, got.Reason)
+		default:
+			trueNeg++
+			if got.Status == deleteIntentUnsupported {
+				unsupported++
+			}
+			if got.Status != c.want {
+				t.Errorf("%q status=%d reason=%q, want %d",
+					c.msg, got.Status, got.Reason, c.want)
+			}
+		}
+		// No result is ever partial: paths exist only for an explicit read.
+		if got.Status != deleteIntentExplicit && len(got.Paths) != 0 {
+			t.Errorf("%q returned %d paths on a non-authoritative status",
+				c.msg, len(got.Paths))
+		}
+	}
+	total := len(deleteIntentCorpus)
+	t.Logf("corpus=%d true_pos=%d false_pos=%d true_neg=%d false_neg=%d unsupported=%d "+
+		"false_positive_rate=%.1f%%",
+		total, truePos, falsePos, trueNeg, falseNeg, unsupported,
+		100*float64(falsePos)/float64(total))
+	if falsePos != 0 {
+		t.Errorf("%d false positives; the bar for this slice is zero", falsePos)
+	}
+}
+
+// The bound, and what exceeding it does.
+func TestExplicitDeleteIntentIsBounded(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	var names []string
+	for i := 0; i < maxDeleteIntentPaths; i++ {
+		names = append(names, fmt.Sprintf("f%d.py", i))
+	}
+	at := explicitDeleteIntent(ctx, "Remove "+strings.Join(names, ", ")+".")
+	if at.Status != deleteIntentExplicit || len(at.Paths) != maxDeleteIntentPaths {
+		t.Errorf("at the bound: status=%d paths=%d", at.Status, len(at.Paths))
+	}
+	over := explicitDeleteIntent(ctx, "Remove "+strings.Join(append(names, "extra.py"), ", ")+".")
+	if over.Status != deleteIntentUnsupported {
+		t.Errorf("over the bound: status=%d, want unsupported", over.Status)
+	}
+	if len(over.Paths) != 0 {
+		t.Errorf("over the bound returned %d paths; it must be all or nothing", len(over.Paths))
+	}
+}
+
+// The extractor has no authority anywhere. It is measured, not wired.
+func TestExplicitDeleteIntentHasNoConsumer(t *testing.T) {
+	for _, file := range []string{"agent.go", "tools.go", "gates.go", "guardrails.go",
+		"detectors.go", "permissions.go", "context.go"} {
+		src, err := os.ReadFile(file)
+		if err != nil {
+			continue
+		}
+		body := string(src)
+		for _, sym := range []string{"explicitDeleteIntent(", "deleteIntentExplicit",
+			"deleteIntentUnsupported", "maxDeleteIntentPaths"} {
+			n := strings.Count(body, sym)
+			if file == "guardrails.go" {
+				continue // the definition site
+			}
+			if n > 0 {
+				t.Errorf("%s references %s %d time(s); this slice grants no authority",
+					file, sym, n)
+			}
+		}
+	}
+	// And specifically not from any decision that removes or authorises.
+	src, _ := os.ReadFile("agent.go")
+	for _, fn := range []string{"blockingTombstone", "terminalCompletionAllowed",
+		"finalizeCompletion", "demonstratedMove", "noteMutationIntent", "debtResolved"} {
+		i := strings.Index(string(src), "func "+fn)
+		if i < 0 {
+			t.Errorf("%s is gone; this guard is pinning something that moved", fn)
+			continue
+		}
+		end := i + 4000
+		if end > len(src) {
+			end = len(src)
+		}
+		if strings.Contains(string(src[i:end]), "DeleteIntent") {
+			t.Errorf("%s consults the delete-intent extractor", fn)
 		}
 	}
 }
