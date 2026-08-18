@@ -138,6 +138,11 @@ type tuiModel struct {
 	// proxy skips the prompt proxy-side on later turns.
 	pendingPerm         *permPrompt
 	sessionAllowedTools map[string]bool
+	// pendingTaskMode is a one-shot client declaration for the NEXT request,
+	// set by /ask and cleared as it is used. Empty means the ordinary case,
+	// which is work. Deliberately not sticky: a mode that persisted would
+	// quietly declare later real work to be a question.
+	pendingTaskMode taskMode
 
 	// Session persistence. sessionUID is the stable id for the on-disk
 	// transcript (distinct from turnSessionID, which is minted per turn for
@@ -572,6 +577,18 @@ func (m *tuiModel) buildChatHistory() []historyMessage {
 // sendChatCmd kicks off a /v1/agent turn. Runs sendChatOpts in a goroutine
 // because Bubbletea Cmds should be quick — the goroutine pumps events
 // onto m.chatEvents which the model drains via waitForChatEvent.
+// takeTaskMode returns the mode for the next request and clears any one-shot
+// selection. Ordinary messages are work; /ask makes exactly one request a
+// question.
+func (m *tuiModel) takeTaskMode() taskMode {
+	if m.pendingTaskMode != "" {
+		mode := m.pendingTaskMode
+		m.pendingTaskMode = ""
+		return mode
+	}
+	return taskModeWork
+}
+
 func (m *tuiModel) sendChatCmd(message string) tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	sessionID := newSessionID()
@@ -592,6 +609,10 @@ func (m *tuiModel) sendChatCmd(message string) tea.Cmd {
 	out := m.chatEvents
 	history := m.buildChatHistory()
 	allowed := sortedAllowedTools(m.sessionAllowedTools)
+	// One-shot: /ask sets it, this consumes it, and the next ordinary message
+	// is work again. A sticky question mode would quietly declare later real
+	// work to be a question, which is the failure this design exists to avoid.
+	declared := m.takeTaskMode()
 
 	// Persist the transcript at turn start — the process is often killed or
 	// execv'd, so the safest moment to snapshot is right after the user row
@@ -601,7 +622,7 @@ func (m *tuiModel) sendChatCmd(message string) tea.Cmd {
 	return func() tea.Msg {
 		go func() {
 			err := sendChatOpts(ctx, proxyURL, message, workingDir, mode, sessionID,
-				history, demoOpts{allowedTools: allowed}, out)
+				history, demoOpts{allowedTools: allowed, taskMode: declared}, out)
 			// Signal turn end via the same channel using a sentinel
 			// chatEvent (type="__turn_done__") — keeps the event
 			// ordering: all messages drain before the done marker.

@@ -127,6 +127,7 @@ const slashCommandHelp = `Slash commands
   /commit [msg]           Stage all changes and create a commit.
   /undo                   Revert the last commit (keep changes in tree).
   /run <cmd>              Run a shell command in the working dir.
+  /ask <message>          Send one message as a question, not a work request.
   /good                   👍 the last pass — bank it as lens-training data.
   /bad                    👎 the last pass — bank it as a negative example.
   /review                 List files the last pass wrote (with verdicts).
@@ -405,6 +406,24 @@ func (m *tuiModel) handleSlash(input string) (consumed bool, cmd tea.Cmd, quit b
 		// doesn't overwrite the saved one on disk.
 		m.startNewSession()
 		return true, nil, false
+
+	case "/ask":
+		// One request answered as a question rather than as work. The mode is
+		// a control the user operates; nothing here reads what they typed, so
+		// the same sentence can be sent either way. The command word itself is
+		// stripped -- the model sees only the message.
+		if len(args) == 0 {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "error",
+				Body: "/ask requires a message (e.g. /ask what does solve.py do?)",
+			})
+			return true, nil, false
+		}
+		question := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(input), "/ask"))
+		m.pendingTaskMode = taskModeQuestion
+		m.chat = append(m.chat, chatMessage{Role: roleUser, Body: question})
+		m.lastUserMsg = question
+		return true, m.sendChatCmd(question + m.contextSuffix()), false
 
 	case "/compact":
 		// Ask the agent to compact via a synthetic user message. The

@@ -57,6 +57,9 @@ type agentRequest struct {
 	SessionAllowedTools []string `json:"session_allowed_tools,omitempty"`
 	DisableFreshSlot    bool     `json:"disable_fresh_slot,omitempty"` // /demo flag — skip PC-045 so pre-warm survives
 	SandboxSubdir       string   `json:"sandbox_subdir,omitempty"`     // /demo flag — write files into this subdir of the workspace
+	// TaskContract is what this client declares about the request. Omitted
+	// entirely when the caller declared nothing.
+	TaskContract *taskContract `json:"task_contract,omitempty"`
 }
 
 type rawChatRequest struct {
@@ -350,12 +353,48 @@ func cancelTurn(proxyURL, sessionID string) error {
 // demoOpts bundles the per-request flags the /demo split-pane needs.
 // Held in a struct rather than added as positional args to keep
 // sendChatOpts readable as the demo grows.
+// taskMode is what the CLIENT declares about a request: whether the person
+// asked for the workspace to change, or asked a question about it. It mirrors
+// the proxy's task_mode and exists so the decision is a control the user
+// operates rather than something inferred from the words they typed.
+//
+// Nothing here reads the message. The same sentence goes either way depending
+// only on which control the user used.
+type taskMode string
+
+const (
+	taskModeWork     taskMode = "work"
+	taskModeQuestion taskMode = "question"
+)
+
+// taskContract is the optional structured declaration sent with a request.
+// Field tags MUST match proxy/types.go's TaskContract.
+//
+// ExpectedOutputs and Verification stay empty from the TUI: a person typing
+// into a chat box has told the client nothing structured about which files
+// must exist or which command must run, and guessing from their prose is the
+// thing this replaces. A harness that genuinely knows fills them in.
+type taskContract struct {
+	TaskMode        taskMode `json:"task_mode"`
+	ExpectedOutputs []string `json:"expected_outputs,omitempty"`
+	Verification    []string `json:"verification,omitempty"`
+}
+
 type demoOpts struct {
 	disableFreshSlot bool
 	sandboxSubdir    string
 	// allowedTools is the session allowlist sent as session_allowed_tools so
 	// the proxy skips the permission prompt for pre-approved tools.
 	allowedTools []string
+	// taskMode is the client's declaration for this one request. Empty means
+	// the ordinary case, which is work -- an owned sender always declares
+	// something, because a request with no contract is indistinguishable from
+	// a stranger's.
+	taskMode taskMode
+	// omitTaskContract sends no contract at all. Exactly one fixture sets it,
+	// to prove an external or legacy caller is still accepted; ordinary owned
+	// traffic must never reach that path by accident.
+	omitTaskContract bool
 }
 
 // sendChatOpts opens an SSE POST to /v1/agent and forwards each parsed
@@ -373,6 +412,16 @@ func sendChatOpts(ctx context.Context, proxyURL, message, workingDir, mode,
 	sessionID string, history []historyMessage,
 	opts demoOpts, out chan<- chatEvent) error {
 
+	var contract *taskContract
+	if !opts.omitTaskContract {
+		// Declared, never derived: the only input is the caller's selection,
+		// and an unselected owned caller is work.
+		mode := opts.taskMode
+		if mode == "" {
+			mode = taskModeWork
+		}
+		contract = &taskContract{TaskMode: mode}
+	}
 	body, err := json.Marshal(agentRequest{
 		Message:             message,
 		WorkingDir:          workingDir,
@@ -382,6 +431,7 @@ func sendChatOpts(ctx context.Context, proxyURL, message, workingDir, mode,
 		SessionAllowedTools: opts.allowedTools,
 		DisableFreshSlot:    opts.disableFreshSlot,
 		SandboxSubdir:       opts.sandboxSubdir,
+		TaskContract:        contract,
 	})
 	if err != nil {
 		return fmt.Errorf("encode request: %w", err)

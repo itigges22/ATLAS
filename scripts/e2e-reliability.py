@@ -1253,6 +1253,13 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
         "mode": "yolo",
         "sandbox_subdir": subdir,
         "session_id": f"reliability-{task.name}-{rep}",
+        # Every owned sender declares a task mode; absence is reserved for
+        # external callers. The harness knows the task is work. It does NOT
+        # declare expected outputs or verification: the evaluator and the
+        # holdout are offline scoring, not obligations the agent was told to
+        # meet, and promoting them here would invent a requirement the task
+        # never stated.
+        "task_contract": {"task_mode": "work"},
     }
     if bypass_v3:
         # The proxy's own per-request switch for a V3-free arm. It

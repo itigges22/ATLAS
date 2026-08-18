@@ -948,3 +948,30 @@ func TestTaskContractIsInert(t *testing.T) {
 		})
 	}
 }
+
+// A caller that declares nothing keeps behaving exactly as before. This is the
+// external/legacy path, and it must stay open: the contract is additive, not a
+// new requirement.
+func TestLegacyRequestWithoutContractIsAccepted(t *testing.T) {
+	var wire struct {
+		Message      string        `json:"message"`
+		TaskContract *TaskContract `json:"task_contract,omitempty"`
+	}
+	const legacy = `{"message":"Create app.py.","working_dir":"/w","mode":"default"}`
+	if err := json.Unmarshal([]byte(legacy), &wire); err != nil {
+		t.Fatalf("a legacy body was rejected: %v", err)
+	}
+	if wire.TaskContract != nil {
+		t.Error("a body with no task_contract decoded one anyway")
+	}
+	got, err := validateTaskContract(wire.TaskContract, t.TempDir())
+	if err != nil || got != nil {
+		t.Errorf("absent contract validated to %v (err=%v); absent must stay absent", got, err)
+	}
+	// And a present-but-invalid one is still a hard refusal, never a silent
+	// omission that would look like a client which declared nothing.
+	bad := &TaskContract{TaskMode: "explore"}
+	if _, err := validateTaskContract(bad, t.TempDir()); err == nil {
+		t.Error("an unsupported mode was accepted")
+	}
+}
