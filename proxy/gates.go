@@ -2784,6 +2784,10 @@ func recordLedgerEffect(name string, args json.RawMessage, ctx *AgentContext, re
 		// for it would fabricate history from a failed call.
 		if ledgerTracks(ctx, p) || result.MutationStatus.Applied() {
 			tombstoneDeliverable(ctx, p, "deleted")
+			// The one place that both confirms the absence and writes the
+			// tombstone is the only place that can promote an approved
+			// attempt into a fulfilled deletion. It re-checks every fact.
+			promoteFulfilledDeletion(ctx, ledgerKey(ctx, p))
 		}
 
 	case "move_file":

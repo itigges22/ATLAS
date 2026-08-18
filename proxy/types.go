@@ -779,6 +779,20 @@ type AgentContext struct {
 	// its life in.
 	approvedDelete *approvedDeletion
 
+	// deletionAttempts and fulfilledDeletions are the record of destructive
+	// work the USER authorised and the system then carried out. An attempt is
+	// written only by the delete tool, on the exact route where a consumed
+	// approval survived revalidation and os.Remove succeeded; it is promoted
+	// only by the ledger, which is the one place that both confirms absence
+	// and writes the tombstone. Nothing the model emits reaches either map.
+	// lastDeleteCallID is the tool-call id the outstanding approval was
+	// granted under, kept so the fulfilled record can name the exact call the
+	// user answered.
+	lastDeleteCallID string
+
+	deletionAttempts   map[string]*deletionAttempt
+	fulfilledDeletions map[string]*fulfilledDeletion
+
 	// AllowedTools names tools the client has pre-approved for this session
 	// (seeded from the request's session_allowed_tools) plus any the user
 	// approves with session scope during this turn. A named tool skips the

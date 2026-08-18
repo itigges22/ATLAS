@@ -3833,7 +3833,10 @@ func deleteFileTool() *ToolDef {
 			// that window is still possible. What is ruled out is honouring an
 			// approval for bytes that were already different when the user
 			// answered.
-			if approved, held := takeDeleteApproval(ctx, path); held {
+			// The approved route. `approved` is only ever non-empty when the
+			// user answered this exact call through the permission endpoint.
+			approved, userApproved := takeDeleteApproval(ctx, path)
+			if userApproved {
 				now, refusal := inspectDeleteTarget(ctx, rawInput)
 				if refusal != "" || !approved.identityMatches(now) {
 					log.Printf("[delete_file] approval is stale for %s — not deleting", logPath(input.Path))
@@ -3841,6 +3844,15 @@ func deleteFileTool() *ToolDef {
 						"%s changed after you were asked about it, so the approval no longer "+
 							"describes what is on disk and nothing was deleted. Ask again if "+
 							"you still want it removed.", input.Path)), nil
+				}
+				// Room to account for it, reserved before anything is
+				// removed: a destructive mutation this session could not
+				// track is worse than one it declines.
+				if !reserveDeletionSlot(ctx, path) {
+					log.Printf("[delete_file] no room to track %s — refusing", logPath(input.Path))
+					return refusedNoCheck(fmt.Sprintf(
+						"this session is already tracking as many removals as it can account "+
+							"for, so %s was not deleted.", input.Path)), nil
 				}
 			}
 			if rmErr := os.Remove(path); rmErr != nil {
@@ -3857,6 +3869,14 @@ func deleteFileTool() *ToolDef {
 
 			out := DeleteFileOutput{Deleted: true}
 			outBytes, _ := json.Marshal(out)
+			// The approval, the revalidation and the successful removal are
+			// all true at this instant, so they are recorded together rather
+			// than reconstructed later from separate booleans. Absence and the
+			// tombstone are the ledger's to confirm, and it promotes this.
+			if userApproved {
+				noteDeletionAttempt(ctx, permCallIDFor(ctx), approved)
+			}
+
 			// Removal demonstrated. A delete validates nothing: there are no
 			// bytes left to have an opinion about.
 			//

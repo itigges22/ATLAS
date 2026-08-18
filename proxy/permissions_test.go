@@ -1227,3 +1227,197 @@ func TestApprovalBindsToTheFilesystemObject(t *testing.T) {
 		})
 	}
 }
+
+// --- Fulfilled deletion authority --------------------------------------------
+//
+// Four facts stay apart: the user approved this exact object, the model
+// attempted the removal, the path is absent, and the task is finished. A
+// record exists only when the first three are all true on the same route.
+
+// approveAndDelete runs the real handshake, the real tool, and the real ledger
+// effect, returning whether a fulfilled record was produced.
+func approveAndDelete(t *testing.T, ctx *AgentContext, sess, callID, rel string,
+	decision string, churn func()) (*fulfilledDeletion, *ToolResult) {
+	t.Helper()
+	args := json.RawMessage(`{"path":"` + rel + `"}`)
+	allowed := true
+	if needsPermission(ctx, "delete_file", args) {
+		done := make(chan bool, 1)
+		go func() { done <- awaitPermission(ctx, "delete_file", callID, args) }()
+		waitForPending(t, sess, callID)
+		if churn != nil {
+			churn()
+		}
+		postDecision(t, fmt.Sprintf(
+			`{"session_id":%q,"tool_call_id":%q,"decision":%q}`, sess, callID, decision))
+		allowed = <-done
+	}
+	if !allowed {
+		return nil, nil
+	}
+	res := executeToolCall("delete_file", args, ctx)
+	recordLedgerEffect("delete_file", args, ctx, res)
+	f, _ := fulfilledDeletionFor(ctx, filepath.Join(ctx.WorkingDir, filepath.Clean(rel)))
+	return f, res
+}
+
+func TestFulfilledDeletionRecord(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		setup    func(dir string) string
+		decision string
+		churn    func(dir, rel string)
+		want     bool
+	}{
+		{"approved and removed", func(dir string) string {
+			os.WriteFile(filepath.Join(dir, "a.py"), []byte("A\n"), 0o644)
+			return "a.py"
+		}, "allow", nil, true},
+		{"denied", func(dir string) string {
+			os.WriteFile(filepath.Join(dir, "a.py"), []byte("A\n"), 0o644)
+			return "a.py"
+		}, "deny", nil, false},
+		{"stale identity", func(dir string) string {
+			os.WriteFile(filepath.Join(dir, "a.py"), []byte("A\n"), 0o644)
+			return "a.py"
+		}, "allow", func(dir, rel string) {
+			os.WriteFile(filepath.Join(dir, rel), []byte("CHANGED\n"), 0o644)
+		}, false},
+		{"empty directory approved", func(dir string) string {
+			os.MkdirAll(filepath.Join(dir, "d"), 0o755)
+			return "d"
+		}, "allow", nil, true},
+		{"symlink approved", func(dir string) string {
+			os.WriteFile(filepath.Join(dir, "real.py"), []byte("A\n"), 0o644)
+			os.Symlink("real.py", filepath.Join(dir, "l.py"))
+			return "l.py"
+		}, "allow", nil, true},
+		{"alias spelling", func(dir string) string {
+			os.WriteFile(filepath.Join(dir, "a.py"), []byte("A\n"), 0o644)
+			return "./a.py"
+		}, "allow", nil, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			rel := c.setup(dir)
+			sess := "sess-ful-" + strings.ReplaceAll(c.name, " ", "-")
+			ctx, cancel := deletePermCtx(t, sess, dir)
+			defer cancel()
+			ctx.StreamFn = func(string, interface{}) {}
+			var churn func()
+			if c.churn != nil {
+				churn = func() { c.churn(dir, rel) }
+			}
+			f, _ := approveAndDelete(t, ctx, sess, "call_0", rel, c.decision, churn)
+			t.Logf("%s: fulfilled=%v", c.name, f != nil)
+			if (f != nil) != c.want {
+				t.Errorf("fulfilled=%v want %v", f != nil, c.want)
+			}
+			if f != nil {
+				if f.Canonical != filepath.Join(dir, filepath.Clean(rel)) {
+					t.Errorf("record names %q", f.Canonical)
+				}
+				if f.Generation == 0 {
+					t.Error("the record is not bound to a ledger generation")
+				}
+			}
+			// The symlink's target is never fulfilled by the link's removal.
+			if strings.Contains(c.name, "symlink") {
+				if _, ok := fulfilledDeletionFor(ctx, filepath.Join(dir, "real.py")); ok {
+					t.Error("removing the link fulfilled its target")
+				}
+				if _, err := os.Stat(filepath.Join(dir, "real.py")); err != nil {
+					t.Errorf("the target was removed: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// An unapproved removal, and an absence caused by something else, are not
+// authority however the ledger ends up looking.
+func TestUnapprovedAbsenceIsNotFulfilled(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "a.py"), []byte("A\n"), 0o644)
+	ctx := &AgentContext{WorkingDir: dir, Ledger: map[string]*DeliverableState{}}
+	// Something else removes it; the ledger is told about a delete call.
+	os.Remove(filepath.Join(dir, "a.py"))
+	args := json.RawMessage(`{"path":"a.py"}`)
+	recordLedgerEffect("delete_file", args, ctx,
+		&ToolResult{Success: true, MutationStatus: MutationApplied})
+	if _, ok := fulfilledDeletionFor(ctx, filepath.Join(dir, "a.py")); ok {
+		t.Error("an absence with no user approval became fulfilled authority")
+	}
+	// A move-source tombstone is never a fulfilled deletion either.
+	os.WriteFile(filepath.Join(dir, "old.py"), []byte("A\n"), 0o644)
+	os.Rename(filepath.Join(dir, "old.py"), filepath.Join(dir, "new.py"))
+	recordLedgerEffect("move_file",
+		json.RawMessage(`{"source":"old.py","destination":"new.py"}`), ctx,
+		&ToolResult{Success: true, MutationStatus: MutationApplied})
+	if _, ok := fulfilledDeletionFor(ctx, filepath.Join(dir, "old.py")); ok {
+		t.Error("a move source became a fulfilled deletion")
+	}
+}
+
+// Capacity is reserved before the mutation, so an untrackable deletion never
+// happens.
+func TestDeletionTrackingCapacity(t *testing.T) {
+	dir := t.TempDir()
+	ctx := &AgentContext{WorkingDir: dir, fulfilledDeletions: map[string]*fulfilledDeletion{}}
+	for i := 0; i < maxTrackedDeletions; i++ {
+		ctx.fulfilledDeletions[fmt.Sprintf("/x/%d", i)] = &fulfilledDeletion{}
+	}
+	if reserveDeletionSlot(ctx, filepath.Join(dir, "one-more.py")) {
+		t.Error("a slot was handed out past the ceiling")
+	}
+	// And the tool refuses rather than removing something it cannot account for.
+	os.WriteFile(filepath.Join(dir, "one-more.py"), []byte("A\n"), 0o644)
+	sess := "sess-cap"
+	pctx, cancel := deletePermCtx(t, sess, dir)
+	defer cancel()
+	pctx.StreamFn = func(string, interface{}) {}
+	pctx.fulfilledDeletions = ctx.fulfilledDeletions
+	_, res := approveAndDelete(t, pctx, sess, "call_0", "one-more.py", "allow", nil)
+	if res != nil && res.Success {
+		t.Error("a deletion succeeded with no room to account for it")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "one-more.py")); err != nil {
+		t.Errorf("the file was removed anyway: %v", err)
+	}
+}
+
+// Commit 1 changes no completion behaviour, and nothing consumes the record.
+func TestFulfilledDeletionHasNoCompletionConsumerYet(t *testing.T) {
+	for _, f := range []string{"agent.go", "gates.go", "guardrails.go", "tools.go"} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		body := string(b)
+		if f == "gates.go" {
+			// The ledger promotes; that is the write side, not a consumer.
+			body = strings.ReplaceAll(body, "promoteFulfilledDeletion(ctx, ledgerKey(ctx, p))", "")
+		}
+		if strings.Contains(body, "fulfilledDeletionFor(") {
+			t.Errorf("%s consults fulfilled deletions; completion is Commit 2", f)
+		}
+	}
+	// And an approved, fulfilled deletion still cannot complete.
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "a.py"), []byte("A\n"), 0o644)
+	sess := "sess-nc"
+	ctx, cancel := deletePermCtx(t, sess, dir)
+	defer cancel()
+	ctx.StreamFn = func(string, interface{}) {}
+	f, _ := approveAndDelete(t, ctx, sess, "call_0", "a.py", "allow", nil)
+	if f == nil {
+		t.Fatal("the approved deletion was not fulfilled")
+	}
+	if !blockingTombstone(ctx) {
+		t.Error("a fulfilled deletion already stopped blocking completion")
+	}
+	ok, why := terminalCompletionAllowed(ctx, nil)
+	if ok || why != "delete_intent_unestablished" {
+		t.Errorf("completion says ok=%v why=%q, want the unchanged refusal", ok, why)
+	}
+}

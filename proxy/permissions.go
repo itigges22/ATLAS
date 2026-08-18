@@ -681,6 +681,7 @@ func grantDeleteApproval(ctx *AgentContext, callID string, t deleteTarget) {
 	ctx.mu.Lock()
 	defer ctx.mu.Unlock()
 	ctx.approvedDelete = &approvedDeletion{target: t, callID: callID}
+	ctx.lastDeleteCallID = callID
 }
 
 // takeDeleteApproval consumes the grant for a canonical path. It returns the
@@ -697,4 +698,149 @@ func takeDeleteApproval(ctx *AgentContext, canonical string) (deleteTarget, bool
 		return deleteTarget{}, false
 	}
 	return held.target, true
+}
+
+// --- What the user authorised, and what actually happened --------------------
+//
+// Four facts have to stay apart: the user approved this exact object, the model
+// attempted the removal, the path is absent, and the task is finished. A
+// successful tool call establishes the middle two and nothing else. These
+// records exist so the last one can eventually be decided from the first,
+// without asking any English word what the user meant.
+
+// maxTrackedDeletions bounds live deletion records, matching the ceiling
+// convention the debt tracker already uses. A session removing more paths than
+// this is not helped by remembering more of them, and reserving space BEFORE
+// the mutation is what keeps an untrackable deletion from happening at all.
+const maxTrackedDeletions = 64
+
+// deletionAttempt is written by the delete tool at the only moment all of its
+// facts are true together: a user approval consumed for this exact call, that
+// approval revalidated against the object immediately before removal, and
+// os.Remove reporting success. It is not yet authority -- absence and the
+// tombstone are the ledger's to confirm.
+type deletionAttempt struct {
+	CallID  string
+	Target  deleteTarget
+	Removed bool
+}
+
+// fulfilledDeletion is a deletion the user approved and the system completed,
+// bound to the ledger generation that recorded it. Binding the generation is
+// what stops an old record from speaking for a path that has since come back:
+// a recreated file is a different generation and needs its own approval.
+type fulfilledDeletion struct {
+	CallID     string
+	Canonical  string
+	Kind       deleteTargetKind
+	SHA256     string
+	LinkText   string
+	Generation int
+}
+
+// reserveDeletionSlot makes room for a record before anything is removed.
+// Failing here refuses the deletion; the alternative is a destructive mutation
+// this session cannot account for.
+func reserveDeletionSlot(ctx *AgentContext, canonical string) bool {
+	if ctx == nil {
+		return false
+	}
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	if ctx.deletionAttempts == nil {
+		ctx.deletionAttempts = map[string]*deletionAttempt{}
+	}
+	if _, exists := ctx.deletionAttempts[canonical]; exists {
+		return true // this path already has its slot
+	}
+	if len(ctx.deletionAttempts)+len(ctx.fulfilledDeletions) >= maxTrackedDeletions {
+		return false
+	}
+	return true
+}
+
+// noteDeletionAttempt records the approved-and-removed facts together.
+func noteDeletionAttempt(ctx *AgentContext, callID string, t deleteTarget) {
+	if ctx == nil {
+		return
+	}
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	if ctx.deletionAttempts == nil {
+		ctx.deletionAttempts = map[string]*deletionAttempt{}
+	}
+	ctx.deletionAttempts[t.Canonical] = &deletionAttempt{
+		CallID: callID, Target: t, Removed: true,
+	}
+}
+
+// promoteFulfilledDeletion is the single promotion point, and it re-checks
+// every fact at once rather than trusting a trail of booleans set elsewhere:
+// an approved attempt exists for this exact path, the path is absent NOW, the
+// ledger holds a `deleted` tombstone for it with restoration prohibited, and
+// the generation is the one that deletion produced.
+//
+// Anything missing leaves no record, so a denial, a timeout, a cancellation, a
+// stale identity, a tool failure, an unapproved removal, an absence caused by
+// something else, or a move-source tombstone can never become authority.
+func promoteFulfilledDeletion(ctx *AgentContext, canonical string) {
+	if ctx == nil {
+		return
+	}
+	ctx.mu.Lock()
+	attempt := ctx.deletionAttempts[canonical]
+	ctx.mu.Unlock()
+	if attempt == nil || !attempt.Removed {
+		return
+	}
+	if _, err := os.Lstat(canonical); !os.IsNotExist(err) {
+		return // still there: nothing was fulfilled
+	}
+	ctx.LedgerMu.Lock()
+	d := ctx.Ledger[canonical]
+	var ok bool
+	var gen int
+	if d != nil {
+		ok = d.Tombstoned && d.TombstoneReason == "deleted" && d.RestoreProhibited
+		gen = d.Generation
+	}
+	ctx.LedgerMu.Unlock()
+	if !ok {
+		return
+	}
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	if ctx.fulfilledDeletions == nil {
+		ctx.fulfilledDeletions = map[string]*fulfilledDeletion{}
+	}
+	ctx.fulfilledDeletions[canonical] = &fulfilledDeletion{
+		CallID: attempt.CallID, Canonical: canonical, Kind: attempt.Target.Kind,
+		SHA256: attempt.Target.SHA256, LinkText: attempt.Target.LinkText,
+		Generation: gen,
+	}
+	delete(ctx.deletionAttempts, canonical)
+}
+
+// permCallIDFor returns the tool-call id the outstanding approval was granted
+// under. The grant is consumed before this is read, so it reports the id the
+// approval carried rather than guessing from the turn.
+func permCallIDFor(ctx *AgentContext) string {
+	if ctx == nil {
+		return ""
+	}
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	return ctx.lastDeleteCallID
+}
+
+// fulfilledDeletionFor returns the record for a path, if the user approved that
+// exact deletion and the system carried it out.
+func fulfilledDeletionFor(ctx *AgentContext, canonical string) (*fulfilledDeletion, bool) {
+	if ctx == nil {
+		return nil, false
+	}
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	f, ok := ctx.fulfilledDeletions[canonical]
+	return f, ok
 }
