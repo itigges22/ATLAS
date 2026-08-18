@@ -6114,6 +6114,11 @@ func terminalCompletionAllowed(ctx *AgentContext, expected []string) (bool, stri
 	}
 	paths := declaredOrOwnedDeliverables(ctx, expected)
 	if len(paths) == 0 {
+		// A run whose work was removing files the user approved has an
+		// obligation and met it; saying "no file obligation" would be false.
+		if len(approvedDeletionPaths(ctx)) > 0 {
+			return true, "approved_deletions_demonstrated"
+		}
 		// Nothing declared and nothing written: there is no file obligation
 		// to demonstrate.
 		return true, "no_file_obligation"
@@ -6207,11 +6212,113 @@ func blockingTombstone(ctx *AgentContext) bool {
 	ctx.LedgerMu.Unlock()
 
 	for _, t := range tombs {
-		if !demonstratedMove(ctx, t.key, t.reason) {
+		if demonstratedMove(ctx, t.key, t.reason) {
+			continue
+		}
+		if fulfilledApprovedDeletion(ctx, t.key, t.reason) {
+			continue
+		}
+		return true
+	}
+	// A path the user approved removing that is back on disk is a
+	// contradiction, not a completion: the approval described a removal this
+	// run then undid, and recreating it does not settle what was authorised.
+	// The tombstone is gone by then, so this is checked from the record.
+	if undoneApprovedDeletion(ctx) {
+		return true
+	}
+	return false
+}
+
+// undoneApprovedDeletion reports whether any deletion the user approved has
+// since come back.
+func undoneApprovedDeletion(ctx *AgentContext) bool {
+	if ctx == nil {
+		return false
+	}
+	ctx.mu.Lock()
+	keys := make([]string, 0, len(ctx.fulfilledDeletions))
+	for k := range ctx.fulfilledDeletions {
+		keys = append(keys, k)
+	}
+	ctx.mu.Unlock()
+	for _, k := range keys {
+		if _, err := os.Lstat(k); err == nil {
 			return true
 		}
 	}
 	return false
+}
+
+// fulfilledApprovedDeletion answers whether a plain deletion tombstone is one
+// the USER approved and the system then carried out.
+//
+// Every fact is re-checked here, at terminal time, against the workspace as it
+// is now: the record is for this exact canonical path, the generation is the
+// one that deletion produced, the path is still absent, the tombstone is a
+// deletion rather than a move, restoration is still prohibited, and the delete
+// debt is settled. A path that came back is a newer generation and blocks
+// again -- which is the point of binding the generation rather than the name.
+//
+// The record itself can only exist if the decision arrived through the
+// permission endpoint. No word of the user's message, and no claim of the
+// model's, reaches this.
+func fulfilledApprovedDeletion(ctx *AgentContext, key, reason string) bool {
+	if reason != "deleted" {
+		return false
+	}
+	f, ok := fulfilledDeletionFor(ctx, key)
+	if !ok {
+		return false
+	}
+	if _, err := os.Lstat(key); !os.IsNotExist(err) {
+		return false // it is back: this record describes older bytes
+	}
+	ctx.LedgerMu.Lock()
+	d := ctx.Ledger[key]
+	var live bool
+	if d != nil {
+		live = d.Tombstoned && d.TombstoneReason == "deleted" &&
+			d.RestoreProhibited && d.Generation == f.Generation
+	}
+	ctx.LedgerMu.Unlock()
+	return live
+}
+
+// approvedDeletionPaths lists, in a stable order, the paths this run removed
+// with the user's approval. Bounded for disclosure.
+func approvedDeletionPaths(ctx *AgentContext) []string {
+	if ctx == nil {
+		return nil
+	}
+	ctx.LedgerMu.Lock()
+	keys := make([]string, 0, len(ctx.Ledger))
+	for k, d := range ctx.Ledger {
+		if d.Tombstoned && d.TombstoneReason == "deleted" {
+			keys = append(keys, k)
+		}
+	}
+	ctx.LedgerMu.Unlock()
+	var out []string
+	for _, k := range keys {
+		if fulfilledApprovedDeletion(ctx, k, "deleted") {
+			out = append(out, relativeToWorkspace(ctx, k))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// relativeToWorkspace renders a canonical path the way the user wrote it.
+func relativeToWorkspace(ctx *AgentContext, key string) string {
+	if ctx == nil || ctx.WorkingDir == "" {
+		return key
+	}
+	if rel, err := filepath.Rel(ctx.WorkingDir, key); err == nil &&
+		!strings.HasPrefix(rel, "..") {
+		return rel
+	}
+	return key
 }
 
 // demonstratedMove answers whether one tombstone is a relocation this run can
@@ -6494,9 +6601,32 @@ func hasHonestMarker(s string) bool {
 // the account stands. For every other status it guarantees three properties --
 // there is a summary, it carries no completion claim, and it says plainly that
 // the task was not confirmed finished.
+// deletionSummaryLimit bounds how many paths a completion summary names before
+// counting the rest, so a large tidy-up stays readable.
+const deletionSummaryLimit = 5
+
 func honestTerminalSummary(ctx *AgentContext, st *runState, status TerminalStatus,
 	reason, summary string) string {
 	if status.Completed() {
+		// A run whose work was removing files says which ones, from the
+		// ledger rather than from anything the model wrote. Paths only: no
+		// hashes, no ledger vocabulary, no permission machinery.
+		if reason == "approved_deletions_demonstrated" {
+			if paths := approvedDeletionPaths(ctx); len(paths) > 0 {
+				named := paths
+				more := ""
+				if len(named) > deletionSummaryLimit {
+					more = fmt.Sprintf(" and %d more", len(named)-deletionSummaryLimit)
+					named = named[:deletionSummaryLimit]
+				}
+				line := fmt.Sprintf("Deleted %s%s, as you approved. Confirmed gone.",
+					strings.Join(named, ", "), more)
+				if s := strings.TrimSpace(summary); s != "" {
+					return line + "\n\n" + s
+				}
+				return line
+			}
+		}
 		return summary
 	}
 	out := strings.TrimSpace(summary)

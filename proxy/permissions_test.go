@@ -1386,38 +1386,91 @@ func TestDeletionTrackingCapacity(t *testing.T) {
 	}
 }
 
-// Commit 1 changes no completion behaviour, and nothing consumes the record.
-func TestFulfilledDeletionHasNoCompletionConsumerYet(t *testing.T) {
-	for _, f := range []string{"agent.go", "gates.go", "guardrails.go", "tools.go"} {
-		b, err := os.ReadFile(f)
-		if err != nil {
+// The fulfilled record has exactly one consumer: the tombstone decision.
+func TestFulfilledDeletionHasOneConsumer(t *testing.T) {
+	entries, _ := os.ReadDir(".")
+	var callers []string
+	for _, e := range entries {
+		n := e.Name()
+		if e.IsDir() || !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") {
 			continue
 		}
-		body := string(b)
-		if f == "gates.go" {
-			// The ledger promotes; that is the write side, not a consumer.
-			body = strings.ReplaceAll(body, "promoteFulfilledDeletion(ctx, ledgerKey(ctx, p))", "")
-		}
-		if strings.Contains(body, "fulfilledDeletionFor(") {
-			t.Errorf("%s consults fulfilled deletions; completion is Commit 2", f)
+		b, _ := os.ReadFile(n)
+		body := strings.Replace(string(b), "func fulfilledDeletionFor(", "", 1)
+		if c := strings.Count(body, "fulfilledDeletionFor("); c > 0 {
+			callers = append(callers, fmt.Sprintf("%s x%d", n, c))
 		}
 	}
-	// And an approved, fulfilled deletion still cannot complete.
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "a.py"), []byte("A\n"), 0o644)
-	sess := "sess-nc"
-	ctx, cancel := deletePermCtx(t, sess, dir)
-	defer cancel()
-	ctx.StreamFn = func(string, interface{}) {}
-	f, _ := approveAndDelete(t, ctx, sess, "call_0", "a.py", "allow", nil)
-	if f == nil {
-		t.Fatal("the approved deletion was not fulfilled")
+	t.Logf("consumers: %v", callers)
+	if len(callers) != 1 || !strings.HasPrefix(callers[0], "agent.go") {
+		t.Errorf("fulfilled deletions are consumed from %v, want only the tombstone "+
+			"decision in agent.go", callers)
 	}
-	if !blockingTombstone(ctx) {
-		t.Error("a fulfilled deletion already stopped blocking completion")
+}
+
+func TestDeletionCompletionHasNoLanguageDependency(t *testing.T) {
+	src, err := os.ReadFile("agent.go")
+	if err != nil {
+		t.Fatal(err)
 	}
-	ok, why := terminalCompletionAllowed(ctx, nil)
-	if ok || why != "delete_intent_unestablished" {
-		t.Errorf("completion says ok=%v why=%q, want the unchanged refusal", ok, why)
+	body := string(src)
+	// Each function that decides or renders deletion completion, and the
+	// language helpers none of them may consult.
+	for _, fn := range []string{"blockingTombstone", "fulfilledApprovedDeletion",
+		"undoneApprovedDeletion", "approvedDeletionPaths", "terminalCompletionAllowed"} {
+		i := strings.Index(body, "func "+fn)
+		if i < 0 {
+			t.Errorf("%s is gone; this guard is pinning something that moved", fn)
+			continue
+		}
+		end := strings.Index(body[i+1:], "\nfunc ")
+		if end < 0 {
+			end = len(body) - i - 1
+		}
+		region := body[i : i+1+end]
+		for _, nl := range []string{"actionIntentWords", "fixIntentWords",
+			"reOutputWriteVerb", "expectedOutputPaths", "isReadOnlyRequest",
+			"isExplainOnlyMessage", "isActionIntentMessage", "negatedAt",
+			"claimWords", "explicitDeleteIntent", "userMessage", "parsed.Summary"} {
+			if strings.Contains(region, nl) {
+				t.Errorf("%s consults %s; deletion authority must be structural", fn, nl)
+			}
+		}
+	}
+
+	// Provenance: the grant is written in one place, and only the endpoint can
+	// reach it.
+	perms, _ := os.ReadFile("permissions.go")
+	if n := strings.Count(string(perms), "ctx.approvedDelete = &approvedDeletion{"); n != 1 {
+		t.Errorf("%d writers of the approval grant, want exactly one", n)
+	}
+	entries, _ := os.ReadDir(".")
+	for _, e := range entries {
+		n := e.Name()
+		if e.IsDir() || !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") {
+			continue
+		}
+		b, _ := os.ReadFile(n)
+		s := string(b)
+		if n != "permissions.go" {
+			for _, sym := range []string{"grantDeleteApproval(", "noteDeletionAttempt(",
+				"reserveDeletionSlot("} {
+				if strings.Contains(s, sym) && n != "tools.go" {
+					t.Errorf("%s writes deletion authority via %s", n, sym)
+				}
+			}
+		}
+		// Promotion happens in exactly one place.
+		if c := strings.Count(s, "promoteFulfilledDeletion("); c > 0 && n != "gates.go" && n != "permissions.go" {
+			t.Errorf("%s promotes fulfilled deletions; only the ledger may", n)
+		}
+	}
+	// The record is internal: no wire type carries it.
+	types, _ := os.ReadFile("types.go")
+	for _, leak := range []string{"`json:\"fulfilled", "`json:\"approved_delete",
+		"`json:\"deletion_attempt"} {
+		if strings.Contains(string(types), leak) {
+			t.Errorf("the internal deletion record reached the wire: %s", leak)
+		}
 	}
 }
