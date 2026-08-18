@@ -3619,6 +3619,71 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 // Permission checking
 // ---------------------------------------------------------------------------
 
+// validateTaskContract checks a client contract and returns the stored form,
+// or an error and nothing at all.
+//
+// All or nothing, deliberately. A contract with one unusable path is a client
+// that thinks it asked for something it did not, and honouring the half that
+// parsed would produce obligations the user never stated. Normalising an
+// invalid contract into an empty valid one would be worse still: it would look
+// like a client that declared nothing.
+//
+// Paths go through resolveWorkspacePath, the same resolver every tool uses, so
+// containment and canonical identity are decided in one place. That needs the
+// request's working directory, which is why validation happens at the request
+// boundary where the directory has already been resolved -- not in the decoder,
+// which has no workspace to check against.
+func validateTaskContract(in *TaskContract, workingDir string) (*TaskContract, error) {
+	if in == nil {
+		return nil, nil
+	}
+	switch in.TaskMode {
+	case TaskModeWork, TaskModeQuestion:
+	case "":
+		return nil, fmt.Errorf("task_contract.task_mode is required")
+	default:
+		// Never coerced. An unrecognised mode is a client asking for something
+		// this build does not implement.
+		return nil, fmt.Errorf("task_contract.task_mode %q is not supported", in.TaskMode)
+	}
+	if len(in.ExpectedOutputs) > maxTaskContractEntries ||
+		len(in.Verification) > maxTaskContractEntries {
+		return nil, fmt.Errorf("task_contract exceeds %d entries", maxTaskContractEntries)
+	}
+	probe := &AgentContext{WorkingDir: workingDir}
+	seen := map[string]bool{}
+	out := &TaskContract{TaskMode: in.TaskMode}
+	for _, p := range in.ExpectedOutputs {
+		if strings.TrimSpace(p) == "" {
+			return nil, fmt.Errorf("task_contract.expected_outputs contains an empty path")
+		}
+		canon, err := resolveWorkspacePath(probe, p)
+		if err != nil {
+			return nil, fmt.Errorf("task_contract.expected_outputs: %w", err)
+		}
+		if seen[canon] {
+			continue // the same file spelled two ways is one obligation
+		}
+		seen[canon] = true
+		out.ExpectedOutputs = append(out.ExpectedOutputs, p)
+	}
+	vseen := map[string]bool{}
+	for _, v := range in.Verification {
+		if strings.TrimSpace(v) == "" {
+			return nil, fmt.Errorf("task_contract.verification contains an empty entry")
+		}
+		if vseen[v] {
+			continue // deduplicated by exact identity, not by resemblance
+		}
+		vseen[v] = true
+		out.Verification = append(out.Verification, v)
+	}
+	// Stable order, so two equivalent requests never disagree downstream.
+	sort.Strings(out.ExpectedOutputs)
+	sort.Strings(out.Verification)
+	return out, nil
+}
+
 // needsPermission returns true if the tool call requires user confirmation.
 func needsPermission(ctx *AgentContext, toolName string, args json.RawMessage) bool {
 	// Deleting is decided per object, so no blanket answer substitutes for it.
@@ -4074,6 +4139,9 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 		BypassV3         bool   `json:"bypass_v3,omitempty"`          // baseline pane: disable V3 orchestration
 		DisableFreshSlot bool   `json:"disable_fresh_slot,omitempty"` // keep the pre-warmed KV prefix
 		SandboxSubdir    string `json:"sandbox_subdir,omitempty"`     // confine writes to this workspace subdir
+		// What the client declares about the request. Optional, and absent
+		// stays distinguishable from present-and-empty. Nothing reads it yet.
+		TaskContract *TaskContract `json:"task_contract,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, ErrInvalidInput, "invalid request body")
@@ -4218,6 +4286,18 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Detect project (implemented in context.go)
+	// The client's declaration, checked against the workspace this request
+	// resolved to. A bad contract is a bad request: it is refused outright
+	// rather than dropped, because a client that declared obligations and had
+	// them silently discarded would be told its run finished having proved
+	// none of them. Nothing reads the stored value yet.
+	validatedContract, contractErr := validateTaskContract(req.TaskContract, workingDir)
+	if contractErr != nil {
+		writeError(w, http.StatusBadRequest, ErrInvalidInput, contractErr.Error())
+		return
+	}
+	ctx.TaskContract = validatedContract
+
 	ctx.Project = detectProjectInfo(workingDir)
 
 	// Set up SSE streaming

@@ -793,6 +793,12 @@ type AgentContext struct {
 	deletionAttempts   map[string]*deletionAttempt
 	fulfilledDeletions map[string]*fulfilledDeletion
 
+	// TaskContract is what the client declared about this request, validated
+	// at the request boundary. Nil means the client declared nothing, which
+	// stays distinct from declaring an empty contract. Nothing consults it
+	// yet -- see validateTaskContract.
+	TaskContract *TaskContract
+
 	// AllowedTools names tools the client has pre-approved for this session
 	// (seeded from the request's session_allowed_tools) plus any the user
 	// approves with session scope during this turn. A named tool skips the
@@ -1507,6 +1513,55 @@ type Plan struct {
 type SSEEvent struct {
 	Type string      `json:"type"` // "tool_call", "tool_result", "text", "done", "permission_request", "error"
 	Data interface{} `json:"data"`
+}
+
+// --- The structured task contract -------------------------------------------
+//
+// ATLAS decides what the user demanded by reading their English: which verbs
+// appeared decides whether work was required, which filenames sat near a write
+// verb become deliverables, which phrases demand verification. Those lists are
+// open vocabularies and they are measurably wrong -- "Write four files."
+// produces no expected outputs at all, and "Run the tests and make sure they
+// pass." sets no verification requirement.
+//
+// This is the client saying, in typed fields, what it already knows. It is the
+// first piece of the replacement and it decides nothing yet: this commit adds
+// the shape, validates it and stores it, and a guard proves no production
+// decision reads it.
+//
+// Three rules hold for good. The model cannot write this -- it arrives in the
+// HTTP request or not at all. It is a statement of obligation, never of
+// fulfilment: what actually happened is still the ledger's to say. And nothing
+// in it can authorise a destructive act; deletion stays with the permission
+// endpoint and never appears here.
+type TaskMode string
+
+const (
+	// TaskModeWork: the request asks for the workspace to change.
+	TaskModeWork TaskMode = "work"
+	// TaskModeQuestion: the request is answered by reading.
+	TaskModeQuestion TaskMode = "question"
+)
+
+// maxTaskContractEntries bounds each list, matching the ceiling the session's
+// other per-path state already uses.
+const maxTaskContractEntries = 64
+
+// TaskContract is what the client declares about the request. Absent is
+// distinct from present-and-empty, and stays distinct: a future commit will
+// default an absent contract fail-closed to work, and that must not begin by
+// accident here.
+type TaskContract struct {
+	TaskMode TaskMode `json:"task_mode"`
+	// ExpectedOutputs are exact paths the client knows the request must
+	// produce. Canonicalised and deduplicated through the workspace resolver
+	// the rest of the proxy uses -- there is no second path rule.
+	ExpectedOutputs []string `json:"expected_outputs,omitempty"`
+	// Verification are the exact commands the client requires be run. Kept as
+	// the client wrote them: the command/result contract already records
+	// commands verbatim, so binding a requirement to an execution later needs
+	// no parsing. Declaring one here does not run anything.
+	Verification []string `json:"verification,omitempty"`
 }
 
 type PermissionRequest struct {

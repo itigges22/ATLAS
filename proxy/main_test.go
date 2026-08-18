@@ -4,13 +4,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -576,4 +582,369 @@ func TestClampGenerationBody(t *testing.T) {
 			}
 		}
 	})
+}
+
+// --- The structured task contract --------------------------------------------
+//
+// ATLAS infers obligations from English today: which verbs the user used
+// decides whether work was demanded, which filenames near a write verb become
+// deliverables, which phrases demand verification. This is the first piece of
+// the replacement -- the client saying, in typed fields, what it already knows.
+//
+// It decides nothing yet. This commit adds the shape, validates it, and stores
+// it; a guard proves no production decision reads it.
+
+func TestTaskContractWireShape(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "app.py"), []byte("A = 1\n"), 0o644)
+
+	for _, c := range []struct {
+		name    string
+		body    string
+		present bool
+		valid   bool
+		mode    TaskMode
+		outputs []string
+		verify  []string
+	}{
+		{"absent contract", `{}`, false, false, "", nil, nil},
+		{"work with outputs and verification",
+			`{"task_contract":{"task_mode":"work","expected_outputs":["app.py"],"verification":["go test ./..."]}}`,
+			true, true, TaskModeWork, []string{"app.py"}, []string{"go test ./..."}},
+		{"question", `{"task_contract":{"task_mode":"question"}}`,
+			true, true, TaskModeQuestion, nil, nil},
+		{"unknown mode", `{"task_contract":{"task_mode":"explore"}}`, true, false, "", nil, nil},
+		{"empty mode", `{"task_contract":{"task_mode":""}}`, true, false, "", nil, nil},
+		{"one bad path rejects the whole contract",
+			`{"task_contract":{"task_mode":"work","expected_outputs":["app.py","../../etc/passwd"]}}`,
+			true, false, "", nil, nil},
+		{"workspace escape", `{"task_contract":{"task_mode":"work","expected_outputs":["../x.py"]}}`,
+			true, false, "", nil, nil},
+		{"empty output entry", `{"task_contract":{"task_mode":"work","expected_outputs":[""]}}`,
+			true, false, "", nil, nil},
+		{"empty verification entry",
+			`{"task_contract":{"task_mode":"work","verification":["  "]}}`, true, false, "", nil, nil},
+		{"aliases deduplicate canonically",
+			`{"task_contract":{"task_mode":"work","expected_outputs":["app.py","./app.py"]}}`,
+			true, true, TaskModeWork, []string{"app.py"}, nil},
+		{"duplicate verification deduplicates",
+			`{"task_contract":{"task_mode":"work","verification":["go test ./...","go test ./..."]}}`,
+			true, true, TaskModeWork, nil, []string{"go test ./..."}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var wire struct {
+				TaskContract *TaskContract `json:"task_contract,omitempty"`
+			}
+			if err := json.Unmarshal([]byte(c.body), &wire); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if (wire.TaskContract != nil) != c.present {
+				t.Fatalf("present=%v want %v", wire.TaskContract != nil, c.present)
+			}
+			if !c.present {
+				return
+			}
+			got, err := validateTaskContract(wire.TaskContract, dir)
+			if (err == nil) != c.valid {
+				t.Fatalf("valid=%v (err=%v) want %v", err == nil, err, c.valid)
+			}
+			if !c.valid {
+				if got != nil {
+					t.Error("an invalid contract produced a stored value; it must be all or nothing")
+				}
+				return
+			}
+			if got.TaskMode != c.mode {
+				t.Errorf("mode=%q want %q", got.TaskMode, c.mode)
+			}
+			if strings.Join(got.ExpectedOutputs, "|") != strings.Join(c.outputs, "|") {
+				t.Errorf("outputs=%v want %v", got.ExpectedOutputs, c.outputs)
+			}
+			if strings.Join(got.Verification, "|") != strings.Join(c.verify, "|") {
+				t.Errorf("verification=%v want %v", got.Verification, c.verify)
+			}
+		})
+	}
+}
+
+// Bounds use the ceiling the rest of the session state already uses.
+func TestTaskContractBounds(t *testing.T) {
+	dir := t.TempDir()
+	mk := func(n int) *TaskContract {
+		c := &TaskContract{TaskMode: TaskModeWork}
+		for i := 0; i < n; i++ {
+			c.ExpectedOutputs = append(c.ExpectedOutputs, fmt.Sprintf("f%d.py", i))
+		}
+		return c
+	}
+	if _, err := validateTaskContract(mk(maxTaskContractEntries), dir); err != nil {
+		t.Errorf("at the bound: %v", err)
+	}
+	got, err := validateTaskContract(mk(maxTaskContractEntries+1), dir)
+	if err == nil {
+		t.Error("over the bound was accepted")
+	}
+	if got != nil {
+		t.Error("overflow produced a partial contract")
+	}
+	v := &TaskContract{TaskMode: TaskModeWork}
+	for i := 0; i <= maxTaskContractEntries; i++ {
+		v.Verification = append(v.Verification, fmt.Sprintf("cmd %d", i))
+	}
+	if _, err := validateTaskContract(v, dir); err == nil {
+		t.Error("verification overflow was accepted")
+	}
+}
+
+// Round-trip: a valid contract serialises back to the same fields.
+func TestTaskContractRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	in := &TaskContract{
+		TaskMode:        TaskModeWork,
+		ExpectedOutputs: []string{"b.py", "a.py"},
+		Verification:    []string{"pytest", "go vet ./..."},
+	}
+	got, err := validateTaskContract(in, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Stable ordering, so two equivalent requests never disagree.
+	if strings.Join(got.ExpectedOutputs, "|") != "a.py|b.py" {
+		t.Errorf("outputs not stably ordered: %v", got.ExpectedOutputs)
+	}
+	if strings.Join(got.Verification, "|") != "go vet ./...|pytest" {
+		t.Errorf("verification not stably ordered: %v", got.Verification)
+	}
+	b, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back TaskContract
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.TaskMode != got.TaskMode ||
+		strings.Join(back.ExpectedOutputs, "|") != strings.Join(got.ExpectedOutputs, "|") ||
+		strings.Join(back.Verification, "|") != strings.Join(got.Verification, "|") {
+		t.Errorf("round trip lost fields: %+v vs %+v", back, got)
+	}
+}
+
+// The contract decides nothing. One definition, one validator, no consumer.
+func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	var defs, validators, readers []string
+	for _, e := range entries {
+		n := e.Name()
+		if e.IsDir() || !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, n, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", n, err)
+		}
+		ast.Inspect(f, func(node ast.Node) bool {
+			switch v := node.(type) {
+			case *ast.TypeSpec:
+				if v.Name != nil && v.Name.Name == "TaskContract" {
+					defs = append(defs, fmt.Sprintf("%s:%d", n, fset.Position(v.Pos()).Line))
+				}
+			case *ast.FuncDecl:
+				if v.Name != nil && v.Name.Name == "validateTaskContract" {
+					validators = append(validators, fmt.Sprintf("%s:%d", n, fset.Position(v.Pos()).Line))
+				}
+			case *ast.SelectorExpr:
+				if v.Sel != nil && v.Sel.Name == "TaskContract" {
+					readers = append(readers, fmt.Sprintf("%s:%d", n, fset.Position(v.Pos()).Line))
+				}
+			}
+			return true
+		})
+	}
+	t.Logf("definitions=%v validators=%v reads=%v", defs, validators, readers)
+	if len(defs) != 1 {
+		t.Errorf("%d TaskContract definitions, want exactly one: %v", len(defs), defs)
+	}
+	if len(validators) != 1 {
+		t.Errorf("%d validators, want exactly one: %v", len(validators), validators)
+	}
+	for _, r := range readers {
+		if !strings.HasPrefix(r, "agent.go:") {
+			t.Errorf("%s reads the task contract outside the request boundary", r)
+		}
+	}
+	body, _ := os.ReadFile("agent.go")
+	for _, fn := range []string{"wantsStateChange", "classifyAgentTier", "terminalCompletionAllowed",
+		"finalizeCompletion", "blockingTombstone", "needsPermission", "honestTerminalSummary"} {
+		i := strings.Index(string(body), "func "+fn)
+		if i < 0 {
+			continue
+		}
+		end := strings.Index(string(body)[i+1:], "\nfunc ")
+		if end < 0 {
+			end = len(body) - i - 1
+		}
+		if strings.Contains(string(body)[i:i+1+end], "TaskContract") {
+			t.Errorf("%s consults the task contract; this commit adds no decision", fn)
+		}
+	}
+	guard, _ := os.ReadFile("guardrails.go")
+	if strings.Contains(string(guard), "TaskContract") {
+		t.Error("guardrails.go consults the task contract")
+	}
+}
+
+// The contract is inert: a run with one and a run without produce the same
+// events, the same terminal, and the same disk.
+func TestTaskContractIsInert(t *testing.T) {
+	run := func(t *testing.T, contract *TaskContract, prompt string,
+		plan func(i int) map[string]interface{}) (string, string, []string) {
+		t.Helper()
+		dir := t.TempDir()
+		turns := 0
+		var mu sync.Mutex
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
+				http.Error(w, "unavailable", http.StatusServiceUnavailable)
+				return
+			case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+				json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
+				return
+			case strings.HasSuffix(r.URL.Path, "/execute"):
+				var in struct{ Code string }
+				json.NewDecoder(r.Body).Decode(&in)
+				if strings.Contains(in.Code, ".atlas-mount-probe") {
+					b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
+					json.NewEncoder(w).Encode(map[string]interface{}{
+						"success": true, "stdout": string(b), "exit_code": 0})
+					return
+				}
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": true, "stdout": "", "exit_code": 0})
+				return
+			case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
+				http.NotFound(w, r)
+				return
+			}
+			io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "text/event-stream")
+			mu.Lock()
+			i := turns
+			turns++
+			mu.Unlock()
+			call, _ := json.Marshal(plan(i))
+			d, _ := json.Marshal(map[string]interface{}{
+				"choices": []map[string]interface{}{
+					{"delta": map[string]string{"content": string(call)}}}})
+			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+		}))
+		defer srv.Close()
+
+		ctx := NewAgentContext(dir, Tier2Medium)
+		ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
+		ctx.PermissionMode = PermissionYolo
+		ctx.TrustMode = trustFullyTrusted
+		ctx.VerifyOnHost = true
+		ctx.MaxTurns = 0
+		ctx.TaskContract = contract // the only difference between the two runs
+		var events []string
+		terminal := map[string]string{}
+		ctx.StreamFn = func(et string, data interface{}) {
+			b, _ := json.Marshal(data)
+			mu.Lock()
+			defer mu.Unlock()
+			// Timings differ run to run; everything else is compared.
+			line := et + "|" + string(b)
+			var m map[string]interface{}
+			if json.Unmarshal(b, &m) == nil {
+				for _, k := range []string{"elapsed", "prompt_ms", "elapsed_ms",
+					"duration_ms", "wall_s", "ms"} {
+					delete(m, k)
+				}
+				c, _ := json.Marshal(m)
+				line = et + "|" + string(c)
+			}
+			events = append(events, line)
+			if et == "done" {
+				var m map[string]string
+				json.Unmarshal(b, &m)
+				for k, v := range m {
+					terminal[k] = v
+				}
+			}
+		}
+		runAgentLoop(ctx, prompt)
+		var disk []string
+		filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() {
+				return nil
+			}
+			rel, _ := filepath.Rel(dir, p)
+			if !strings.HasPrefix(rel, ".") {
+				b, _ := os.ReadFile(p)
+				disk = append(disk, rel+"="+hashBytes(b)[:12])
+			}
+			return nil
+		})
+		sort.Strings(disk)
+		return strings.Join(events, "\n"),
+			terminal["status"] + "/" + terminal["reason"], disk
+	}
+
+	contract := &TaskContract{
+		TaskMode:        TaskModeWork,
+		ExpectedOutputs: []string{"never_written.py"},
+		Verification:    []string{"go test ./..."},
+	}
+	for _, c := range []struct {
+		name, prompt string
+		plan         func(i int) map[string]interface{}
+	}{
+		{"work request", "Create app.py.", func(i int) map[string]interface{} {
+			if i == 0 {
+				return map[string]interface{}{"type": "tool_call", "name": "write_file",
+					"args": map[string]string{"path": "app.py", "content": "A = 1\n"}}
+			}
+			return map[string]interface{}{"type": "done", "summary": "wrote app.py"}
+		}},
+		{"question", "What does this repository do?", func(i int) map[string]interface{} {
+			return map[string]interface{}{"type": "done", "summary": "it is empty"}
+		}},
+		{"prose only", "Create app.py.", func(i int) map[string]interface{} {
+			return map[string]interface{}{"type": "text", "content": "here is what I would do"}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			evA, termA, diskA := run(t, nil, c.prompt, c.plan)
+			evB, termB, diskB := run(t, contract, c.prompt, c.plan)
+			t.Logf("%s: terminal without=%q with=%q", c.name, termA, termB)
+			if termA != termB {
+				t.Errorf("terminal differs: %q vs %q", termA, termB)
+			}
+			if strings.Join(diskA, ",") != strings.Join(diskB, ",") {
+				t.Errorf("disk differs:\n  %v\n  %v", diskA, diskB)
+			}
+			if evA != evB {
+				a, b := strings.Split(evA, "\n"), strings.Split(evB, "\n")
+				for i := 0; i < len(a) || i < len(b); i++ {
+					var x, y string
+					if i < len(a) {
+						x = a[i]
+					}
+					if i < len(b) {
+						y = b[i]
+					}
+					if x != y {
+						t.Errorf("first difference at event %d:\n  without: %.200s\n  with:    %.200s", i, x, y)
+						break
+					}
+				}
+			}
+		})
+	}
 }
