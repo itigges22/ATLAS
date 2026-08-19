@@ -370,6 +370,16 @@ func shadowCaptureRoot() string {
 	return envOr("ATLAS_DIAGNOSTIC_DIR", "/data/diagnostics")
 }
 
+// A sink is open, then closing, then closed, and submission is synchronised
+// with that transition rather than merely checking it.
+//
+// Checking a flag and then sending on the queue cannot be made safe by making
+// the flag atomic: the close can land between the check and the send, and a
+// send on a closed channel panics -- inside an agent request, which is the one
+// thing a diagnostic must never be able to do. So admission is a read lock held
+// across the decision AND the enqueue, and the cutoff takes the same lock for
+// writing. When the queue closes, no submitter is inside it and no submitter
+// can enter and find it open. panic/recover is not used as synchronisation.
 type shadowSink struct {
 	queue chan []byte
 	done  chan struct{}
@@ -380,12 +390,18 @@ type shadowSink struct {
 	dropped   atomic.Int64
 	errors    atomic.Int64
 	duplicate atomic.Int64
-	overflow  atomic.Bool // duplicate tracking stopped growing
+	refused   atomic.Int64 // arrived after the cutoff, outside the acquisition
+	overflow  atomic.Bool  // duplicate tracking stopped growing
+
+	admit   sync.RWMutex
+	closing bool // guarded by admit
 
 	mu   sync.Mutex
 	seen map[string]bool
 
 	closeOnce sync.Once
+	closeErr  error // the outcome every close() caller reports
+	finalErr  error // written by the writer before it closes done
 }
 
 // activeShadowSink is written once before the listener opens and never again,
@@ -444,6 +460,9 @@ func newShadowSink(f *os.File) *shadowSink {
 
 func (s *shadowSink) enabled() bool { return s != nil }
 
+// run is the only writer. Records, footer, sync and descriptor all belong to
+// it, so nothing can ever write the file concurrently with it -- in particular
+// not the close hook, which only ever asks it to stop and waits.
 func (s *shadowSink) run() {
 	defer close(s.done)
 	for line := range s.queue {
@@ -455,21 +474,64 @@ func (s *shadowSink) run() {
 		}
 		s.written.Add(1)
 	}
+	// The queue is closed and drained, and admission stopped before it closed,
+	// so no further record exists for this file. Finalise.
+	s.finalize()
 }
 
-// submit enqueues without blocking. A full queue drops and counts.
+// finalize writes the footer after every record its counters describe, then
+// releases the descriptor. Only run() calls it, exactly once, which is what
+// makes a footer's presence mean "this acquisition completed".
+func (s *shadowSink) finalize() {
+	footer, err := json.Marshal(map[string]interface{}{
+		"schema_version":            shadowSchemaVersion,
+		"record_kind":               "task_contract_shadow_footer",
+		"accepted":                  s.accepted.Load(),
+		"written":                   s.written.Load(),
+		"dropped":                   s.dropped.Load(),
+		"errors":                    s.errors.Load(),
+		"duplicate_request_ids":     s.duplicate.Load(),
+		"request_tracking_overflow": s.overflow.Load(),
+		"influences_live_decision":  false,
+	})
+	if err != nil {
+		s.finalErr = err
+	} else if _, werr := s.f.Write(append(footer, '\n')); werr != nil {
+		s.finalErr = werr
+	}
+	if serr := s.f.Sync(); serr != nil && s.finalErr == nil {
+		s.finalErr = serr
+	}
+	if cerr := s.f.Close(); cerr != nil && s.finalErr == nil {
+		s.finalErr = cerr
+	}
+}
+
+// submit enqueues without blocking. A full queue drops and counts; a record
+// arriving after the cutoff is refused and counted separately, so it can never
+// appear in an accepted total the finalised footer is unable to account for.
 func (s *shadowSink) submit(rec map[string]interface{}) {
 	if s == nil {
 		return
 	}
-	s.accepted.Add(1)
+	// Marshal outside the admission hold: it is the expensive part and it
+	// cannot touch the queue.
 	line, err := json.Marshal(rec)
 	if err != nil {
 		s.errors.Add(1)
 		return
 	}
+	line = append(line, '\n')
+
+	s.admit.RLock()
+	defer s.admit.RUnlock()
+	if s.closing {
+		s.refused.Add(1)
+		return
+	}
+	s.accepted.Add(1)
 	select {
-	case s.queue <- append(line, '\n'):
+	case s.queue <- line:
 	default:
 		s.dropped.Add(1)
 	}
@@ -493,40 +555,45 @@ func (s *shadowSink) noteRequest(id string) {
 	s.seen[id] = true
 }
 
-// close drains within the deadline, writes the footer, and closes once.
+// close stops admission, then waits for the writer to finalise, bounded.
+//
+// It never writes the footer and never closes the descriptor: doing either here
+// could race the writer, and a footer racing a record is a file that looks
+// complete and is not. The writer owns finalisation, so a footer exists only
+// when every record its counters describe was already written.
+//
+// If the writer does not finish within the deadline the capture is left with no
+// footer and the error says so. That is deliberate. A write already inside a
+// blocking filesystem syscall cannot be interrupted portably from another
+// goroutine -- Go offers no such guarantee for a regular file, and neither
+// closing the descriptor nor cancelling a context unblocks it -- so there is no
+// safe cutoff to write a footer after. The process is exiting once this hook
+// returns; an acquisition with no footer is correctly readable as defective,
+// which is better than one that reads as complete and is not.
 func (s *shadowSink) close(ctx context.Context, wait time.Duration) error {
 	if s == nil {
 		return nil
 	}
-	var err error
 	s.closeOnce.Do(func() {
+		// The cutoff and the channel close happen under the same exclusive
+		// hold, so no submitter is inside and none can enter to find it open.
+		s.admit.Lock()
+		s.closing = true
 		close(s.queue)
+		s.admit.Unlock()
+
 		select {
 		case <-s.done:
+			s.closeErr = s.finalErr
 		case <-time.After(wait):
-			s.errors.Add(1)
+			s.closeErr = fmt.Errorf("shadow capture did not finalise within %v; "+
+				"the capture has no footer and is incomplete", wait)
 		case <-ctx.Done():
-			s.errors.Add(1)
-		}
-		footer, _ := json.Marshal(map[string]interface{}{
-			"schema_version":            shadowSchemaVersion,
-			"record_kind":               "task_contract_shadow_footer",
-			"accepted":                  s.accepted.Load(),
-			"written":                   s.written.Load(),
-			"dropped":                   s.dropped.Load(),
-			"errors":                    s.errors.Load(),
-			"duplicate_request_ids":     s.duplicate.Load(),
-			"request_tracking_overflow": s.overflow.Load(),
-			"influences_live_decision":  false,
-		})
-		if _, werr := s.f.Write(append(footer, '\n')); werr != nil {
-			err = werr
-		}
-		if cerr := s.f.Close(); cerr != nil && err == nil {
-			err = cerr
+			s.closeErr = fmt.Errorf("shadow capture finalisation cancelled (%w); "+
+				"the capture has no footer and is incomplete", ctx.Err())
 		}
 	})
-	return err
+	return s.closeErr
 }
 
 // --- Bounded graceful shutdown ----------------------------------------------
