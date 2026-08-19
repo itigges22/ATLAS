@@ -1735,93 +1735,11 @@ func shadowLoopDrive(t *testing.T, requestID string, contract *TaskContract, pro
 	})
 	sort.Strings(disk)
 
-	norm := make([]string, 0, len(modelBodies))
-	for _, b := range modelBodies {
-		norm = append(norm, canonPromptBody(b))
-	}
+	// The model request bodies are returned verbatim. Nothing normalises tool
+	// ordering any more: allTools() fixes it, so two runs of the same request
+	// are byte-identical and any difference is a real one.
 	return nil, strings.Join(events, "\n"), disk,
-		terminal["status"] + "/" + terminal["reason"], norm
-}
-
-// canonPromptBody puts one upstream request body into a form two runs can be
-// compared byte for byte in.
-//
-// Three places already build the wire by ranging toolRegistry, a Go map, so
-// their order is randomised per request independently of anything under test:
-// the response_format tool-name enum (tools.go buildToolCallSchemaForTools),
-// the GBNF tool-name alternation (buildToolCallGrammar), and the "### <tool>"
-// documentation blocks in the system prompt (buildToolsDoc). Exactly those
-// three orderings are canonicalised here and nothing else: any added, removed
-// or altered prompt byte still shows up as a difference, and the ordering of
-// the messages array, which carries meaning, is left alone.
-func canonPromptBody(raw string) string {
-	var body interface{}
-	if err := json.Unmarshal([]byte(raw), &body); err != nil {
-		return raw
-	}
-	var walk func(v interface{}) interface{}
-	walk = func(v interface{}) interface{} {
-		switch t := v.(type) {
-		case map[string]interface{}:
-			for k, e := range t {
-				t[k] = walk(e)
-			}
-			return t
-		case []interface{}:
-			allStrings := len(t) > 0
-			for i, e := range t {
-				t[i] = walk(e)
-				if _, ok := e.(string); !ok {
-					allStrings = false
-				}
-			}
-			if allStrings {
-				sort.Slice(t, func(i, j int) bool {
-					return t[i].(string) < t[j].(string)
-				})
-			}
-			return t
-		case string:
-			return canonPromptString(t)
-		}
-		return v
-	}
-	out, err := json.Marshal(walk(body))
-	if err != nil {
-		return raw
-	}
-	return string(out)
-}
-
-func canonPromptString(s string) string {
-	if strings.Contains(s, "\n### ") {
-		parts := strings.Split(s, "\n### ")
-		// Whatever follows the last tool block belongs to the section after
-		// the tool list, not to the block it happens to trail; detach it so
-		// sorting cannot carry it to a random position.
-		tail := ""
-		for i, seg := range parts[1:] {
-			if idx := strings.Index(seg, "\n## "); idx >= 0 {
-				tail, parts[i+1] = seg[idx:], seg[:idx]
-			}
-		}
-		sort.Strings(parts[1:])
-		s = strings.Join(parts, "\n### ") + tail
-	}
-	if !strings.Contains(s, "::=") || !strings.Contains(s, " | ") {
-		return s
-	}
-	lines := strings.Split(s, "\n")
-	for i, line := range lines {
-		head, body, ok := strings.Cut(line, "::=")
-		if !ok || !strings.Contains(body, " | ") {
-			continue
-		}
-		alts := strings.Split(body, " | ")
-		sort.Strings(alts)
-		lines[i] = head + "::=" + strings.Join(alts, " | ")
-	}
-	return strings.Join(lines, "\n")
+		terminal["status"] + "/" + terminal["reason"], modelBodies
 }
 
 func shadowWorkPlan(i int) map[string]interface{} {
@@ -1979,21 +1897,21 @@ func TestShadowRecordsCarryNoRawText(t *testing.T) {
 
 // Enabling the capture changes nothing the user can observe.
 //
-// The exact claim this supports is "semantically identical under the declared
-// normalisation", not "byte-identical prompt replay". Three normalisations are
-// applied, and no others:
+// The model request bodies are now compared BYTE FOR BYTE, tool ordering
+// included. They were not, while three parts of the prompt were built by
+// ranging a Go map and varied per request with the capture switched off; that
+// ordering is fixed at its source now, so the comparison no longer has to
+// tolerate it.
+//
+// Two normalisations remain, and no others:
 //
 //   - established nondeterministic timing fields (elapsed, prompt_ms, ms,
 //     elapsed_ms, duration_ms, wall_s) are dropped from SSE payloads;
 //   - the per-run temporary workspace path is canonicalised, because each run
-//     gets its own t.TempDir and the path is not a property of the run;
-//   - exactly three pre-existing map-order prompt regions are sorted, described
-//     on canonPromptBody. They vary run to run with the capture switched OFF,
-//     so they are not evidence about the capture.
+//     gets its own t.TempDir and the path is an input difference, not a
+//     property of the run.
 //
-// Nothing else is removed to make the comparison pass. Reproducible byte-level
-// prompt replay needs the map-order defect fixed first, which is a separate
-// prerequisite slice and not covered here.
+// Nothing else is removed to make the comparison pass.
 func TestShadowCaptureIsCausallyInert(t *testing.T) {
 	contract := &TaskContract{TaskMode: TaskModeWork,
 		ExpectedOutputs: []string{"app.py"}, Verification: []string{"pytest"}}

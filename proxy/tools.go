@@ -90,11 +90,25 @@ func getTool(name string) *ToolDef {
 	return toolRegistry[name]
 }
 
+// allTools returns every registered tool in one stable order, sorted by name.
+//
+// This is the ordering authority for everything the model sees: the sequence of
+// the "### <tool>" documentation blocks in the system prompt, the tool-name enum
+// in response_format, and the alternation in the GBNF tool-name production all
+// come from here. Ranging toolRegistry directly gave each of them a fresh Go map
+// order on every request, so two identical requests produced different bytes --
+// which reprocesses the cached prompt prefix on the server and varies the tool
+// ordering the model sees, for no reason anyone chose. Name order is arbitrary
+// but fixed, which is the property that matters.
+//
+// The registry stays a map: lookup by name is what getTool needs, and the order
+// belongs to the readers, not to the storage.
 func allTools() []*ToolDef {
 	tools := make([]*ToolDef, 0, len(toolRegistry))
 	for _, t := range toolRegistry {
 		tools = append(tools, t)
 	}
+	sort.Slice(tools, func(i, j int) bool { return tools[i].Name < tools[j].Name })
 	return tools
 }
 
@@ -5122,12 +5136,13 @@ func buildToolCallSchemaForTools(excluded []string) map[string]interface{} {
 	for _, name := range excluded {
 		excludeSet[name] = struct{}{}
 	}
+	// allTools() order, so the enum is the same sequence every request.
 	toolNames := make([]interface{}, 0, len(toolRegistry))
-	for name := range toolRegistry {
-		if _, skip := excludeSet[name]; skip {
+	for _, tool := range allTools() {
+		if _, skip := excludeSet[tool.Name]; skip {
 			continue
 		}
-		toolNames = append(toolNames, name)
+		toolNames = append(toolNames, tool.Name)
 	}
 
 	return map[string]interface{}{
@@ -5240,12 +5255,14 @@ func buildGBNFGrammarForTools(excluded []string) string {
 	sb.WriteString("root ::= tool-call | text-response | done-response\n\n")
 
 	// Tool call
+	// allTools() order, so the alternation is the same sequence every request.
+	// The set of alternatives is unchanged; only their order is now fixed.
 	toolNames := make([]string, 0, len(toolRegistry))
-	for name := range toolRegistry {
-		if _, skip := excludeSet[name]; skip {
+	for _, tool := range allTools() {
+		if _, skip := excludeSet[tool.Name]; skip {
 			continue
 		}
-		toolNames = append(toolNames, fmt.Sprintf(`"\"%s\""`, name))
+		toolNames = append(toolNames, fmt.Sprintf(`"\"%s\""`, tool.Name))
 	}
 
 	sb.WriteString("tool-call ::= \"{\" ws ")

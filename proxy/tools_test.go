@@ -3,11 +3,17 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -2303,5 +2309,327 @@ func TestEditToolsClassifyANotApplicableArtifact(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// --- Deterministic model-facing bytes ----------------------------------------
+//
+// Three parts of every upstream request are built by ranging toolRegistry, a Go
+// map: the response_format tool-name enum, the GBNF tool-name alternation, and
+// the "### <tool>" documentation blocks in the system prompt. Go randomises map
+// iteration per range, so identical inputs produce different bytes on the wire.
+//
+// Within one process the difference is easy to miss, so this compares fresh
+// processes: the test re-executes the test binary, and each child builds the
+// real artefacts with the production builders and prints them.
+
+const promptBytesChildEnv = "ATLAS_PROMPT_BYTES_CHILD"
+
+// promptArtifacts is every model-facing byte sequence these builders produce,
+// across every mode that uses them.
+func promptArtifacts(t *testing.T) map[string]string {
+	t.Helper()
+	// A FIXED working directory, not t.TempDir(): the prompt embeds the path,
+	// and a per-process temp dir is a difference in the INPUT. Holding it
+	// constant keeps this a comparison of the builders, so nothing about the
+	// emitted bytes has to be normalised afterwards.
+	ctx := NewAgentContext("/atlas-prompt-fixture", Tier2Medium)
+	out := map[string]string{}
+	out["system_prompt"] = buildSystemPrompt(ctx)
+	out["tool_docs_excluding"] = buildToolDescriptionsExcluding([]string{"edit_file"})
+	out["grammar"] = buildGBNFGrammarForTools(nil)
+	out["grammar_excluded"] = buildGBNFGrammarForTools([]string{"edit_file", "write_file"})
+	for _, mode := range []string{"strict", "loose"} {
+		t.Setenv("ATLAS_GRAMMAR_MODE", mode)
+		b, err := json.Marshal(buildResponseFormat())
+		if err != nil {
+			t.Fatalf("response_format %s: %v", mode, err)
+		}
+		out["response_format_"+mode] = string(b)
+	}
+	b, err := json.Marshal(buildToolCallSchemaForTools([]string{"edit_file"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out["schema_excluded"] = string(b)
+	return out
+}
+
+// TestPromptBytesChild is the child half: it prints the artefacts and exits.
+// It does nothing when run as part of an ordinary suite.
+func TestPromptBytesChild(t *testing.T) {
+	if os.Getenv(promptBytesChildEnv) != "1" {
+		t.Skip("child-only: driven by TestModelFacingBytesAreProcessStable")
+	}
+	b, err := json.Marshal(promptArtifacts(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Println("ARTIFACTS " + string(b))
+}
+
+// Identical inputs must produce identical model-facing bytes in every process.
+//
+// Nothing is sorted or canonicalised before comparing: these are the bytes that
+// would go to llama-server.
+func TestModelFacingBytesAreProcessStable(t *testing.T) {
+	const runs = 8
+	var seen []map[string]string
+	for i := 0; i < runs; i++ {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestPromptBytesChild$", "-test.v=false")
+		cmd.Env = append(os.Environ(), promptBytesChildEnv+"=1")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("child %d: %v\n%s", i, err, out)
+		}
+		var payload string
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.HasPrefix(line, "ARTIFACTS ") {
+				payload = strings.TrimPrefix(line, "ARTIFACTS ")
+			}
+		}
+		if payload == "" {
+			t.Fatalf("child %d printed no artefacts:\n%s", i, out)
+		}
+		var m map[string]string
+		if err := json.Unmarshal([]byte(payload), &m); err != nil {
+			t.Fatalf("child %d payload: %v", i, err)
+		}
+		seen = append(seen, m)
+	}
+
+	keys := make([]string, 0, len(seen[0]))
+	for k := range seen[0] {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		variants := map[string]int{}
+		for _, m := range seen {
+			variants[m[k]]++
+		}
+		if len(variants) != 1 {
+			// Report where they diverge, and prove the divergence is ordering
+			// and nothing else: the same lines, in a different sequence.
+			var forms []string
+			for v := range variants {
+				forms = append(forms, v)
+			}
+			sort.Strings(forms)
+			a, b := forms[0], forms[1]
+			i := 0
+			for i < len(a) && i < len(b) && a[i] == b[i] {
+				i++
+			}
+			lo := i - 60
+			if lo < 0 {
+				lo = 0
+			}
+			clip := func(s string) string {
+				hi := i + 90
+				if hi > len(s) {
+					hi = len(s)
+				}
+				return s[lo:hi]
+			}
+			t.Errorf("%s differs across %d fresh processes (%d distinct forms), "+
+				"first at byte %d:\n  A: %s\n  B: %s",
+				k, runs, len(variants), i, clip(a), clip(b))
+			continue
+		}
+		t.Logf("%s: identical across %d processes (%d bytes)", k, runs, len(seen[0][k]))
+	}
+}
+
+// The inventory behind those bytes is identical across processes: same tools,
+// same descriptions, same schemas, same grammar alternatives, same
+// documentation bodies. Only their sequence moves.
+//
+// This is green both before and after the ordering fix, which is what makes it
+// the evidence that ordering is the ONLY thing that changed.
+func TestToolInventoryIsIdenticalAcrossProcesses(t *testing.T) {
+	const runs = 6
+	var seen []map[string]string
+	for i := 0; i < runs; i++ {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestToolInventoryChild$", "-test.v=false")
+		cmd.Env = append(os.Environ(), promptBytesChildEnv+"=1")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("child %d: %v\n%s", i, err, out)
+		}
+		var payload string
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.HasPrefix(line, "INVENTORY ") {
+				payload = strings.TrimPrefix(line, "INVENTORY ")
+			}
+		}
+		if payload == "" {
+			t.Fatalf("child %d printed no inventory:\n%s", i, out)
+		}
+		var m map[string]string
+		if err := json.Unmarshal([]byte(payload), &m); err != nil {
+			t.Fatal(err)
+		}
+		seen = append(seen, m)
+	}
+	for _, m := range seen[1:] {
+		if len(m) != len(seen[0]) {
+			t.Fatalf("inventory size differs: %d vs %d", len(m), len(seen[0]))
+		}
+		for k, v := range seen[0] {
+			if m[k] != v {
+				t.Errorf("%s differs between processes", k)
+			}
+		}
+	}
+	t.Logf("%d inventory facts identical across %d processes", len(seen[0]), runs)
+}
+
+// TestToolInventoryChild prints order-independent facts about the registry.
+func TestToolInventoryChild(t *testing.T) {
+	if os.Getenv(promptBytesChildEnv) != "1" {
+		t.Skip("child-only: driven by TestToolInventoryIsIdenticalAcrossProcesses")
+	}
+	facts := map[string]string{}
+	var names []string
+	for _, tool := range allTools() {
+		names = append(names, tool.Name)
+		facts["desc:"+tool.Name] = tool.Description
+		facts["schema:"+tool.Name] = fmt.Sprintf("%T|%s",
+			tool.InputSchema, generateInputExample(tool.Name))
+		facts["effect:"+tool.Name] = fmt.Sprintf("%v|ro=%v|destructive=%v",
+			tool.Effect, tool.ReadOnly, tool.Destructive)
+	}
+	sort.Strings(names)
+	facts["names"] = strings.Join(names, ",")
+	facts["count"] = fmt.Sprint(len(names))
+
+	// The grammar's alternatives, as a set.
+	var alts []string
+	for _, line := range strings.Split(buildGBNFGrammarForTools(nil), "\n") {
+		head, body, ok := strings.Cut(line, "::=")
+		if !ok || !strings.Contains(strings.TrimSpace(head), "tool-name") {
+			continue
+		}
+		alts = strings.Split(strings.TrimSpace(body), " | ")
+		sort.Strings(alts)
+	}
+	facts["grammar_alternatives"] = strings.Join(alts, ",")
+
+	// The documentation blocks, as a set of bodies keyed by tool.
+	docs := buildToolDescriptionsExcluding(nil)
+	for i, block := range strings.Split(docs, "\n### ") {
+		if i == 0 {
+			facts["docs_preamble"] = block
+			continue
+		}
+		name, body, _ := strings.Cut(block, "\n")
+		// Trailing newlines are trimmed because the "\n### " separator eats
+		// one from every block except the last, so whichever block happens to
+		// sit last keeps an extra one. That is an artefact of splitting here,
+		// not a difference in what production emits -- the emitted bytes are
+		// compared untrimmed by TestModelFacingBytesAreProcessStable.
+		facts["docblock:"+strings.TrimSpace(name)] = strings.TrimRight(body, "\n")
+	}
+
+	// The schema enum, as a set.
+	schema := buildToolCallSchemaForTools(nil)
+	b, err := json.Marshal(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var round map[string]interface{}
+	if err := json.Unmarshal(b, &round); err != nil {
+		t.Fatal(err)
+	}
+	var enums []string
+	var walk func(v interface{})
+	walk = func(v interface{}) {
+		switch n := v.(type) {
+		case map[string]interface{}:
+			for k, e := range n {
+				if k == "enum" {
+					if arr, ok := e.([]interface{}); ok {
+						for _, x := range arr {
+							if s, ok := x.(string); ok {
+								enums = append(enums, s)
+							}
+						}
+					}
+				}
+				walk(e)
+			}
+		case []interface{}:
+			for _, e := range n {
+				walk(e)
+			}
+		}
+	}
+	walk(round)
+	sort.Strings(enums)
+	facts["schema_enums"] = strings.Join(enums, ",")
+
+	out, err := json.Marshal(facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Println("INVENTORY " + string(out))
+}
+
+// One ordering authority, enforced structurally.
+//
+// The determinism above holds because allTools() is the only place that ranges
+// the registry map; the enum and the grammar alternation read their order from
+// it. A future reader that ranges toolRegistry directly would silently get a
+// fresh Go map order and put nondeterministic bytes back on the wire, and the
+// only symptom would be a cache-miss rate nobody attributes. So the direct
+// range is what fails here, not the symptom.
+func TestOnlyAllToolsRangesTheRegistry(t *testing.T) {
+	const authority = "allTools"
+	fset := token.NewFileSet()
+	names, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := 0
+	for _, name := range names {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for _, d := range f.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok || fd.Body == nil {
+				continue
+			}
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				rng, ok := n.(*ast.RangeStmt)
+				if !ok {
+					return true
+				}
+				id, ok := rng.X.(*ast.Ident)
+				if !ok || id.Name != "toolRegistry" {
+					return true
+				}
+				found++
+				if fd.Name.Name != authority {
+					t.Errorf("%s:%d: %s ranges toolRegistry directly. Map iteration "+
+						"order is randomised per range, and anything derived from it "+
+						"that reaches the model changes bytes between identical "+
+						"requests. Read the order from %s() instead.",
+						name, fset.Position(rng.Pos()).Line, fd.Name.Name, authority)
+				}
+				return true
+			})
+		}
+	}
+	if found == 0 {
+		t.Fatal("no range over toolRegistry found at all — this guard is no longer wired to anything")
+	}
+	if found != 1 {
+		t.Errorf("%d ranges over toolRegistry, want exactly the one in %s()", found, authority)
 	}
 }
