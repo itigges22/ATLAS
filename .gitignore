@@ -180,6 +180,12 @@ _agenttest/
 
 # Lens training corpus collected from agent use (local, per-machine)
 lens_training/
+
+# Private diagnostic captures (local, per-machine). The directory itself is
+# tracked so the bind mount has the invoking user's ownership on a fresh
+# checkout; its contents never are.
+diagnostics/*
+!diagnostics/.gitkeep
 .atlas-upgrade/
 geometric-lens/geometric_lens/models/provenance.json
 geometric-lens/geometric_lens/models/provenance.json.sig

@@ -119,6 +119,7 @@ SCHEMA: Dict[str, Field] = {
     "ATLAS_PROJECT_DIR": Field("str"),
     "ATLAS_LENS_MODELS": Field("str"),
     "ATLAS_LENS_HOST_DIR": Field("str"),
+    "ATLAS_DIAGNOSTIC_HOST_DIR": Field("str"),
     "ATLAS_SECRETS_DIR": Field("str"),
     "ATLAS_MACOS_PREFIX": Field("str"),
     "ATLAS_LLAMA_HOST": Field("str"),

@@ -31,6 +31,84 @@ docker compose logs --tail 100      # everything recent
 TUI-side debugging: `atlas tui --log <path>` writes a local TUI event log;
 `ATLAS_TUI_LOG=<path>` does the same and `=off` disables it.
 
+## Private diagnostics: task-contract shadow capture
+
+**Off by default, and not an ordinary production feature.** This is
+instrumentation for one open question — how often what ATLAS infers from a
+request's English disagrees with the `task_contract` the client declared — and it
+exists to produce evidence for that migration, nothing else. No record it writes
+is read by any decision, and none reaches `/events`, the agent SSE stream, a
+prompt, or a model.
+
+Enable it only when you are deliberately acquiring evidence:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `ATLAS_SHADOW_CAPTURE` | unset (**off**) | Filename of the capture, relative to the diagnostic root. Unset means no file is opened, no writer runs, and no record is built. |
+| `ATLAS_DIAGNOSTIC_DIR` | `/data/diagnostics` | The only directory a capture may live in. Compose bind-mounts the host's `${ATLAS_DIAGNOSTIC_HOST_DIR:-./diagnostics}` here, owned by the same user the proxy runs as. |
+
+Containment and startup rules:
+
+- The resolved destination must stay **inside** the diagnostic root. An absolute
+  path or one that escapes via `..` is refused.
+- The destination must **not already exist**. Appending to a previous capture
+  would merge two acquisitions into what later reads as one, and no analysis
+  could separate them afterwards.
+- Both refusals, and an unwritable destination, **fail at startup** — the proxy
+  does not serve with a capture it cannot own. Pick a fresh filename per
+  acquisition.
+
+### Reading a capture
+
+One JSON object per line. Two record kinds during the run — a request snapshot
+and one record per live gate evaluation — and a footer written at shutdown.
+
+An acquisition is **clean** only when all of these hold:
+
+- the **last line is the footer** (`record_kind: task_contract_shadow_footer`);
+- `dropped == 0`, `errors == 0`, `duplicate_request_ids == 0`;
+- `request_tracking_overflow == false`;
+- `accepted == written`, and the file holds exactly `written + 1` lines;
+- every `request_id` has exactly one snapshot and a gate sequence of
+  `1..n` with no gaps.
+
+Anything else is **defective** and must be reported as such rather than quietly
+analysed. In particular:
+
+- **No footer at all.** The process died before its close hook ran, or the
+  writer did not finish within the hook's deadline. Both leave a partial file,
+  which is the intended outcome: the footer is written by the writer itself,
+  after every record its counters describe, so a footer that exists always means
+  the acquisition completed. Nothing manufactures one to make a truncated
+  capture look whole. A write already inside a blocking filesystem call cannot
+  be interrupted portably, so there is no safe cutoff at which a late footer
+  could be added.
+- **Drops.** The queue was full and records were discarded rather than made to
+  block an agent request. The count is honest; the file is incomplete.
+- **Errors.** Records failed to serialise or failed to write. The run was
+  unaffected; the capture is not trustworthy as a census.
+- **Duplicate request IDs.** Two runs presented the same
+  `X-ATLAS-Request-ID`. They are reported, never merged.
+- **Overflow.** Duplicate tracking hit its bound and stopped remembering new
+  ids, so later duplicates may go undetected.
+
+### What the records do and do not tell you
+
+- **`request_id` is a join key only.** It is the existing
+  `X-ATLAS-Request-ID`, which a client may supply, so it correlates records
+  within one capture and carries no authority. It is not a session id, not a
+  task id, and it does not establish who sent anything.
+- **Hashes are identities, not secrets.** Paths and verification commands are
+  stored as unsalted SHA-256, truncated to 16 hex characters; the user message
+  is stored as a full unsalted SHA-256. They exist so two records naming the
+  same thing collide and two naming different things do not. Over a small
+  guessable domain — `app.py` and the like — the original is recoverable by
+  enumeration. Treat a capture as revealing which paths and commands were
+  involved, and do not treat hashing as a confidentiality control.
+- **No record decides anything.** Every record carries
+  `influences_live_decision: false`, and that is enforced structurally rather
+  than by convention.
+
 ## Runbooks
 
 | Symptom | Procedure |
