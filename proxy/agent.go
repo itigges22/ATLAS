@@ -401,8 +401,8 @@ func (s *runState) verificationDemandedAndUnmet() bool {
 // with that code as its summary — the user is shown a block of code that
 // was never applied, with no indication it was not.
 func (s *runState) actionDemandedAndUnmet(ctx *AgentContext, userMessage string) bool {
-	return observeStateChangeGate(ctx, s, shadowGateActionDemanded,
-		wantsStateChange(userMessage, ctx.Tier, s.inspectedWorkspace)) &&
+	return observeActionDemand(ctx, s, shadowGateActionDemanded,
+		decideActionDemand(ctx.TaskContract, userMessage, ctx.Tier, s.inspectedWorkspace)) &&
 		!s.madeProductiveChange
 }
 
@@ -505,8 +505,8 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 			s.gateBounces["plan_gate"], maxGateBounces)
 		return "plan_gate", msg
 	}
-	if observeStateChangeGate(ctx, s, shadowGateActionGate,
-		wantsStateChange(userMessage, ctx.Tier, s.inspectedWorkspace)) &&
+	if observeActionDemand(ctx, s, shadowGateActionGate,
+		decideActionDemand(ctx.TaskContract, userMessage, ctx.Tier, s.inspectedWorkspace)) &&
 		!s.madeProductiveChange && s.chargeBounce("action_gate") {
 		log.Printf("[agent] done-without-action gate: bouncing exit at turn %d (user prompt %q wants a state change, no successful write/edit/structural_edit this loop, bounce %d/%d)",
 			s.turn, truncateStr(userMessage, 60), s.gateBounces["action_gate"], maxGateBounces)
@@ -3891,14 +3891,19 @@ func shadowCompareSets(contract, legacy []string, failed bool) string {
 	}
 }
 
-// observeStateChangeGate records one live evaluation. The value handed in is
-// the one production already computed and is returned unchanged; this function
-// cannot re-run the heuristic and cannot alter the answer.
-func observeStateChangeGate(ctx *AgentContext, st *runState, site shadowGateSite,
-	live bool) bool {
+// observeActionDemand records one live action-demand decision and returns it
+// unchanged. The observer cannot alter the answer: it receives a decision that
+// has already been made and hands the same value back.
+//
+// The record carries BOTH the legacy heuristic's answer and the live decision,
+// so a capture shows what the old signal would have said next to what actually
+// governed. influences_live_decision stays false because it describes this
+// observer and its sink, not whether the contract is authoritative.
+func observeActionDemand(ctx *AgentContext, st *runState, site shadowGateSite,
+	d actionDemand) bool {
 	sink := activeShadowSink.Load()
 	if !sink.enabled() {
-		return live
+		return d.Required
 	}
 	st.shadowGate.n++
 	requestID := ""
@@ -3910,13 +3915,13 @@ func observeStateChangeGate(ctx *AgentContext, st *runState, site shadowGateSite
 	if tc := ctx.TaskContract; tc != nil {
 		mode = string(tc.TaskMode)
 		switch {
-		case tc.TaskMode == TaskModeWork && live:
+		case tc.TaskMode == TaskModeWork && d.Legacy:
 			comparison = shadowAgreeWork
-		case tc.TaskMode == TaskModeQuestion && !live:
+		case tc.TaskMode == TaskModeQuestion && !d.Legacy:
 			comparison = shadowAgreeQuestion
-		case tc.TaskMode == TaskModeWork && !live:
+		case tc.TaskMode == TaskModeWork && !d.Legacy:
 			comparison = shadowContractWorkLegacyQuestion
-		case tc.TaskMode == TaskModeQuestion && live:
+		case tc.TaskMode == TaskModeQuestion && d.Legacy:
 			comparison = shadowContractQuestionLegacyWork
 		}
 	}
@@ -3928,12 +3933,14 @@ func observeStateChangeGate(ctx *AgentContext, st *runState, site shadowGateSite
 		"call_site":                 string(site),
 		"inspected_workspace":       st.inspectedWorkspace,
 		"tier":                      ctx.Tier.String(),
-		"legacy_wants_state_change": live,
+		"legacy_wants_state_change": d.Legacy,
+		"live_action_demand":        d.Required,
+		"action_demand_source":      string(d.Source),
 		"contract_task_mode":        mode,
 		"comparison":                comparison,
 		"influences_live_decision":  false,
 	})
-	return live
+	return d.Required
 }
 
 // needsPermission returns true if the tool call requires user confirmation.

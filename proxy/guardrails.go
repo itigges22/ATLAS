@@ -1188,6 +1188,73 @@ func isVerificationCommand(cmd string) bool {
 // flags (-sI) both count.
 var headOnlyProbeRe = regexp.MustCompile(`(?i)\b(?:curl\b[^|;&]*?\s-{1,2}(?:I\b|head\b)|curl\b[^|;&]*?\s-[a-zA-Z]*I[a-zA-Z]*\b|wget\b[^|;&]*?--spider\b)`)
 
+// actionDemandSource names why an action-demand decision came out as it did.
+// It exists so evidence can say which authority answered, not merely what the
+// answer was.
+type actionDemandSource string
+
+const (
+	actionDemandContractWork     actionDemandSource = "contract_work"
+	actionDemandContractQuestion actionDemandSource = "contract_question"
+	actionDemandLegacy           actionDemandSource = "legacy"
+	// contract_invalid_failed_closed cannot be produced by a validated
+	// request; it exists so an internally malformed mode fails toward
+	// requiring work rather than silently reading as a question.
+	actionDemandContractInvalid actionDemandSource = "contract_invalid_failed_closed"
+)
+
+// actionDemand is one decision about whether a request demands a state change,
+// together with the authority that made it and the legacy heuristic's own
+// answer for comparison.
+type actionDemand struct {
+	Required bool
+	Source   actionDemandSource
+	// Legacy is what wantsStateChange said. It is always reported and is
+	// authoritative ONLY when no contract is present.
+	Legacy bool
+}
+
+// decideActionDemand is the single owner of "does this request demand a state
+// change". Both live action-demand sites consume it and nothing else calls the
+// heuristic for a live decision.
+//
+// Where the client declared a task mode, that mode decides. Step 3B measured
+// the alternative on a frozen 105-case corpus: 25 of 101 evaluable requests
+// disagreed with the client's own declaration, 19 of them work that the wording
+// alone read as a question, and 110 of 115 gate-bearing requests were decided
+// with inspectedWorkspace false -- i.e. on phrasing. A client that states what
+// it asked for is better evidence than a guess about its English.
+//
+// Where no contract was sent, nothing changes: the heuristic decides exactly as
+// before. That corpus says nothing about contractless clients, so it authorises
+// nothing for them.
+//
+// The mode establishes an OBLIGATION only. It never authorises completion,
+// mutation, deletion, permission or verification -- those keep their own
+// evidence, and a question contract does not erase debt, hazards or broken
+// deliverables.
+//
+// Pure: no model output, no workspace state beyond the inspection flag it is
+// handed, no shadow state, and the same answer whether or not capture is on.
+func decideActionDemand(tc *TaskContract, userMessage string, tier Tier,
+	inspectedWorkspace bool) actionDemand {
+	// Evaluated exactly once, here, for every path. Reporting it costs
+	// nothing because the heuristic is pure, and having it always present
+	// keeps the shadow record identical whether or not capture is enabled.
+	legacy := wantsStateChange(userMessage, tier, inspectedWorkspace)
+	if tc == nil {
+		return actionDemand{Required: legacy, Source: actionDemandLegacy, Legacy: legacy}
+	}
+	switch tc.TaskMode {
+	case TaskModeWork:
+		return actionDemand{Required: true, Source: actionDemandContractWork, Legacy: legacy}
+	case TaskModeQuestion:
+		return actionDemand{Required: false, Source: actionDemandContractQuestion, Legacy: legacy}
+	default:
+		return actionDemand{Required: true, Source: actionDemandContractInvalid, Legacy: legacy}
+	}
+}
+
 // wantsStateChange reports whether `done` should be blocked when no write,
 // edit, or delete succeeded in this run.
 //

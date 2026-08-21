@@ -384,8 +384,33 @@ Tier caps are 0 (uncapped); the detector stack inside the loop decides when to b
 Three of those gates decide whether to fire from what the run observed rather than from how the request was worded, because request wording is an open vocabulary that no list completes:
 
 - **Verification gate** — blocks `done` when the user asked for a repair, *or* when a test or build command actually exited non-zero and nothing has passed since. The second condition catches a failing test the model introduced on its own, which no reading of the user's message could have predicted. Its ledger is artifact-bound, not boolean. Every green verification appends a `VerificationRecord` — the command line, its stdin contract, and the sha256 of each session-written file the command named — and the exit re-hashes those files, bouncing `done` when the bytes on disk are no longer the bytes a run vouched for. A green run that printed nothing on a task whose prompt demands printed output *latches as a failed verification* rather than counting. A program only ever run as `prog < file` (the redirect is recognized anywhere in a segment, as is `cat file | prog`) is verified under a contract the caller may not use, and the exit demands one standalone run. A write that landed with a parse warning marks its path pending-execution: further writes and edits to that path bounce until a command actually *attempts to execute* it — an interpreter invocation or `./file`; `cat`/`grep`/`ls` naming the file prove nothing and discharge nothing. And when the red-run streak crosses two, the loop injects fresh-rewrite advice immediately (stop patching, rewrite from a clean sheet) instead of waiting for the model to attempt `done` into the same text.
-- **Done-without-action gate** — blocks `done` when the request carries explicit action wording, *or* when the model opened the project on a non-conversational message and nothing landed on disk. That covers verbs absent from the intent list (`remove the debug logging` matches none of them), while questions stay exempt: they are conversational, and answering one by reading files and writing nothing is correct.
+- **Done-without-action gate** — blocks `done` when the request demands a state change and nothing landed on disk. **When the client sends a validated `task_contract`, its `task_mode` decides that question**: `work` means a state change is required, `question` means it is not, and the wording of the message no longer overrides either. When no contract is sent, the legacy heuristic decides exactly as before — it blocks on explicit action wording, *or* when the model opened the project on a non-conversational message and nothing changed. One helper owns this choice (`proxy/guardrails.go::decideActionDemand`) and both action-demand call sites consume it; the heuristic is evaluated once, there, and is recorded for comparison even when a contract decides. That covers verbs absent from the intent list (`remove the debug logging` matches none of them), while questions stay exempt: they are conversational, and answering one by reading files and writing nothing is correct.
 - **Evidence gate** — blocks an exit whose reply names a workspace file the run was never shown the contents of. The write tools already refuse to edit a path that was not read first; this applies the same rule to answers, where the reply itself is the deliverable. It keys on `AgentContext.BodySeen`, which records the files actually put in front of the model — deliberately narrower than `FilesRead`, because `outline_file` caches a file's whole source for staleness tracking while showing the model only signatures and line ranges. Reading the file, or having authored it, clears the gate.
+
+#### Client task mode
+
+A request may carry `task_contract.task_mode`, validated at the request boundary (`work` or
+`question`; absent stays distinguishable from present-and-empty). What it does and does not do:
+
+- **Authoritative when present** for one question only: does this request require a state change.
+- **Fallback when absent** — the legacy natural-language heuristic decides, unchanged. Legacy
+  clients are accepted as they are; no mode is inferred or fabricated for them.
+- **Establishes an obligation, never a completion.** A `work` mode says action is required; the run
+  still has to demonstrate it through the existing evidence — current-hash deliverable validity,
+  applicable verification, no unresolved mutation debt, no live background hazard, no stale
+  validation, no blocking tombstone or permission defect.
+- **Authorises nothing destructive.** A `question` mode does not permit mutation and does not erase
+  mutation debt, broken deliverables, failed validation, background hazards or deletion
+  obligations; if the model mutates anyway, the same safety and completion rules govern those bytes.
+  Deletion still requires its own path-and-identity-bound confirmation.
+- **Never reaches the model.** Task mode is not in any prompt, and no model, V3 or lens output can
+  set it. An internally malformed mode fails closed to requiring work rather than reading as a
+  question.
+
+Clients: the TUI sends `work` for an ordinary message and `question` for a one-shot `/ask <message>`;
+the e2e and reliability harnesses send `work`. `expected_outputs` and `verification` are carried and
+validated but **not yet migrated** — deliverable and verification obligations are still derived the
+old way.
 
 The evidence gate exists because the exemption in the done-without-action gate above — questions are conversational, so they are never gated — left the answer path with no completion check at all. Measured on a diagnostic question spanning three modules: across 12 sessions the model ran `list_directory`, outlined exactly one file, and answered, never once reading a body. The outcome tracked which filename it guessed rather than anything it inspected (`scoring.py` wrong 11/11, `planning.py` right 1/1), because the prompt contained the word "scored". One reply cited "lines 134-142" of a file it had never seen.
 
