@@ -407,6 +407,22 @@ A request may carry `task_contract.task_mode`, validated at the request boundary
   set it. An internally malformed mode fails closed to requiring work rather than reading as a
   question.
 
+Shadow diagnostic records (private, observational, off by default — see
+[OPERATIONS.md](OPERATIONS.md#private-diagnostics-task-contract-shadow-capture)) version **per
+record kind**, because adding a field to one must not silently redefine another:
+
+| Record | Version | Contract |
+| --- | --- | --- |
+| `task_contract_shadow_gate` v1 | 1 | legacy observation only: what the heuristic said. Sealed captures taken before the task-mode migration are v1 and stay readable by the analyser written for them. |
+| `task_contract_shadow_gate` v2 | 2 | v1 plus `live_action_demand` (the decision that actually governed) and `action_demand_source` (`legacy`, `contract_work`, `contract_question`, `contract_invalid_failed_closed`). |
+| `task_contract_shadow_request` | 1 | unchanged |
+| `task_contract_shadow_footer` | 1 | unchanged |
+
+`comparison` still describes contract-versus-legacy; `influences_live_decision` still describes
+whether the observer and its sink can influence policy, and stays false. A schema change means a
+new version with a closed field set and a reader for it — never a redefinition of an existing
+version, and never a parser that shrugs at unknown fields.
+
 Clients: the TUI sends `work` for an ordinary message and `question` for a one-shot `/ask <message>`;
 the e2e and reliability harnesses send `work`. `expected_outputs` and `verification` are carried and
 validated but **not yet migrated** — deliverable and verification obligations are still derived the

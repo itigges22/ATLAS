@@ -3042,3 +3042,339 @@ func TestSealedStep3BEvidenceReplaysThroughTheNewPolicy(t *testing.T) {
 	// The invariant that matters: nothing contractless moved.
 	t.Log("contractless decisions changed: 0 (asserted per record above)")
 }
+
+// --- Shadow record schema versions are per record kind -----------------------
+//
+// c783e3e added live_action_demand and action_demand_source to the gate record
+// while every record kind still shared one version constant, so a current gate
+// record claimed to be v1 while carrying fields v1 never had. Sealed
+// diag_gemma_04 is v1 and must stay readable by the v1 analyzer, so the new
+// shape has to be v2 and the two schemas have to be separable.
+
+// gateFieldsV1 is exactly the set sealed diag_gemma_04 carries.
+var gateFieldsV1 = map[string]bool{
+	"schema_version": true, "record_kind": true, "request_id": true, "gate_seq": true,
+	"call_site": true, "inspected_workspace": true, "tier": true,
+	"legacy_wants_state_change": true, "contract_task_mode": true, "comparison": true,
+	"influences_live_decision": true,
+}
+
+// gateFieldsV2 is v1 plus the two policy fields, and nothing else.
+var gateFieldsV2 = func() map[string]bool {
+	m := map[string]bool{"live_action_demand": true, "action_demand_source": true}
+	for k := range gateFieldsV1 {
+		m[k] = true
+	}
+	return m
+}()
+
+var actionDemandSources = map[string]bool{
+	"legacy": true, "contract_work": true, "contract_question": true,
+	"contract_invalid_failed_closed": true,
+}
+
+// validateGateRecord is the version-aware v2 checker. It accepts a valid v1 or a
+// valid v2 record and nothing else: exact field set per version, closed source
+// enum, and a live value that must follow from the contract and the recorded
+// legacy value rather than being taken on trust.
+func validateGateRecord(rec map[string]interface{}) []string {
+	var bad []string
+	ver, ok := rec["schema_version"].(float64)
+	if !ok {
+		return []string{"schema_version is missing or not a number"}
+	}
+	var want map[string]bool
+	switch int(ver) {
+	case 1:
+		want = gateFieldsV1
+	case 2:
+		want = gateFieldsV2
+	default:
+		return []string{fmt.Sprintf("unknown gate schema version %v", ver)}
+	}
+	for k := range rec {
+		if !want[k] {
+			bad = append(bad, fmt.Sprintf("unexpected field %q for v%d", k, int(ver)))
+		}
+	}
+	for k := range want {
+		if _, present := rec[k]; !present {
+			bad = append(bad, fmt.Sprintf("missing field %q for v%d", k, int(ver)))
+		}
+	}
+	if int(ver) == 1 {
+		return bad
+	}
+	src, _ := rec["action_demand_source"].(string)
+	if !actionDemandSources[src] {
+		bad = append(bad, fmt.Sprintf("action_demand_source %q is outside the closed enum", src))
+	}
+	live, liveOK := rec["live_action_demand"].(bool)
+	legacy, legacyOK := rec["legacy_wants_state_change"].(bool)
+	mode, _ := rec["contract_task_mode"].(string)
+	if !liveOK || !legacyOK {
+		bad = append(bad, "live or legacy value is not a boolean")
+		return bad
+	}
+	// Recomputed, not trusted.
+	var wantLive bool
+	var wantSrc string
+	switch mode {
+	case "":
+		wantLive, wantSrc = legacy, "legacy"
+	case "work":
+		wantLive, wantSrc = true, "contract_work"
+	case "question":
+		wantLive, wantSrc = false, "contract_question"
+	default:
+		wantLive, wantSrc = true, "contract_invalid_failed_closed"
+	}
+	if live != wantLive {
+		bad = append(bad, fmt.Sprintf("live_action_demand %v, recomputed %v", live, wantLive))
+	}
+	if src != wantSrc {
+		bad = append(bad, fmt.Sprintf("action_demand_source %q, recomputed %q", src, wantSrc))
+	}
+	return bad
+}
+
+// 1. The producer must emit a self-consistent record: the version it claims and
+// the fields it carries have to agree.
+func TestGateRecordsDeclareTheirOwnSchemaVersion(t *testing.T) {
+	dir := t.TempDir()
+	shadowEnv(t, dir, "schema.jsonl")
+	sink, err := openShadowSink()
+	if err != nil {
+		t.Fatalf("sink: %v", err)
+	}
+	activeShadowSink.Store(sink)
+	defer activeShadowSink.Store(nil)
+	shadowLoopDrive(t, "req-schema", &TaskContract{TaskMode: TaskModeWork},
+		"app.py numbers", modePlanDoneNow)
+	sink.close(context.Background(), 5*time.Second)
+
+	var gates, snaps, footers int
+	for _, rec := range readShadowRecords(t, filepath.Join(dir, "schema.jsonl")) {
+		switch rec["record_kind"] {
+		case "task_contract_shadow_gate":
+			gates++
+			if v := int(rec["schema_version"].(float64)); v != 2 {
+				t.Errorf("gate record claims schema version %d, want 2 now that it "+
+					"carries the policy fields", v)
+			}
+			if bad := validateGateRecord(rec); bad != nil {
+				t.Errorf("gate record invalid: %v", bad)
+			}
+		case "task_contract_shadow_request":
+			snaps++
+			if v := int(rec["schema_version"].(float64)); v != 1 {
+				t.Errorf("request snapshot version %d, want 1 (its schema did not change)", v)
+			}
+		case "task_contract_shadow_footer":
+			footers++
+			if v := int(rec["schema_version"].(float64)); v != 1 {
+				t.Errorf("footer version %d, want 1 (its schema did not change)", v)
+			}
+		}
+	}
+	if gates == 0 || snaps != 1 || footers != 1 {
+		t.Fatalf("gates=%d snapshots=%d footers=%d", gates, snaps, footers)
+	}
+}
+
+// The version-aware checker's whole contract, as a table. Nothing here touches
+// live behaviour; it validates records the way a future v2 analyser must.
+func TestGateRecordValidationMatrix(t *testing.T) {
+	v1 := func(over map[string]interface{}) map[string]interface{} {
+		r := map[string]interface{}{
+			"schema_version": 1.0, "record_kind": "task_contract_shadow_gate",
+			"request_id": "r", "gate_seq": 1.0, "call_site": "exit_action_gate",
+			"inspected_workspace": false, "tier": "T2:medium",
+			"legacy_wants_state_change": false, "contract_task_mode": "work",
+			"comparison": "contract_work_legacy_question", "influences_live_decision": false,
+		}
+		for k, v := range over {
+			if v == nil {
+				delete(r, k)
+				continue
+			}
+			r[k] = v
+		}
+		return r
+	}
+	v2 := func(over map[string]interface{}) map[string]interface{} {
+		r := v1(nil)
+		r["schema_version"] = 2.0
+		r["live_action_demand"] = true
+		r["action_demand_source"] = "contract_work"
+		for k, v := range over {
+			if v == nil {
+				delete(r, k)
+				continue
+			}
+			r[k] = v
+		}
+		return r
+	}
+	cases := []struct {
+		name   string
+		rec    map[string]interface{}
+		accept bool
+	}{
+		{"sealed v1 record", v1(nil), true},
+		{"valid contract-work v2", v2(nil), true},
+		{"valid contract-question v2", v2(map[string]interface{}{
+			"contract_task_mode": "question", "live_action_demand": false,
+			"action_demand_source": "contract_question", "comparison": "agree_question"}), true},
+		{"valid contractless v2", v2(map[string]interface{}{
+			"contract_task_mode": "", "legacy_wants_state_change": true,
+			"live_action_demand": true, "action_demand_source": "legacy",
+			"comparison": "unmeasured"}), true},
+		{"invalid internal mode fails closed", v2(map[string]interface{}{
+			"contract_task_mode": "explore", "live_action_demand": true,
+			"action_demand_source": "contract_invalid_failed_closed"}), true},
+		{"mismatched live value", v2(map[string]interface{}{
+			"live_action_demand": false}), false},
+		{"mismatched source", v2(map[string]interface{}{
+			"action_demand_source": "legacy"}), false},
+		{"unknown source", v2(map[string]interface{}{
+			"action_demand_source": "vibes"}), false},
+		{"missing required v2 field", v2(map[string]interface{}{
+			"live_action_demand": nil}), false},
+		{"missing the other v2 field", v2(map[string]interface{}{
+			"action_demand_source": nil}), false},
+		{"extra unknown field", v2(map[string]interface{}{
+			"speculative_guess": true}), false},
+		{"v1 carrying a v2 field", v1(map[string]interface{}{
+			"live_action_demand": true}), false},
+		{"v1 carrying the other v2 field", v1(map[string]interface{}{
+			"action_demand_source": "legacy"}), false},
+		{"v2 lacking both new fields", v2(map[string]interface{}{
+			"live_action_demand": nil, "action_demand_source": nil}), false},
+		{"unknown schema version", v2(map[string]interface{}{
+			"schema_version": 3.0}), false},
+		{"missing a v1 field", v1(map[string]interface{}{"tier": nil}), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			bad := validateGateRecord(c.rec)
+			if c.accept && bad != nil {
+				t.Errorf("valid record rejected: %v", bad)
+			}
+			if !c.accept && bad == nil {
+				t.Error("invalid record accepted")
+			}
+		})
+	}
+}
+
+// The sealed capture stays valid v1 under the same checker, unmodified.
+func TestSealedEvidenceRemainsValidV1(t *testing.T) {
+	path := "../redteam/step3b-freeze/evidence/diag_gemma_04/diagnostics/" +
+		"step3b_diag_gemma_04.jsonl"
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Skipf("sealed evidence not present: %v", err)
+	}
+	before := hashBytes(raw)
+	gates, snaps, footers := 0, 0, 0
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var rec map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("sealed record does not parse: %v", err)
+		}
+		switch rec["record_kind"] {
+		case "task_contract_shadow_gate":
+			gates++
+			if v := int(rec["schema_version"].(float64)); v != 1 {
+				t.Fatalf("a sealed gate record is version %d, expected 1", v)
+			}
+			if bad := validateGateRecord(rec); bad != nil {
+				t.Errorf("sealed v1 gate record no longer validates: %v", bad)
+			}
+			for _, f := range []string{"live_action_demand", "action_demand_source"} {
+				if _, present := rec[f]; present {
+					t.Errorf("a sealed v1 record carries %q", f)
+				}
+			}
+		case "task_contract_shadow_request":
+			snaps++
+		case "task_contract_shadow_footer":
+			footers++
+		}
+	}
+	if hashBytes(raw) != before {
+		t.Fatal("the sealed capture changed while being read")
+	}
+	t.Logf("sealed v1 capture: %d gates, %d snapshots, %d footers, all valid v1",
+		gates, snaps, footers)
+}
+
+// Structural: one gate producer, per-record-kind versions, and the new fields
+// stay out of every public surface.
+func TestSchemaVersionOwnershipIsPerRecordKind(t *testing.T) {
+	names, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateProducers, sharedConst := 0, 0
+	for _, n := range names {
+		if strings.HasSuffix(n, "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src := string(b)
+		gateProducers += strings.Count(src, `"record_kind":               "task_contract_shadow_gate"`)
+		if strings.Contains(src, "shadowSchemaVersion =") {
+			sharedConst++
+		}
+		// The policy fields must not leak into any public producer.
+		for _, f := range []string{"live_action_demand", "action_demand_source"} {
+			for _, public := range []string{"ctx.Stream(", "SSEEvent{", "writeError("} {
+				idx := strings.Index(src, public)
+				for idx >= 0 {
+					end := idx + 400
+					if end > len(src) {
+						end = len(src)
+					}
+					if strings.Contains(src[idx:end], f) {
+						t.Errorf("%s: %q appears in a public payload near %s", n, f, public)
+					}
+					next := strings.Index(src[idx+1:], public)
+					if next < 0 {
+						break
+					}
+					idx = idx + 1 + next
+				}
+			}
+		}
+	}
+	if gateProducers != 1 {
+		t.Errorf("%d gate-record producers, want exactly one", gateProducers)
+	}
+	if sharedConst != 0 {
+		t.Error("a shared shadowSchemaVersion constant is back; versions are per record kind")
+	}
+	agent, _ := os.ReadFile("agent.go")
+	for _, want := range []string{"shadowSchemaVersionRequest", "shadowSchemaVersionGate",
+		"shadowSchemaVersionFooter"} {
+		if !strings.Contains(string(agent), want) {
+			t.Errorf("%s is missing", want)
+		}
+	}
+	// The prompt never sees them.
+	prompt, _ := os.ReadFile("agent.go")
+	i := strings.Index(string(prompt), "func buildSystemPrompt")
+	if i >= 0 {
+		end := strings.Index(string(prompt)[i+1:], "\nfunc ")
+		body := string(prompt)[i : i+1+end]
+		for _, f := range []string{"live_action_demand", "action_demand_source", "TaskContract"} {
+			if strings.Contains(body, f) {
+				t.Errorf("buildSystemPrompt reads %q", f)
+			}
+		}
+	}
+}

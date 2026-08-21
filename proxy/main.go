@@ -484,7 +484,7 @@ func (s *shadowSink) run() {
 // makes a footer's presence mean "this acquisition completed".
 func (s *shadowSink) finalize() {
 	footer, err := json.Marshal(map[string]interface{}{
-		"schema_version":            shadowSchemaVersion,
+		"schema_version":            shadowSchemaVersionFooter,
 		"record_kind":               "task_contract_shadow_footer",
 		"accepted":                  s.accepted.Load(),
 		"written":                   s.written.Load(),

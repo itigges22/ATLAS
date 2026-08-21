@@ -3705,7 +3705,34 @@ func validateTaskContract(in *TaskContract, workingDir string) (*TaskContract, e
 //
 // Nothing here decides anything. Every function is called for its existing
 // answer and the answer is recorded, not consulted.
-const shadowSchemaVersion = 1
+// Record kinds version INDEPENDENTLY. Adding a field to one must not silently
+// redefine another, and a sealed capture must stay readable by the analyzer
+// written for the schema it was captured under.
+//
+// Gate v1 was legacy-observation only: it recorded what the heuristic said and
+// nothing about what governed. Gate v2 adds the live action demand and the
+// authority that produced it, so it is a different closed contract and carries
+// a different number. The request snapshot and the footer did not change, so
+// they stay at 1 rather than being bumped for tidiness.
+const (
+	shadowSchemaVersionRequest = 1
+	shadowSchemaVersionGate    = 2
+	shadowSchemaVersionFooter  = 1
+)
+
+// canonicalSource keeps an unknown decision source out of the record. The
+// enum is closed and decideActionDemand can only produce its four members; if
+// one ever escaped, it is written as the fail-closed member rather than as
+// arbitrary prose.
+func (s actionDemandSource) canonicalSource() string {
+	switch s {
+	case actionDemandLegacy, actionDemandContractWork,
+		actionDemandContractQuestion, actionDemandContractInvalid:
+		return string(s)
+	default:
+		return string(actionDemandContractInvalid)
+	}
+}
 
 // shadowGateSite names the two live call sites, as a closed set.
 type shadowGateSite string
@@ -3767,7 +3794,7 @@ func emitShadowRequestSnapshot(ctx *AgentContext, userMessage string) {
 
 	tc := ctx.TaskContract
 	rec := map[string]interface{}{
-		"schema_version":           shadowSchemaVersion,
+		"schema_version":           shadowSchemaVersionRequest,
 		"record_kind":              "task_contract_shadow_request",
 		"request_id":               requestID,
 		"user_message_sha256":      hashBytes([]byte(userMessage)),
@@ -3926,7 +3953,7 @@ func observeActionDemand(ctx *AgentContext, st *runState, site shadowGateSite,
 		}
 	}
 	sink.submit(map[string]interface{}{
-		"schema_version":            shadowSchemaVersion,
+		"schema_version":            shadowSchemaVersionGate,
 		"record_kind":               "task_contract_shadow_gate",
 		"request_id":                requestID,
 		"gate_seq":                  st.shadowGate.n,
@@ -3935,7 +3962,7 @@ func observeActionDemand(ctx *AgentContext, st *runState, site shadowGateSite,
 		"tier":                      ctx.Tier.String(),
 		"legacy_wants_state_change": d.Legacy,
 		"live_action_demand":        d.Required,
-		"action_demand_source":      string(d.Source),
+		"action_demand_source":      d.Source.canonicalSource(),
 		"contract_task_mode":        mode,
 		"comparison":                comparison,
 		"influences_live_decision":  false,
