@@ -398,22 +398,40 @@ func quoteNames(names []string) string {
 // syntaxGateLanguages maps extensions to the sandbox's language names.
 // Only types the sandbox's /syntax-check actually verifies are listed —
 // anything else passes through ungated.
-var syntaxGateLanguages = map[string]string{
-	".py":   "python",
-	".js":   "javascript",
-	".ts":   "typescript",
-	".go":   "go",
-	".java": "java",
-	".kt":   "kotlin",
-	".rb":   "ruby",
-	".php":  "php",
-	".sh":   "bash",
-	".json": "json",
-	".yaml": "yaml",
-	".yml":  "yaml",
-	".html": "html",
-	".htm":  "html",
-	".xml":  "xml",
+// syntaxLanguage is what this registry knows about an extension: which language
+// the sandbox checker uses, and whether the artifact is something a command can
+// meaningfully EXECUTE.
+//
+// The second fact was missing, and its absence had a cost. A completion rule
+// that scoped itself by registry membership treated index.html and config.yaml
+// as code that must be run, and demanded an execution naming them -- an
+// obligation no command can discharge, so ordinary static work could never
+// finish. Parseable and runnable are different questions; the registry that
+// answers the first is the right place to answer the second, so no second
+// extension list can drift away from it.
+type syntaxLanguage struct {
+	Language string
+	// Executable is true for source code a run can exercise. Markup, config
+	// and data parse but do not run.
+	Executable bool
+}
+
+var syntaxGateLanguages = map[string]syntaxLanguage{
+	".py":   {Language: "python", Executable: true},
+	".js":   {Language: "javascript", Executable: true},
+	".ts":   {Language: "typescript", Executable: true},
+	".go":   {Language: "go", Executable: true},
+	".java": {Language: "java", Executable: true},
+	".kt":   {Language: "kotlin", Executable: true},
+	".rb":   {Language: "ruby", Executable: true},
+	".php":  {Language: "php", Executable: true},
+	".sh":   {Language: "bash", Executable: true},
+	".json": {Language: "json"},
+	".yaml": {Language: "yaml"},
+	".yml":  {Language: "yaml"},
+	".html": {Language: "html"},
+	".htm":  {Language: "html"},
+	".xml":  {Language: "xml"},
 }
 
 // checkFallbackSyntax returns ("", true) when `content` is safe to write
@@ -528,10 +546,11 @@ func checkSandboxSyntax(ctx *AgentContext, path, content string) (string, bool) 
 // non-applicable content. That changes the structured evidence only -- the
 // wrapper's allow/refuse decision is identical either way.
 func sandboxSyntaxOutcome(ctx *AgentContext, path, content string) checkOutcome {
-	lang, gated := syntaxGateLanguages[strings.ToLower(filepath.Ext(path))]
+	meta, gated := syntaxGateLanguages[strings.ToLower(filepath.Ext(path))]
 	if !gated {
 		return checkOutcome{Status: ValidationNotApplicable}
 	}
+	lang := meta.Language
 	if ctx == nil || ctx.SandboxURL == "" {
 		return checkOutcome{Status: ValidationNotRun, Detail: "no sandbox configured"}
 	}

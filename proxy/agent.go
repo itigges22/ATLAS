@@ -2165,7 +2165,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			// gate stops blocking `done`.
 			if parsed.Name == "run_command" {
 				var rc RunCommandInput
-				if json.Unmarshal(parsed.Args, &rc) == nil && isVerificationCommand(rc.Command) {
+				if json.Unmarshal(parsed.Args, &rc) == nil &&
+					(isVerificationCommand(rc.Command) || contractRequiresCommand(ctx, rc.Command)) {
 					if result.Success && silentRunWhenOutputPromised(ctx, userMessage, rc.Command, result.Data) {
 						// Exit 0 with empty stdout is not verification of a
 						// task whose prompt demands printed output. Measured:

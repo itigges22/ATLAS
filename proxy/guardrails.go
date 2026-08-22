@@ -702,7 +702,12 @@ func codeDeliverablesFor(ctx *AgentContext, expected []string) []string {
 			return
 		}
 		resolved := resolveAgentPath(ctx, rel)
-		if _, gated := syntaxGateLanguages[strings.ToLower(filepath.Ext(resolved))]; !gated {
+		// Executability, not registry membership: a static or declarative
+		// artifact has a checker but nothing to run, and demanding an
+		// execution that names it is an obligation nothing can discharge.
+		// Its bytes are still held to the existing validation contract.
+		if meta, gated := syntaxGateLanguages[strings.ToLower(filepath.Ext(resolved))]; !gated ||
+			!meta.Executable {
 			return
 		}
 		if seen[resolved] {
@@ -749,6 +754,28 @@ func evidenceIsCurrent(ctx *AgentContext, rec VerificationRecord) (map[string]st
 	return out, true
 }
 
+// contractRequiresCommand reports whether the client declared this exact
+// command. isVerificationCommand recognises builds, tests, probes and runners
+// by shape, and a client's own requirement may be none of those -- a linter, a
+// schema check, a project script. Without this, a declared command could be
+// impossible to satisfy: the demand would require it and nothing would ever
+// record it running.
+//
+// It changes what gets RECORDED, never how strongly the record counts. The
+// evidence is the same execution, bound to the same hashes; declaring a command
+// says who required it, not that its passing proves more.
+func contractRequiresCommand(ctx *AgentContext, command string) bool {
+	if ctx == nil || ctx.TaskContract == nil {
+		return false
+	}
+	for _, want := range ctx.TaskContract.Verification {
+		if want == command {
+			return true
+		}
+	}
+	return false
+}
+
 // decideVerificationDemand is the single owner of the work-contract demand.
 //
 // Fails closed everywhere: no evidence, stale evidence, evidence that names a
@@ -761,7 +788,11 @@ func decideVerificationDemand(ctx *AgentContext, tc *TaskContract, expected []st
 		return verificationDemand{}
 	}
 	paths := codeDeliverablesFor(ctx, expected)
-	if len(paths) == 0 {
+	// A declared command is a requirement in its own right. It survives when
+	// the run produced nothing executable -- a client that asked for
+	// `htmlhint index.html` asked for it regardless of what the registry
+	// thinks can be run.
+	if len(paths) == 0 && len(tc.Verification) == 0 {
 		return verificationDemand{}
 	}
 	type liveRecord struct {

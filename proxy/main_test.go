@@ -3668,3 +3668,263 @@ func TestOneVerificationDemandSharedByBothExits(t *testing.T) {
 		}
 	}
 }
+
+// --- executable versus declarative deliverables --------------------------------
+//
+// Commit 1 scoped its verification demand with syntaxGateLanguages, which
+// answers "is there a checker for this extension" -- not "can a command run
+// this". The registry holds .html, .htm, .xml, .json, .yaml and .yml, so a run
+// that wrote index.html or config.yaml was told to produce an execution that
+// names it, and no such command exists. That is an obligation nothing can
+// discharge: a permanent incompletion for ordinary static work.
+//
+// The distinction now lives in the registry itself. These fixtures pin the
+// boundary from both sides: declarative artifacts lose the execution demand and
+// keep every byte-level requirement, executable artifacts keep the demand.
+
+func TestExecutableDeliverablesDemandExecutionDeclarativeDoNot(t *testing.T) {
+	const prompt = "Create the project files."
+	const goodPy = "print('ok')\n"
+	const brokenPy = "def f(:\n"
+	const goodHTML = "<!doctype html><title>x</title><p>hi</p>\n"
+	const brokenHTML = "<!doctype html><title>x</title><p>unclosed\n"
+	const goodJSON = "{\"a\": 1}\n"
+	const goodYAML = "a: 1\n"
+	const goodXML = "<?xml version=\"1.0\"?><r><a/></r>\n"
+
+	run := func(t *testing.T, contract *TaskContract, plan func(i int) map[string]interface{}) (string, []string, int, int) {
+		t.Helper()
+		dir := t.TempDir()
+		var mu sync.Mutex
+		turns := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
+				http.Error(w, "unavailable", http.StatusServiceUnavailable)
+				return
+			case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+				var in struct{ Code string }
+				json.NewDecoder(r.Body).Decode(&in)
+				bad := strings.Contains(in.Code, "def f(:") || strings.Contains(in.Code, "unclosed")
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"valid": !bad, "errors": []string{"SyntaxError"}})
+				return
+			case strings.HasSuffix(r.URL.Path, "/execute"), strings.HasSuffix(r.URL.Path, "/shell"):
+				var in struct {
+					Code    string
+					Command string
+				}
+				json.NewDecoder(r.Body).Decode(&in)
+				text := in.Code + " " + in.Command
+				if strings.Contains(text, ".atlas-mount-probe") {
+					b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
+					json.NewEncoder(w).Encode(map[string]interface{}{
+						"success": true, "stdout": string(b), "exit_code": 0})
+					return
+				}
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": true, "stdout": "ok\n", "exit_code": 0})
+				return
+			case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
+				http.Error(w, "unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "text/event-stream")
+			mu.Lock()
+			i := turns
+			turns++
+			mu.Unlock()
+			call, _ := json.Marshal(plan(i))
+			d, _ := json.Marshal(map[string]interface{}{
+				"choices": []map[string]interface{}{{"delta": map[string]string{"content": string(call)}}}})
+			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+		}))
+		defer srv.Close()
+		ctx := NewAgentContext(dir, Tier2Medium)
+		ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
+		ctx.PermissionMode = PermissionYolo
+		ctx.TrustMode = trustFullyTrusted
+		ctx.MaxTurns = 0
+		ctx.TaskContract = contract
+		terminal := map[string]string{}
+		terminals, calls, results := 0, 0, 0
+		ctx.StreamFn = func(et string, data interface{}) {
+			b, _ := json.Marshal(data)
+			mu.Lock()
+			defer mu.Unlock()
+			switch et {
+			case "done":
+				terminals++
+				var m map[string]string
+				json.Unmarshal(b, &m)
+				for k, v := range m {
+					terminal[k] = v
+				}
+			case "tool_call":
+				calls++
+			case "tool_result":
+				results++
+			}
+		}
+		runAgentLoop(ctx, prompt)
+		if terminals != 1 {
+			t.Fatalf("%d terminals, want one", terminals)
+		}
+		var disk []string
+		filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() {
+				return nil
+			}
+			rel, _ := filepath.Rel(dir, p)
+			if !strings.HasPrefix(rel, ".") {
+				b, _ := os.ReadFile(p)
+				disk = append(disk, rel+"="+hashBytes(b)[:12])
+			}
+			return nil
+		})
+		sort.Strings(disk)
+		return terminal["status"] + "/" + terminal["reason"], disk, calls, results
+	}
+
+	write := func(path, body string) map[string]interface{} {
+		return map[string]interface{}{"type": "tool_call", "name": "write_file",
+			"args": map[string]string{"path": path, "content": body}}
+	}
+	cmd := func(c string) map[string]interface{} {
+		return map[string]interface{}{"type": "tool_call", "name": "run_command",
+			"args": map[string]string{"command": c}}
+	}
+	done := map[string]interface{}{"type": "done", "summary": "wrote the files"}
+	seq := func(steps ...map[string]interface{}) func(int) map[string]interface{} {
+		return func(i int) map[string]interface{} {
+			if i < len(steps) {
+				return steps[i]
+			}
+			return done
+		}
+	}
+	work := func(outputs, verify []string) *TaskContract {
+		return &TaskContract{TaskMode: TaskModeWork, ExpectedOutputs: outputs, Verification: verify}
+	}
+
+	for _, c := range []struct {
+		name     string
+		contract *TaskContract
+		plan     func(int) map[string]interface{}
+		want     string
+		wantNot  string
+	}{
+		{"static html, no command", work([]string{"index.html"}, nil),
+			seq(write("index.html", goodHTML), done), "completed/deliverables_demonstrated", ""},
+		{"json config, no command", work([]string{"config.json"}, nil),
+			seq(write("config.json", goodJSON), done), "completed/deliverables_demonstrated", ""},
+		{"yaml config, no command", work([]string{"config.yaml"}, nil),
+			seq(write("config.yaml", goodYAML), done), "completed/deliverables_demonstrated", ""},
+		{"xml document, no command", work([]string{"data.xml"}, nil),
+			seq(write("data.xml", goodXML), done), "completed/deliverables_demonstrated", ""},
+		{"invalid html stays incomplete", work([]string{"index.html"}, nil),
+			seq(write("index.html", brokenHTML), done), "", "completed"},
+		{"python without a relevant command", work([]string{"solve.py"}, nil),
+			seq(write("solve.py", goodPy), done), "incomplete/verification_demanded_unmet", ""},
+		{"python with echo ok", work([]string{"solve.py"}, nil),
+			seq(write("solve.py", goodPy), cmd("echo ok"), done),
+			"incomplete/verification_demanded_unmet", ""},
+		{"python with a relevant command", work([]string{"solve.py"}, nil),
+			seq(write("solve.py", goodPy), cmd("python3 solve.py"), done),
+			"completed/deliverables_demonstrated", ""},
+		{"relevant command then mutation", work([]string{"solve.py"}, nil),
+			seq(write("solve.py", goodPy), cmd("python3 solve.py"),
+				write("solve.py", goodPy+"# more\n"), done),
+			"incomplete/verification_demanded_unmet", ""},
+		{"two executables, one exercised", work([]string{"a.py", "b.py"}, nil),
+			seq(write("a.py", goodPy), write("b.py", goodPy), cmd("python3 a.py"), done),
+			"incomplete/verification_demanded_unmet", ""},
+		{"mixed: static asset plus exercised code", work([]string{"index.html", "app.py"}, nil),
+			seq(write("index.html", goodHTML), write("app.py", goodPy), cmd("python3 app.py"), done),
+			"completed/deliverables_demonstrated", ""},
+		{"mixed: static asset plus unexercised code", work([]string{"index.html", "app.py"}, nil),
+			seq(write("index.html", goodHTML), write("app.py", goodPy), done),
+			"incomplete/verification_demanded_unmet", ""},
+		{"mixed: static asset invalid, code exercised", work([]string{"index.html", "app.py"}, nil),
+			seq(write("index.html", brokenHTML), write("app.py", goodPy), cmd("python3 app.py"), done),
+			"", "completed"},
+		{"declared command still required on a static deliverable",
+			work([]string{"index.html"}, []string{"htmlhint index.html"}),
+			seq(write("index.html", goodHTML), done),
+			"incomplete/verification_demanded_unmet", ""},
+		{"declared command satisfied on a static deliverable",
+			work([]string{"index.html"}, []string{"htmlhint index.html"}),
+			seq(write("index.html", goodHTML), cmd("htmlhint index.html"), done),
+			"completed/deliverables_demonstrated", ""},
+		{"declared command mismatched spelling",
+			work([]string{"index.html"}, []string{"htmlhint index.html"}),
+			seq(write("index.html", goodHTML), cmd("htmlhint  index.html"), done),
+			"incomplete/verification_demanded_unmet", ""},
+		{"invalid python with a green command", work([]string{"solve.py"}, nil),
+			seq(write("solve.py", brokenPy), cmd("python3 solve.py"), done), "", "completed"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, disk, calls, results := run(t, c.contract, c.plan)
+			if c.want != "" && got != c.want {
+				t.Fatalf("terminal = %q, want %q (disk %v)", got, c.want, disk)
+			}
+			if c.wantNot != "" && strings.HasPrefix(got, c.wantNot) {
+				t.Fatalf("terminal = %q, must not be %s", got, c.wantNot)
+			}
+			if calls != results {
+				t.Fatalf("%d tool calls, %d results", calls, results)
+			}
+			if len(disk) == 0 {
+				t.Fatalf("nothing was written")
+			}
+		})
+	}
+}
+
+// A future declarative language must not acquire an execution obligation just
+// by joining the syntax-checker registry. The registry is the one owner of both
+// facts, so the guard reads it directly.
+func TestSyntaxRegistryOwnsExecutability(t *testing.T) {
+	wantExecutable := map[string]bool{
+		".py": true, ".js": true, ".ts": true, ".go": true, ".java": true,
+		".kt": true, ".rb": true, ".php": true, ".sh": true,
+		".json": false, ".yaml": false, ".yml": false,
+		".html": false, ".htm": false, ".xml": false,
+	}
+	if len(syntaxGateLanguages) != len(wantExecutable) {
+		t.Fatalf("the registry holds %d extensions, the guard knows %d: a new "+
+			"entry must declare whether it is executable",
+			len(syntaxGateLanguages), len(wantExecutable))
+	}
+	for ext, meta := range syntaxGateLanguages {
+		want, known := wantExecutable[ext]
+		if !known {
+			t.Errorf("%s joined the registry without declaring executability", ext)
+			continue
+		}
+		if meta.Executable != want {
+			t.Errorf("%s executable=%v, want %v", ext, meta.Executable, want)
+		}
+		if meta.Language == "" {
+			t.Errorf("%s has no checker language", ext)
+		}
+	}
+	// The demand must be scoped by executability, never by registry membership.
+	src, err := os.ReadFile("guardrails.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	i := strings.Index(body, "func codeDeliverablesFor")
+	if i < 0 {
+		t.Fatal("codeDeliverablesFor is gone")
+	}
+	fn := body[i:]
+	if e := strings.Index(fn[1:], "\nfunc "); e >= 0 {
+		fn = fn[:e]
+	}
+	if !strings.Contains(fn, ".Executable") {
+		t.Error("codeDeliverablesFor does not scope on the registry's executability")
+	}
+}
