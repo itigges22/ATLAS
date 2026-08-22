@@ -668,6 +668,145 @@ func commandNamesPath(command, path string) bool {
 	return false
 }
 
+// --- work-contract verification demand ---------------------------------------
+//
+// verificationDemandedAndUnmet asks one session-wide question: did anything
+// pass. It cannot say WHAT was verified or at WHICH bytes, so `echo ok` clears
+// it and a rewrite after a green run does not re-arm it. The evidence that can
+// answer already exists -- ctx.VerificationEvidence records, per green command,
+// the sha256 of each file the command actually NAMED -- and until now its only
+// consumer was lens labelling. A completion decision is exactly the place that
+// evidence was built for.
+//
+// Scope is deliberately narrow: a client that declared task_mode work. Nothing
+// here touches contractless callers, questions, documents, deletion, moves,
+// debt, hazards, tombstones, permission or timeouts.
+
+type verificationDemand struct {
+	Required bool
+	Met      bool
+	// Missing names the first deliverable that has no current, relevant,
+	// green evidence, or the first declared command that did not run against
+	// the final bytes. Empty when Met.
+	Missing string
+}
+
+// codeDeliverablesFor is the set this demand covers: paths the client declared
+// plus paths the session wrote, restricted to extensions the syntax gate knows.
+// Documents keep the existing exact-current-hash rule and are not included.
+func codeDeliverablesFor(ctx *AgentContext, expected []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(rel string) {
+		if rel == "" {
+			return
+		}
+		resolved := resolveAgentPath(ctx, rel)
+		if _, gated := syntaxGateLanguages[strings.ToLower(filepath.Ext(resolved))]; !gated {
+			return
+		}
+		if seen[resolved] {
+			return
+		}
+		seen[resolved] = true
+		out = append(out, resolved)
+	}
+	for _, rel := range expected {
+		add(rel)
+	}
+	if ctx != nil {
+		ctx.LedgerMu.Lock()
+		for key, d := range ctx.Ledger {
+			if d.Tombstoned || d.Generation == 0 {
+				continue
+			}
+			add(key)
+		}
+		ctx.LedgerMu.Unlock()
+	}
+	sort.Strings(out)
+	return out
+}
+
+// evidenceIsCurrent reports whether a green record still describes the bytes on
+// disk for every path it covered. A later mutation to any covered path makes
+// the record stale, which is the verify-then-modify hole stated as a rule.
+// The record is keyed by the path the model wrote, the deliverable set by the
+// path the client declared or the ledger owns. Both are put through
+// resolveAgentPath -- the one canonicalisation rule -- so "solve.py" and
+// "./solve.py" are the same file without a second normalizer.
+func evidenceIsCurrent(ctx *AgentContext, rec VerificationRecord) (map[string]string, bool) {
+	if len(rec.Covered) == 0 {
+		return nil, false
+	}
+	out := make(map[string]string, len(rec.Covered))
+	for p, h := range rec.Covered {
+		if fileSHA256(ctx, p) != h {
+			return nil, false
+		}
+		out[resolveAgentPath(ctx, p)] = h
+	}
+	return out, true
+}
+
+// decideVerificationDemand is the single owner of the work-contract demand.
+//
+// Fails closed everywhere: no evidence, stale evidence, evidence that names a
+// different path, or a declared command that never ran against the final bytes
+// all leave the demand unmet. A successful command that names nothing covers
+// nothing, so `true` and `echo ok` cannot satisfy it -- not because they are
+// recognised, but because they carry no binding.
+func decideVerificationDemand(ctx *AgentContext, tc *TaskContract, expected []string) verificationDemand {
+	if ctx == nil || tc == nil || tc.TaskMode != TaskModeWork {
+		return verificationDemand{}
+	}
+	paths := codeDeliverablesFor(ctx, expected)
+	if len(paths) == 0 {
+		return verificationDemand{}
+	}
+	type liveRecord struct {
+		command string
+		covered map[string]string
+	}
+	current := make([]liveRecord, 0, len(ctx.VerificationEvidence))
+	for _, rec := range ctx.VerificationEvidence {
+		if covered, ok := evidenceIsCurrent(ctx, rec); ok {
+			current = append(current, liveRecord{command: rec.Command, covered: covered})
+		}
+	}
+	for _, p := range paths {
+		h := fileSHA256(ctx, p)
+		if h == "" {
+			return verificationDemand{Required: true, Missing: p}
+		}
+		covered := false
+		for _, rec := range current {
+			if rec.covered[p] == h {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			return verificationDemand{Required: true, Missing: p}
+		}
+	}
+	// Declared commands are matched by exact recorded identity. No shell
+	// parsing, no equivalence: "python3  solve.py" is not "python3 solve.py".
+	for _, want := range tc.Verification {
+		ran := false
+		for _, rec := range current {
+			if rec.command == want {
+				ran = true
+				break
+			}
+		}
+		if !ran {
+			return verificationDemand{Required: true, Missing: want}
+		}
+	}
+	return verificationDemand{Required: true, Met: true}
+}
+
 // driftedSinceVerification names the first session-written file whose bytes
 // no longer match the verified snapshot, or "" when everything still does.
 // A file written AFTER the snapshot (absent from it) is drift by definition:

@@ -785,13 +785,38 @@ func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
 		}
 	}
 	// Step 1 pinned that NOTHING consulted the contract, because Step 1 added
-	// no decision. That premise is superseded: the task-mode migration gives
-	// the contract exactly one live consumer. What still has to hold, and is
-	// what this now pins, is that the consumer is a single policy owner and
-	// that no other subsystem reads it.
+	// no decision. That premise is superseded twice over. The task-mode
+	// migration gave the contract one live consumer; this slice gives it a
+	// second, the work-contract verification demand. What still has to hold,
+	// and is what this now pins, is that BOTH decisions are owned by
+	// guardrails.go and that no other subsystem reads the contract to decide
+	// anything.
+	//
+	// finalizeCompletion is off this list for that reason: it does not read a
+	// contract field to reach its own conclusion, it hands the contract to the
+	// policy owner and uses the answer. The check below pins that shape
+	// exactly, so a future edit that starts inspecting TaskMode inline still
+	// fails.
 	body, _ := os.ReadFile("agent.go")
+	final := string(body)[strings.Index(string(body), "func finalizeCompletion"):]
+	if e := strings.Index(final[1:], "\nfunc "); e >= 0 {
+		final = final[:e]
+	}
+	for _, want := range []string{
+		"decideVerificationDemand(ctx, ctx.TaskContract, st.expectedOutputs)",
+	} {
+		if !strings.Contains(final, want) {
+			t.Errorf("finalizeCompletion no longer delegates to the policy owner: %q", want)
+		}
+	}
+	// The one inline contract read it is allowed is the scope of the text
+	// exit, which is a terminal-shape rule and not a completion decision.
+	if n := strings.Count(final, "ctx.TaskContract"); n != 2 {
+		t.Errorf("finalizeCompletion reads the contract %d times; exactly two are "+
+			"allowed: the delegation and the text-exit scope", n)
+	}
 	for _, fn := range []string{"classifyAgentTier", "terminalCompletionAllowed",
-		"finalizeCompletion", "blockingTombstone", "needsPermission", "honestTerminalSummary",
+		"blockingTombstone", "needsPermission", "honestTerminalSummary",
 		"buildSystemPrompt", "buildToolDescriptionsExcluding"} {
 		i := strings.Index(string(body), "func "+fn)
 		if i < 0 {
@@ -808,6 +833,9 @@ func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
 	// guardrails.go owns the decision, and only through the one helper.
 	guard, _ := os.ReadFile("guardrails.go")
 	gs := string(guard)
+	if !strings.Contains(gs, "func decideVerificationDemand") {
+		t.Error("the work-contract verification demand is not owned by guardrails.go")
+	}
 	if !strings.Contains(gs, "func decideActionDemand") {
 		t.Error("the central action-demand helper is gone from the policy owner")
 	}
@@ -964,12 +992,27 @@ func TestTaskContractChangesOnlyTheActionDemand(t *testing.T) {
 			evB, termB, diskB := run(t, contract, c.prompt, c.plan)
 			t.Logf("%s: terminal without=%q with=%q", c.name, termA, termB)
 			// The contract is work. Where the heuristic already agreed, the
-			// run must be identical; where it did not, the ONLY permitted
-			// difference is that action is now demanded.
+			// run must be identical; where it did not, the permitted
+			// differences are the two demands a declared work contract now
+			// owns.
+			//
+			// This assertion originally allowed exactly one move, to
+			// action_demanded_unmet, because the contract decided exactly one
+			// thing. That premise changed here on purpose: a declared work
+			// contract also demands verification bound to the exact current
+			// bytes of its code deliverables, because a fifty-task benchmark
+			// showed a run can satisfy every other condition and still have
+			// executed nothing. The contract's authority is what widened; the
+			// direction did not -- both moves are strictly toward incomplete,
+			// and no contract may move a terminal toward completed.
 			// Observational, not guessed: the contractless run IS the legacy
 			// behaviour, so its terminal says whether action was already
 			// demanded.
 			legacy := termA == "incomplete/action_demanded_unmet"
+			permitted := map[string]bool{
+				"incomplete/action_demanded_unmet":       true,
+				"incomplete/verification_demanded_unmet": true,
+			}
 			if termA == termB {
 				if evA != evB {
 					t.Error("same terminal but the event stream differs")
@@ -977,9 +1020,12 @@ func TestTaskContractChangesOnlyTheActionDemand(t *testing.T) {
 			} else if legacy {
 				t.Errorf("terminal moved even though the heuristic already demanded "+
 					"action: %q vs %q", termA, termB)
-			} else if termB != "incomplete/action_demanded_unmet" {
-				t.Errorf("the only permitted move is to action_demanded_unmet, got %q "+
-					"(was %q)", termB, termA)
+			} else if !permitted[termB] {
+				t.Errorf("the only permitted moves are action_demanded_unmet and "+
+					"verification_demanded_unmet, got %q (was %q)", termB, termA)
+			}
+			if strings.HasPrefix(termB, "completed") && !strings.HasPrefix(termA, "completed") {
+				t.Errorf("a contract moved a terminal toward completed: %q -> %q", termA, termB)
 			}
 			if strings.Join(diskA, ",") != strings.Join(diskB, ",") {
 				t.Errorf("disk differs:\n  %v\n  %v", diskA, diskB)
@@ -2817,12 +2863,26 @@ func TestContractlessRequestIsUnchanged(t *testing.T) {
 }
 
 // 7/8. A work contract establishes the obligation; completion still needs the
-// existing evidence. Demonstrated bytes complete; broken bytes do not.
+// existing evidence. Broken bytes never complete.
+//
+// The positive half of this test used to be "valid bytes complete", and that
+// premise is superseded here on purpose. A declared work contract now also
+// demands verification bound to the exact current bytes of its code
+// deliverables: writing a file and declaring done is no longer evidence that
+// anything ran. shadowWorkPlan writes app.py and stops, so it is now the
+// canonical NEGATIVE case. The positive path -- write, run the artefact, then
+// done -- is proved end to end in
+// TestWorkContractVerificationDemandUsesBoundEvidence, which owns the
+// verification fixtures and their sandbox stub.
+//
+// What this still pins is the property that mattered: a contract on its own
+// never manufactures a completion, in either direction.
 func TestWorkContractStillRequiresDeliverableEvidence(t *testing.T) {
 	good := modeTerminal(t, &TaskContract{TaskMode: TaskModeWork},
 		"Create app.py.", shadowWorkPlan)
-	if good != "completed/deliverables_demonstrated" {
-		t.Errorf("valid artefact terminal %q, want completed/deliverables_demonstrated", good)
+	if good != "incomplete/verification_demanded_unmet" {
+		t.Errorf("written-but-never-run terminal %q, want "+
+			"incomplete/verification_demanded_unmet", good)
 	}
 	testStubSyntaxValid = false
 	defer func() { testStubSyntaxValid = true }()
@@ -3375,6 +3435,236 @@ func TestSchemaVersionOwnershipIsPerRecordKind(t *testing.T) {
 			if strings.Contains(body, f) {
 				t.Errorf("buildSystemPrompt reads %q", f)
 			}
+		}
+	}
+}
+
+// --- work-contract verification demand ----------------------------------------
+//
+// verificationDemandedAndUnmet asks a session-wide boolean: did ANY command
+// pass. It cannot answer "verified WHAT, at WHICH bytes", so `echo ok` clears
+// it and a rewrite after a green run does not re-arm it. The evidence needed to
+// answer properly already exists and has exactly one consumer, the lens:
+// ctx.VerificationEvidence records, per green command, the sha256 of each file
+// the command actually NAMED (commandNamesPath). Binding completion to that
+// record is what these tests fix.
+
+func TestWorkContractVerificationDemandUsesBoundEvidence(t *testing.T) {
+	// Deliberately NOT the benchmark prompt: naming an input file next to a
+	// write verb trips the prose heuristic, and its block would fire before
+	// the verification demand and hide what these fixtures measure. The
+	// provenance slice owns that defect; this slice is tested in isolation.
+	const prompt = "Create solve.py and make it print the answer."
+	const good = "print('1 alpha')\n"
+	const broken = "def f(:\n"
+
+	run := func(t *testing.T, contract *TaskContract, plan func(i int) map[string]interface{}) (string, []string) {
+		t.Helper()
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "input.txt"), []byte("1 alpha\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		var mu sync.Mutex
+		turns := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
+				http.Error(w, "unavailable", http.StatusServiceUnavailable)
+				return
+			case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+				var in struct{ Code string }
+				json.NewDecoder(r.Body).Decode(&in)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"valid": !strings.Contains(in.Code, "def f(:"), "errors": []string{"SyntaxError"}})
+				return
+			case strings.HasSuffix(r.URL.Path, "/execute"), strings.HasSuffix(r.URL.Path, "/shell"):
+				var in struct {
+					Code    string
+					Command string
+				}
+				json.NewDecoder(r.Body).Decode(&in)
+				text := in.Code + " " + in.Command
+				if strings.Contains(text, ".atlas-mount-probe") {
+					b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
+					json.NewEncoder(w).Encode(map[string]interface{}{
+						"success": true, "stdout": string(b), "exit_code": 0})
+					return
+				}
+				fail := strings.Contains(text, "FAILING")
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": !fail, "stdout": "1 alpha\n", "exit_code": map[bool]int{true: 1, false: 0}[fail],
+					"error": map[bool]string{true: "boom", false: ""}[fail]})
+				return
+			case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
+				http.Error(w, "unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "text/event-stream")
+			mu.Lock()
+			i := turns
+			turns++
+			mu.Unlock()
+			call, _ := json.Marshal(plan(i))
+			d, _ := json.Marshal(map[string]interface{}{
+				"choices": []map[string]interface{}{{"delta": map[string]string{"content": string(call)}}}})
+			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+		}))
+		defer srv.Close()
+		ctx := NewAgentContext(dir, Tier2Medium)
+		ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
+		ctx.PermissionMode = PermissionYolo
+		ctx.TrustMode = trustFullyTrusted
+		ctx.MaxTurns = 0
+		ctx.TaskContract = contract
+		terminal := map[string]string{}
+		terminals, calls, results := 0, 0, 0
+		ctx.StreamFn = func(et string, data interface{}) {
+			b, _ := json.Marshal(data)
+			mu.Lock()
+			defer mu.Unlock()
+			switch et {
+			case "done":
+				terminals++
+				var m map[string]string
+				json.Unmarshal(b, &m)
+				for k, v := range m {
+					terminal[k] = v
+				}
+			case "tool_call":
+				calls++
+			case "tool_result":
+				results++
+			}
+		}
+		runAgentLoop(ctx, prompt)
+		if terminals != 1 {
+			t.Fatalf("%d terminals, want one", terminals)
+		}
+		if calls != results {
+			t.Fatalf("%d calls vs %d results", calls, results)
+		}
+		var disk []string
+		filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() {
+				return nil
+			}
+			rel, _ := filepath.Rel(dir, p)
+			if !strings.HasPrefix(rel, ".") {
+				b, _ := os.ReadFile(p)
+				disk = append(disk, rel+"="+hashBytes(b)[:12])
+			}
+			return nil
+		})
+		sort.Strings(disk)
+		return terminal["status"] + "/" + terminal["reason"], disk
+	}
+
+	write := func(path, body string) map[string]interface{} {
+		return map[string]interface{}{"type": "tool_call", "name": "write_file",
+			"args": map[string]string{"path": path, "content": body}}
+	}
+	cmd := func(c string) map[string]interface{} {
+		return map[string]interface{}{"type": "tool_call", "name": "run_command",
+			"args": map[string]string{"command": c}}
+	}
+	done := map[string]interface{}{"type": "done", "summary": "wrote solve.py"}
+	prose := map[string]interface{}{"type": "text", "content": "Please provide the content for solve.py."}
+	seq := func(steps ...map[string]interface{}) func(int) map[string]interface{} {
+		return func(i int) map[string]interface{} {
+			if i < len(steps) {
+				return steps[i]
+			}
+			return done
+		}
+	}
+	work := func(outputs []string, verify []string) *TaskContract {
+		return &TaskContract{TaskMode: TaskModeWork, ExpectedOutputs: outputs, Verification: verify}
+	}
+
+	for _, c := range []struct {
+		name     string
+		contract *TaskContract
+		plan     func(int) map[string]interface{}
+		want     string
+		wantNot  string
+	}{
+		{"valid code, done, no command", work([]string{"solve.py"}, nil),
+			seq(write("solve.py", good), done), "incomplete/verification_demanded_unmet", ""},
+		{"valid code, prose, no command", work([]string{"solve.py"}, nil),
+			seq(write("solve.py", good), prose), "", "completed"},
+		{"valid code, unrelated successful command", work([]string{"solve.py"}, nil),
+			seq(write("solve.py", good), cmd("echo ok"), done),
+			"incomplete/verification_demanded_unmet", ""},
+		{"relevant command then mutation", work([]string{"solve.py"}, nil),
+			seq(write("solve.py", good), cmd("python3 solve.py"), write("solve.py", good+"# more\n"), done),
+			"incomplete/verification_demanded_unmet", ""},
+		{"failed relevant command", work([]string{"solve.py"}, nil),
+			seq(write("solve.py", good), cmd("python3 solve.py FAILING"), done), "", "completed"},
+		{"two outputs, only one verified", work([]string{"solve.py", "other.py"}, nil),
+			seq(write("solve.py", good), write("other.py", good), cmd("python3 solve.py"), done),
+			"incomplete/verification_demanded_unmet", ""},
+		{"relevant command after the final write", work([]string{"solve.py"}, nil),
+			seq(write("solve.py", good), cmd("python3 solve.py"), done),
+			"completed/deliverables_demonstrated", ""},
+		{"exact contract command satisfied", work([]string{"solve.py"}, []string{"python3 solve.py"}),
+			seq(write("solve.py", good), cmd("python3 solve.py"), done),
+			"completed/deliverables_demonstrated", ""},
+		{"contract command spelling differs", work([]string{"solve.py"}, []string{"python3 solve.py"}),
+			seq(write("solve.py", good), cmd("python3  solve.py"), done),
+			"incomplete/verification_demanded_unmet", ""},
+		{"verification before the final write", work([]string{"solve.py"}, nil),
+			seq(cmd("python3 solve.py"), write("solve.py", good), done),
+			"incomplete/verification_demanded_unmet", ""},
+		{"alias spelling shares canonical identity", work([]string{"./solve.py"}, nil),
+			seq(write("solve.py", good), cmd("python3 solve.py"), done),
+			"completed/deliverables_demonstrated", ""},
+		{"invalid code with a green command", work([]string{"solve.py"}, nil),
+			seq(write("solve.py", broken), cmd("python3 solve.py"), done), "", "completed"},
+		{"question mode raises no verification demand", work(nil, nil),
+			seq(map[string]interface{}{"type": "done", "summary": "it reads input.txt"}),
+			"", "verification"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			contract := c.contract
+			if c.name == "question mode unchanged" {
+				contract = &TaskContract{TaskMode: TaskModeQuestion}
+			}
+			got, disk := run(t, contract, c.plan)
+			if c.want != "" && got != c.want {
+				t.Fatalf("terminal = %q, want %q", got, c.want)
+			}
+			if c.wantNot != "" && strings.Contains(got, c.wantNot) {
+				t.Fatalf("terminal = %q, must not be %s", got, c.wantNot)
+			}
+			if len(disk) == 0 {
+				t.Fatalf("workspace was not preserved")
+			}
+		})
+	}
+}
+
+func TestOneVerificationDemandSharedByBothExits(t *testing.T) {
+	src, err := os.ReadFile("agent.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	if n := strings.Count(body, "decideVerificationDemand("); n != 1 {
+		t.Fatalf("agent.go calls decideVerificationDemand %d times; exactly one "+
+			"call site is required so both exits share one decision", n)
+	}
+	i := strings.Index(body, "func finalizeCompletion")
+	if i < 0 || !strings.Contains(body[i:i+2500], "decideVerificationDemand(") {
+		t.Fatal("the demand is not evaluated inside finalizeCompletion, the single " +
+			"finalizer both the done and text exits call")
+	}
+	for _, marker := range []string{
+		`textStatus, textReason := finalizeCompletion(ctx, st, userMessage, "text_reply")`,
+		`status, reason := finalizeCompletion(`,
+	} {
+		if !strings.Contains(body, marker) {
+			t.Fatalf("a terminal exit no longer routes through finalizeCompletion: %q", marker)
 		}
 	}
 }

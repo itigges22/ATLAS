@@ -7896,6 +7896,20 @@ func finalizeCompletion(ctx *AgentContext, st *runState, userMessage, completedR
 	if st.verificationDemandedAndUnmet() {
 		return TerminalIncomplete, "verification_demanded_unmet"
 	}
+	// A declared work request cannot finish on prose, existence, a parse, or a
+	// command that named nothing. Evaluated here, in the one finalizer both the
+	// model's `done` and the text exit call, so the two cannot drift.
+	if d := decideVerificationDemand(ctx, ctx.TaskContract, st.expectedOutputs); d.Required && !d.Met {
+		log.Printf("[agent] work contract: no current bound verification for %q", d.Missing)
+		return TerminalIncomplete, "verification_demanded_unmet"
+	}
+	// The model asking to finish is part of the evidence. A prose reply after a
+	// mutation is a chat turn, not a completion claim, so it stays honest even
+	// when everything else is satisfied. Bounded continuation is a later slice.
+	if tc := ctx.TaskContract; completedReason == "text_reply" && tc != nil &&
+		tc.TaskMode == TaskModeWork && st.madeProductiveChange {
+		return TerminalIncomplete, "work_not_declared_complete"
+	}
 	// Something may still be writing. A hash taken now describes an instant,
 	// not a result, and nothing here can tell a quiet process from a finished
 	// one -- only a confirmed exit can.
