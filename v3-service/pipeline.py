@@ -230,6 +230,15 @@ class _PoolCapture:
         self._selection: Optional[Dict[str, Any]] = None
         self._next_index = 0
         self._session_id = ""
+        # Per-candidate cost, keyed by the candidate's own bytes. Keying on the
+        # digest is what makes parallel generation safe: every call site owns
+        # the code it just produced, so no thread can attribute its tokens to a
+        # sibling. Calls that produce no candidate -- the probe, self-test
+        # generation -- are shared overhead and are named as such rather than
+        # divided across candidates.
+        self._cost: Dict[str, Dict[str, Any]] = {}
+        self._shared: Dict[str, Dict[str, Any]] = {}
+        self._parent: Dict[str, str] = {}
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -288,6 +297,7 @@ class _PoolCapture:
                         accepted=bool(result.get("passed")),
                         record=result.get("evidence_record"), phase="delivered")
             self._write_selection(result)
+            self._write_reconciliation(result)
         except Exception as exc:                       # noqa: BLE001
             self.write_error = self.write_error or f"close: {exc}"
         self._write_status()
@@ -348,8 +358,89 @@ class _PoolCapture:
             "oracle": oracle,
             "accepted": bool(accepted),
             "lens": lens or {},
+            "candidate_id": self.candidate_id(code),
+            "parent_id": self._parent.get(self.candidate_id(code), ""),
+            "cost": self._cost.get(self.candidate_id(code),
+                                   {"tokens": 0, "latency_ms": 0.0, "model_calls": 0}),
         }
         self.write(payload)
+
+    # -- cost attribution ---------------------------------------------------
+
+    @staticmethod
+    def candidate_id(code: str) -> str:
+        """Stable identity for a candidate: the first 12 hex of its bytes.
+
+        Derived from content, not from a counter, so two threads finishing in
+        either order name the same candidate the same way and neither can take
+        the other's id.
+        """
+        if not code:
+            return ""
+        return hashlib.sha256(code.encode("utf-8")).hexdigest()[:12]
+
+    def note_cost(self, *, code: Optional[str], phase: str, tokens: int,
+                  latency_ms: float, parent_code: Optional[str] = None) -> None:
+        """One model call's tokens and latency.
+
+        `code` is the candidate the call produced. None means the call served
+        the run rather than a candidate, and it lands in shared overhead under
+        its phase. A call is never split across candidates and never guessed
+        at: unattributed cost shows up in the reconciliation as a named
+        remainder instead of being smeared over the pool.
+        """
+        if not self.enabled:
+            return
+        try:
+            tokens = int(tokens or 0)
+            latency_ms = float(latency_ms or 0.0)
+        except (TypeError, ValueError):
+            return
+        with self._lock:
+            if code:
+                cid = self.candidate_id(code)
+                slot = self._cost.setdefault(
+                    cid, {"tokens": 0, "latency_ms": 0.0, "model_calls": 0})
+                slot["tokens"] += tokens
+                slot["latency_ms"] += latency_ms
+                slot["model_calls"] += 1
+                if parent_code:
+                    self._parent.setdefault(cid, self.candidate_id(parent_code))
+            else:
+                slot = self._shared.setdefault(
+                    phase or "unattributed",
+                    {"tokens": 0, "latency_ms": 0.0, "model_calls": 0})
+                slot["tokens"] += tokens
+                slot["latency_ms"] += latency_ms
+                slot["model_calls"] += 1
+
+    def _write_reconciliation(self, result: Optional[Dict[str, Any]]) -> None:
+        """Prove the per-candidate ledger adds up to the run total.
+
+        Reports the remainder rather than hiding it. A run whose candidate
+        costs and named overhead do not reach the reported total has cost that
+        was never attributed, and the diagnostic says so.
+        """
+        cand_tokens = sum(v["tokens"] for v in self._cost.values())
+        cand_calls = sum(v["model_calls"] for v in self._cost.values())
+        shared_tokens = sum(v["tokens"] for v in self._shared.values())
+        shared_calls = sum(v["model_calls"] for v in self._shared.values())
+        total = int((result or {}).get("total_tokens") or 0)
+        self.write({
+            "type": "cost_reconciliation",
+            "session_id": self._session_id,
+            "candidates": {cid: dict(v) for cid, v in sorted(self._cost.items())},
+            "shared_overhead": {k: dict(v) for k, v in sorted(self._shared.items())},
+            "candidate_tokens": cand_tokens,
+            "candidate_model_calls": cand_calls,
+            "shared_tokens": shared_tokens,
+            "shared_model_calls": shared_calls,
+            "attributed_tokens": cand_tokens + shared_tokens,
+            "run_total_tokens": total,
+            "unattributed_tokens": total - (cand_tokens + shared_tokens),
+            "reconciles": total == cand_tokens + shared_tokens,
+            "schema": CAPTURE_SCHEMA,
+        })
 
     def note_incumbent(self, *, code: str, record, adapter: str,
                        evaluation: str = "evaluated") -> None:
@@ -2148,6 +2239,13 @@ class V3PipelineService:
                         # depth whatever the CxGx gate decided (audit finding).
                         budget_tier=budget_tier,
                     )
+                    # PlanSearch reports one aggregate for the whole batch, so
+                    # a per-candidate split would be invented. It is recorded as
+                    # named shared overhead instead: the ledger stays exact and
+                    # says which phase the cost belongs to.
+                    capture.note_cost(code=None, phase="plansearch",
+                                      tokens=getattr(ps_result, "total_tokens", 0),
+                                      latency_ms=getattr(ps_result, "total_time_ms", 0.0))
                     for i, code in enumerate(ps_result.candidates):
                         if code:
                             energy_raw, energy_norm, energy_calibrated = scoring.score_candidate(code)
@@ -2199,6 +2297,12 @@ class V3PipelineService:
                             42 + len(candidates) + idx,
                         )
                         code = extract_code(response)
+                        # Attribute at the site that owns the bytes: this call
+                        # produced this candidate, so no sibling thread can be
+                        # charged for it. A call that yielded nothing usable is
+                        # shared overhead, not a free candidate.
+                        capture.note_cost(code=code or None, phase="divsampling",
+                                          tokens=tokens, latency_ms=t_ms)
                         if code:
                             energy_raw, energy_norm, energy_calibrated = scoring.score_candidate(code)
                             per_step = scoring.score_candidate_per_step(code)  # PC-207
@@ -2715,6 +2819,15 @@ class V3PipelineService:
                     )
                     result["total_tokens"] += pr_result.total_tokens
                     for repair_code in pr_result.repairs:
+                        # Lineage: a repair is a child of the candidate it was
+                        # asked to fix. Without the link a repaired artifact
+                        # looks like a fresh generation and its parent's
+                        # evidence cannot be found again.
+                        capture.note_cost(
+                            code=repair_code or None, phase="repair_pr_cot",
+                            tokens=getattr(pr_result, "total_tokens", 0),
+                            latency_ms=getattr(pr_result, "total_time_ms", 0.0),
+                            parent_code=(failing[0].code if failing else None))
                         passed, stdout, stderr, repair_evidence = verified_sandbox(repair_code)
                         capture.note_candidate(
                             role="repair", index=None, code=repair_code,
