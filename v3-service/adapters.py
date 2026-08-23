@@ -516,6 +516,54 @@ class BudgetExhausted(Exception):
     """
 
 
+# --- connection teardown ------------------------------------------------------
+#
+# HONEST NOTE ON THE INTERFACE USED.
+#
+# Interrupting a thread already blocked in recv() requires shutdown() on the
+# underlying socket. close() alone does not do it: measured over real sockets,
+# a call blocked waiting for response headers took the upstream's full 5.76s
+# to return, and a mid-stream cancellation never reached the upstream at all.
+#
+# http.client exposes that socket as HTTPConnection.sock. It is an ordinary
+# instance attribute -- no leading underscore, stable across every CPython 3.x
+# -- but it is NOT part of the documented http.client API. This is the one
+# undocumented interface the cancellation path depends on, and it is named
+# here rather than buried at the call site.
+#
+# The dependency is guarded, not assumed: HTTPCONNECTION_EXPOSES_SOCK records
+# whether the attribute exists on this runtime, a test fails loudly if a future
+# Python removes it, and teardown degrades to close() rather than raising.
+# Cancellation would weaken on such a runtime, so the build must break first.
+
+HTTPCONNECTION_EXPOSES_SOCK = "sock" in http.client.HTTPConnection("localhost").__dict__
+
+
+def _abort_connection(conn) -> bool:
+    """Tear a connection down hard. Returns True if the socket was shut down.
+
+    Safe when no socket exists yet, when the connection is already closed, and
+    when called twice: every failure path falls through to close(). A raise
+    here would leave later connections in the same cancel() unclosed, so
+    nothing is allowed to propagate.
+    """
+    did_shutdown = False
+    try:
+        sock = getattr(conn, "sock", None)
+        if sock is not None:
+            sock.shutdown(socket.SHUT_RDWR)
+            did_shutdown = True
+    except (OSError, AttributeError):
+        # Already closed, never connected, or an unexpected object. close()
+        # below still runs.
+        pass
+    try:
+        conn.close()
+    except Exception:  # noqa: BLE001 - a close that fails is still cancelled
+        pass
+    return did_shutdown
+
+
 class CancelScope:
     """Request-scoped cancellation for one V3 invocation.
 
@@ -565,24 +613,7 @@ class CancelScope:
             self._cancelled = True
             live, self._live = list(self._live), set()
         for conn in live:
-            # shutdown BEFORE close. Closing the file object drops the
-            # descriptor, but a thread already blocked in recv() is not woken
-            # by that: measured here, a call blocked waiting for response
-            # headers took the upstream's full 5.76s to return, and a
-            # mid-stream cancellation never reached the upstream at all.
-            # shutdown() tears the connection down in both directions, which
-            # is what wakes the blocked read and what makes the peer see its
-            # client leave.
-            try:
-                sock = getattr(conn, "sock", None)
-                if sock is not None:
-                    sock.shutdown(socket.SHUT_RDWR)
-            except (OSError, AttributeError):
-                pass
-            try:
-                conn.close()
-            except Exception:  # noqa: BLE001 - a close that fails is still cancelled
-                pass
+            _abort_connection(conn)
         with self._lock:
             self.closed_on_cancel += len(live)
         return len(live)

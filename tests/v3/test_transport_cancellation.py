@@ -324,3 +324,127 @@ def test_no_thread_or_registry_growth_across_many_calls(upstream):
         assert len(scope._live) == 0
     time.sleep(0.5)
     assert threading.active_count() <= before + 2, "worker threads accumulated"
+
+
+# --- the undocumented interface this depends on -------------------------------
+#
+# Cancellation of a blocked read needs shutdown() on the underlying socket, and
+# http.client exposes that as HTTPConnection.sock -- an ordinary attribute that
+# is NOT part of the documented API. These tests exist so a future Python that
+# removes or renames it breaks the build loudly, instead of silently degrading
+# cancellation back to the 5.76s behaviour that started all this.
+
+def test_the_runtime_still_exposes_the_connection_socket():
+    import http.client
+    assert adapters.HTTPCONNECTION_EXPOSES_SOCK, (
+        "http.client.HTTPConnection no longer exposes `sock`; the cancellation "
+        "path cannot shut down a blocked read on this runtime and must be "
+        "reimplemented before it can be trusted")
+    conn = http.client.HTTPConnection("localhost")
+    assert hasattr(conn, "sock")
+    assert conn.sock is None, "an unconnected connection should carry no socket"
+
+
+def test_abort_is_safe_with_no_socket_yet():
+    import http.client
+    conn = http.client.HTTPConnection("localhost")
+    assert adapters._abort_connection(conn) is False
+
+
+def test_abort_is_safe_twice_and_after_close(upstream):
+    scope = adapters.CancelScope("abort")
+    t, _ = run_call(scope)
+    settled(scope, t)
+    import http.client
+    from urllib.parse import urlsplit
+    u = urlsplit(adapters.INFERENCE_URL)
+    conn = http.client.HTTPConnection(u.hostname, u.port, timeout=5)
+    conn.connect()
+    assert adapters._abort_connection(conn) is True
+    assert adapters._abort_connection(conn) is False, "a second abort claimed a shutdown"
+
+
+def test_abort_never_raises_on_a_hostile_object():
+    class Hostile:
+        @property
+        def sock(self):
+            raise OSError("boom")
+
+        def close(self):
+            raise RuntimeError("boom")
+
+    assert adapters._abort_connection(Hostile()) is False
+
+
+# --- the five races -----------------------------------------------------------
+
+def test_race_between_creation_and_registration(upstream):
+    """Cancel concurrently with connection setup, many times.
+
+    A deterministic pre-cancel proves nothing about the window between
+    HTTPConnection() and scope.register(). This drives that window repeatedly.
+    """
+    Upstream.chunks = 3
+    Upstream.chunk_gap = 0.01
+    leaked = 0
+    for i in range(60):
+        scope = adapters.CancelScope(f"race{i}")
+        t, err = run_call(scope)
+        # Cancel at a jittered offset straddling connect/register/request.
+        time.sleep((i % 7) * 0.002)
+        scope.cancel()
+        t.join(timeout=10)
+        assert not t.is_alive(), f"iteration {i}: worker hung"
+        assert len(scope._live) == 0, f"iteration {i}: a connection stayed registered"
+        if err.get("exc") is None:
+            leaked += 1          # completed before cancellation: legitimate
+    # Whatever the interleaving, nothing may be left registered or running.
+    assert threading.active_count() < 60
+    print(f"registration race: 60 trials, {leaked} completed before cancellation")
+
+
+def test_cancel_while_a_large_body_is_being_sent(upstream):
+    Upstream.chunks = 2
+    big = json.dumps({"blob": "x" * 4_000_000}).encode()
+    scope = adapters.CancelScope("bigbody")
+    t, err = run_call(scope, payload=big)
+    time.sleep(0.01)
+    scope.cancel()
+    t.join(timeout=15)
+    assert not t.is_alive(), "the worker hung while sending a large body"
+    assert len(scope._live) == 0
+
+
+def test_cancel_after_the_final_chunk_before_cleanup(upstream):
+    Upstream.chunks = 1
+    Upstream.chunk_gap = 0.0
+    scope = adapters.CancelScope("tail")
+    got = []
+    t, err = run_call(scope, collect=got)
+    t.join(timeout=10)
+    assert not t.is_alive()
+    scope.cancel()
+    assert len(scope._live) == 0
+    rec = upstream_settled()
+    assert rec["finished"], "a completed call was wrongly torn down"
+
+
+def test_a_second_scope_survives_the_first_being_cancelled(upstream):
+    """Stands in for repair/refinement running beside a cancelled generation."""
+    Upstream.chunks = 30
+    Upstream.chunk_gap = 0.05
+    doomed, repair = adapters.CancelScope("gen"), adapters.CancelScope("repair")
+    td, _ = run_call(doomed)
+    tr, er = run_call(repair)
+    for _ in range(200):
+        with Upstream.lock:
+            if len(Upstream.calls) >= 2:
+                break
+        time.sleep(0.02)
+    doomed.cancel()
+    td.join(timeout=10)
+    tr.join(timeout=20)
+    assert not tr.is_alive()
+    assert not er, f"the repair-side invocation failed: {er}"
+    assert repair.cancelled is False
+    assert len(repair._live) == 0
