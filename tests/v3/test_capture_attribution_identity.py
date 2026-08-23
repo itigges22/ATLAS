@@ -191,9 +191,16 @@ def test_legacy_stage2_records_remain_readable():
 def test_identity_never_reaches_generation_or_selection():
     """Identity may be carried. It may not be consulted.
 
-    Every mention must sit inside the diagnostic sink, in run()'s signature, or
-    on the single line that hands it to the sink. Anything else would mean a
-    decision path can see which request it is serving.
+    Every mention must sit inside the diagnostic sink, in run()'s signature,
+    on the single line that hands it to the sink, or on the lines that pack
+    it for the transport. Anything else would mean a decision path can see
+    which request it is serving.
+
+    The transport is the second legitimate consumer, added 2026-08-23: an
+    inference call has to say which request it belongs to, and the identity
+    is the only thing that can say it. Packing it is not consulting it -- the
+    companion test below holds that line by checking that what comes out of
+    the packing is never read anywhere that decides anything.
     """
     import ast as _ast
     src = open(os.path.join(V3, "pipeline.py"), encoding="utf-8").read()
@@ -210,9 +217,44 @@ def test_identity_never_reaches_generation_or_selection():
         in_sink = sink.lineno <= idx <= (sink.end_lineno or sink.lineno)
         in_run_sig = run.lineno <= idx <= run.lineno + 8
         hands_off = "capture.identify(" in line
-        if not (in_sink or in_run_sig or hands_off):
+        packs_for_transport = ("request_id=trace_request_id" in line
+                               or "invocation_id=v3_invocation_id" in line)
+        if not (in_sink or in_run_sig or hands_off or packs_for_transport):
             stray.append((idx, line.strip()))
     assert not stray, f"identity reaches a decision path: {stray}"
+
+
+def test_transport_identity_is_carried_and_never_read():
+    """The packed identity is handed to the adapter and read nowhere else.
+
+    Two mentions are allowed in pipeline.py: building it in run(), and the
+    one assignment onto the request-scoped adapter. A third would mean some
+    decision path can now see it -- which is the thing the packing was not
+    allowed to buy.
+    """
+    import ast as _ast
+    src = open(os.path.join(V3, "pipeline.py"), encoding="utf-8").read()
+    mentions = [(i, l.strip()) for i, l in enumerate(src.split("\n"), start=1)
+                if "request_identity" in l]
+    assigns = [m for m in mentions if "llm.request_identity =" in m[1]]
+    params = [m for m in mentions if m[1].startswith("request_identity=")
+              or "request_identity=None" in m[1]]
+    builds = [m for m in mentions if "RequestIdentity(" in m[1]]
+    accounted = {m[0] for m in assigns + params + builds}
+    stray = [m for m in mentions if m[0] not in accounted]
+    assert not stray, f"transport identity is read on a decision path: {stray}"
+    assert len(assigns) == 1, f"expected one adapter assignment, got {assigns}"
+    assert len(builds) == 1, f"expected one construction site, got {builds}"
+
+    # And no scoring or selection module touches it at all.
+    for module in ("scoring.py", "planning.py"):
+        text = open(os.path.join(V3, module), encoding="utf-8").read()
+        for line in text.split("\n"):
+            if "request_identity" not in line:
+                continue
+            assert ("llm.request_identity =" in line
+                    or line.strip().startswith("request_identity=")), (
+                f"{module} reads the transport identity: {line.strip()}")
 
 
 def test_disabled_capture_records_nothing(tmp_path, monkeypatch):

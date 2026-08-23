@@ -415,6 +415,7 @@ def generate_plan(
     n_candidates: int = 3,
     progress_callback=None,
     cancel_scope=None,
+    request_identity=None,
 ) -> dict:
     """Generate a plan via diverse LLM sampling + heuristic scoring.
 
@@ -458,6 +459,12 @@ def generate_plan(
     # inference like any other, and an uncancellable one outlives its parent
     # exactly the same way.
     llm.cancel_scope = cancel_scope
+    # Same reason as the generate path: the adapter carries the identity its
+    # calls are sent under. The planner runs on the request thread today, so
+    # nothing here needs a thread hop -- but the adapter no longer falls back
+    # to the request-ID ContextVar, so an unset identity here would strip
+    # attribution off every /v3/plan generation.
+    llm.request_identity = request_identity
     # What is already on disk. The proxy sends the listing because this
     # service has no /workspace mount — walking working_dir here finds
     # nothing, which is why the first version of this check never fired.

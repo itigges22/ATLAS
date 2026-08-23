@@ -9,6 +9,7 @@ import socket
 import threading
 import time
 import contextlib
+import dataclasses
 import http.client
 import urllib.request
 import urllib.error
@@ -64,7 +65,42 @@ if SERVICE_TOKEN:
     urllib.request.install_opener(_opener)
 
 
-def _service_headers(rid: str = "") -> dict:
+REQUEST_ID_HEADER = "X-ATLAS-Request-ID"
+INVOCATION_ID_HEADER = "X-ATLAS-V3-Invocation-ID"
+
+
+@dataclasses.dataclass(frozen=True)
+class RequestIdentity:
+    """The identity of the request an adapter is serving.
+
+    Frozen and owned by the request thread that builds it. Worker threads
+    read it off the request-scoped adapter instance, which is how it reaches
+    them — never off a ContextVar, which a new thread does not inherit.
+    """
+    request_id: str = ""
+    invocation_id: str = ""
+
+    def headers(self) -> Dict[str, str]:
+        out: Dict[str, str] = {}
+        if self.request_id:
+            out[REQUEST_ID_HEADER] = self.request_id
+        if self.invocation_id:
+            out[INVOCATION_ID_HEADER] = self.invocation_id
+        return out
+
+
+class RequestIdentityMissing(Exception):
+    """An adapter serving a request has no identity to send.
+
+    Raised instead of sending an unattributed inference call. A permissive
+    upstream would accept that call and answer it, so the omission would
+    otherwise surface only as a missing correlation ID in someone else's
+    logs — or, against an upstream that enforces attribution, as candidate
+    scarcity with no stated cause.
+    """
+
+
+def _service_headers(rid: str = "", invocation_id: str = "") -> dict:
     """Headers for outbound service-to-service calls: forwards the
     current request's correlation ID so lens/sandbox/llama log records
     join the same trace. Pass rid explicitly from background threads —
@@ -77,7 +113,9 @@ def _service_headers(rid: str = "") -> dict:
         except ImportError:
             rid = ""
     if rid:
-        headers["X-ATLAS-Request-ID"] = rid
+        headers[REQUEST_ID_HEADER] = rid
+    if invocation_id:
+        headers[INVOCATION_ID_HEADER] = invocation_id
     return headers
 
 
@@ -183,6 +221,12 @@ class LLMAdapter:
         # Request-scoped cancellation. None for callers with no request
         # (bench, CLI): they are never cancelled and must not be affected.
         self.cancel_scope = None
+        # Request-scoped identity, set by the request thread that builds this
+        # adapter and read by every generation it opens — including ones
+        # dispatched from PlanSearch's worker threads, which is the whole
+        # reason it lives here rather than in a ContextVar. None carries the
+        # same meaning as a None cancel_scope: no request (bench, CLI).
+        self.request_identity: Optional[RequestIdentity] = None
         self.thinking = thinking
         # Monotonic wall-clock (time.time()) after which no new generation
         # may start. None leaves the adapter unbounded, which is what the
@@ -328,6 +372,34 @@ class LLMAdapter:
             self.total_tokens += tokens
         return content, tokens, elapsed_ms
 
+    def _inference_headers(self) -> Dict[str, str]:
+        """Headers for one inference call, resolved from the adapter's own
+        request identity.
+
+        Deliberately does NOT fall back to the request-ID ContextVar. A
+        generation dispatched from a PlanSearch worker thread does not
+        inherit the request thread's ContextVar, so a fallback here reads as
+        "no request" and silently strips attribution from exactly the calls
+        that are hardest to trace back. The identity is request-scoped state
+        and travels on the request-scoped adapter, like cancel_scope.
+
+        Serving a request without an identity is a wiring error, not a
+        runtime condition, so it raises rather than sending the call: an
+        upstream that does not enforce attribution would answer it, and the
+        defect would survive as missing correlation IDs instead of an error.
+        """
+        if self.request_identity is None:
+            if self.cancel_scope is not None:
+                raise RequestIdentityMissing(
+                    "adapter is serving a request (cancel_scope set) but has "
+                    "no request_identity; refusing to send an unattributed "
+                    "inference call")
+            # No request at all (bench, CLI): nothing to attribute.
+            return {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json"}
+        headers.update(self.request_identity.headers())
+        return headers
+
     @contextlib.contextmanager
     def _open_inference(self, payload: bytes):
         """One inference connection, registered with the request's scope.
@@ -347,8 +419,12 @@ class LLMAdapter:
             conn.close()
             raise Cancelled("request cancelled before the connection opened")
         try:
+            # After registration, so a cancelled scope is reported as
+            # cancellation rather than as whatever the next check happens to
+            # be. Registration is where cancellation is decided.
+            headers = self._inference_headers()
             path = (parsed.path or "") + "/v1/chat/completions"
-            conn.request("POST", path, body=payload, headers=_service_headers())
+            conn.request("POST", path, body=payload, headers=headers)
             resp = conn.getresponse()
             if resp.status != 200:
                 detail = resp.read()[:200]

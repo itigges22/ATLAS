@@ -39,6 +39,85 @@ LLMCallable = Callable[[str, float, int, Optional[int]], Tuple[str, int, float]]
 
 
 # ---------------------------------------------------------------------------
+# Request-context propagation and failure classification
+# ---------------------------------------------------------------------------
+# PlanSearch is the one V3 stage that dispatches inference from worker
+# threads. Threads do not inherit ContextVars, so anything request-scoped
+# that PlanSearch needs has to be handed to the worker explicitly. Two kinds
+# of request state are involved and they travel differently:
+#
+#   * the outbound call's identity  -> on the request-scoped LLM adapter,
+#     read by LLMAdapter._inference_headers with no ContextVar fallback;
+#   * the log-correlation ID        -> captured here on the owning thread and
+#     re-established in the worker, below.
+#
+# Measured 2026-08-23 on a 42-case acquisition: every one of 14 PlanSearch
+# invocations returned 0 candidates because worker calls arrived without
+# X-ATLAS-Request-ID and an attribution-enforcing upstream refused all 28 of
+# them with HTTP 403. Nothing raised — the batch degraded to an empty
+# candidate list and DivSampling filled the slots, so the stage read as
+# alive and unproductive rather than as never having reached the model.
+
+# HTTP statuses that mean the request never reached the model because it was
+# not authorized to. Not retried away and not tolerated per-item: they say
+# nothing about the problem being solved.
+_AUTH_STATUSES = frozenset({401, 403})
+
+
+def _current_request_id() -> str:
+    try:
+        from structured_log import get_request_id
+        return get_request_id()
+    except ImportError:
+        return ""
+
+
+def _set_request_id(rid: str) -> None:
+    try:
+        from structured_log import set_request_id
+        set_request_id(rid)
+    except ImportError:
+        pass
+
+
+class PlanSearchInfrastructureError(RuntimeError):
+    """PlanSearch could not reach the model, as distinct from failing at it.
+
+    Carries the partial result so the caller can still book the tokens the
+    stage did spend — the cost ledger stays exact whether or not the stage
+    produced anything.
+    """
+
+    def __init__(self, message: str, failures=(), result=None):
+        super().__init__(message)
+        self.failures = list(failures)
+        self.result = result
+
+
+def _is_infrastructure_failure(exc: BaseException) -> bool:
+    """True when the call was refused or never wired, not answered badly."""
+    # Imported here: adapters imports stages.llm_client, so a module-level
+    # import back into adapters would close the cycle.
+    try:
+        from adapters import RequestIdentityMissing
+        if isinstance(exc, RequestIdentityMissing):
+            return True
+    except ImportError:
+        pass
+    code = getattr(exc, "code", None)
+    return isinstance(code, int) and code in _AUTH_STATUSES
+
+
+def _raise_if_infrastructure(failures) -> None:
+    if not failures:
+        return
+    idxs = ", ".join(str(i) for i, _ in failures)
+    raise PlanSearchInfrastructureError(
+        f"PlanSearch could not reach the model for item(s) {idxs}: "
+        f"{failures[0][1]}", failures=failures)
+
+
+# ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
@@ -129,6 +208,14 @@ class PlanSearchEvent:
     step3_tokens: int = 0
     budget_tier: str = ""
     timestamp: str = ""
+    # num_candidates counts step-3 slots, including ones that came back
+    # empty. These two say what actually happened in them, and are read by
+    # the acquisition liveness gate: it has to tell a stage that could not
+    # reach the model from a model that could not solve the problem, and
+    # both show num_candidates == 0.
+    num_usable_candidates: int = 0
+    infrastructure_failures: int = 0
+    item_failures: int = 0
 
     def to_dict(self) -> Dict:
         return {
@@ -136,6 +223,9 @@ class PlanSearchEvent:
             "num_constraint_sets": self.num_constraint_sets,
             "num_plans": self.num_plans,
             "num_candidates": self.num_candidates,
+            "num_usable_candidates": self.num_usable_candidates,
+            "infrastructure_failures": self.infrastructure_failures,
+            "item_failures": self.item_failures,
             "total_tokens": self.total_tokens,
             "total_time_ms": self.total_time_ms,
             "step1_tokens": self.step1_tokens,
@@ -382,9 +472,25 @@ class PlanSearch:
         # Step 1: Constraint Extraction. The step-1 token count is returned
         # through locals (not stored on self) so concurrent generate() calls
         # on a shared instance never cross-attribute each other's telemetry.
-        constraint_sets, step1_tokens = self._step1_extract_constraints(
-            problem, n, llm_call, budget_tier, base_seed
-        )
+        #
+        # Step 1 is a single call on this thread, not a fan-out, but the
+        # classification is a property of the failure rather than of the
+        # branch that hit it: a refused step 1 is the stage never reaching
+        # the model just as surely as a refused step 3.
+        try:
+            constraint_sets, step1_tokens = self._step1_extract_constraints(
+                problem, n, llm_call, budget_tier, base_seed
+            )
+        except Exception as exc:  # noqa: BLE001 — re-raised either way
+            if not _is_infrastructure_failure(exc):
+                raise
+            result.total_time_ms = (time.time() - total_start) * 1000
+            self._log_event(self._event_for(
+                task_id, [], [], [], result, 0, 0, 0, budget_tier,
+                [(0, exc, True)]))
+            raise PlanSearchInfrastructureError(
+                f"PlanSearch could not reach the model for constraint "
+                f"extraction: {exc}", failures=[(0, exc)], result=result) from exc
         result.constraint_sets = constraint_sets
 
         # Ensure we have at least one constraint set
@@ -411,52 +517,88 @@ class PlanSearch:
         # inside a pipeline that totalled 166s against the proxy's 180s cap
         # while three of four slots idled.
         plans: List[Plan] = [None] * len(constraint_sets)
-        step2_results = self._fan_out(
-            [(i, cs) for i, cs in enumerate(constraint_sets)],
-            lambda i, cs: self._step2_construct_plan(
-                problem, cs, llm_call, budget_tier, seed=base_seed + i + 100),
-        )
-        for i, (plan, tokens, _t) in step2_results:
-            plans[i] = plan
-            step2_tokens += tokens
-        plans = [p for p in plans if p is not None]
-        result.plans = plans
+        failures: List[Tuple[int, Exception, bool]] = []
+        candidates: List[str] = []
+        try:
+            step2_results = self._fan_out(
+                [(i, cs) for i, cs in enumerate(constraint_sets)],
+                lambda i, cs: self._step2_construct_plan(
+                    problem, cs, llm_call, budget_tier, seed=base_seed + i + 100),
+                failures=failures,
+            )
+            for i, (plan, tokens, _t) in step2_results:
+                plans[i] = plan
+                step2_tokens += tokens
+            plans = [p for p in plans if p is not None]
+            result.plans = plans
 
-        # Step 3: Code Generation
-        candidates: List[str] = [None] * len(plans)
-        step3_results = self._fan_out(
-            [(i, p) for i, p in enumerate(plans)],
-            lambda i, plan: self._step3_generate_code(
-                problem, plan, llm_call, budget_tier, seed=base_seed + i + 200),
-        )
-        for i, (code, tokens, _t) in step3_results:
-            candidates[i] = code
-            step3_tokens += tokens
-        result.candidates = [c for c in candidates if c is not None]
+            # Step 3: Code Generation
+            candidates = [None] * len(plans)
+            step3_results = self._fan_out(
+                [(i, p) for i, p in enumerate(plans)],
+                lambda i, plan: self._step3_generate_code(
+                    problem, plan, llm_call, budget_tier, seed=base_seed + i + 200),
+                failures=failures,
+            )
+            for i, (code, tokens, _t) in step3_results:
+                candidates[i] = code
+                step3_tokens += tokens
+            result.candidates = [c for c in candidates if c is not None]
+        except PlanSearchInfrastructureError as exc:
+            # The tokens already spent are real and stay on the ledger, and
+            # the telemetry line says why the stage stopped. Re-raised so the
+            # caller cannot mistake "refused" for "produced nothing".
+            result.plans = [p for p in plans if p is not None]
+            result.total_tokens = step1_tokens + step2_tokens + step3_tokens
+            result.total_time_ms = (time.time() - total_start) * 1000
+            self._log_event(self._event_for(
+                task_id, constraint_sets, result.plans, result.candidates,
+                result, step1_tokens, step2_tokens, step3_tokens, budget_tier,
+                failures))
+            exc.result = result
+            raise
 
         total_time = (time.time() - total_start) * 1000
         result.total_tokens = step1_tokens + step2_tokens + step3_tokens
         result.total_time_ms = total_time
 
         # Log telemetry
-        self._log_event(PlanSearchEvent(
+        self._log_event(self._event_for(
+            task_id, constraint_sets, plans, candidates, result,
+            step1_tokens, step2_tokens, step3_tokens, budget_tier, failures))
+
+        return result
+
+    @staticmethod
+    def _event_for(task_id, constraint_sets, plans, candidates, result,
+                   step1_tokens, step2_tokens, step3_tokens, budget_tier,
+                   failures):
+        """One telemetry line, with the two failure classes counted apart.
+
+        A liveness gate reads infrastructure_failures: it is the difference
+        between the stage being unable to reach the model and the model being
+        unable to solve the problem, and num_candidates alone shows zero for
+        both.
+        """
+        return PlanSearchEvent(
             task_id=task_id,
             num_constraint_sets=len(constraint_sets),
             num_plans=len(plans),
             num_candidates=len(candidates),
             total_tokens=result.total_tokens,
-            total_time_ms=total_time,
+            total_time_ms=result.total_time_ms,
             step1_tokens=step1_tokens,
             step2_tokens=step2_tokens,
             step3_tokens=step3_tokens,
             budget_tier=budget_tier,
-        ))
-
-        return result
+            num_usable_candidates=len(result.candidates),
+            infrastructure_failures=sum(1 for _, _, infra in failures if infra),
+            item_failures=sum(1 for _, _, infra in failures if not infra),
+        )
 
     # -- Pipeline steps -----------------------------------------------------
 
-    def _fan_out(self, items, fn):
+    def _fan_out(self, items, fn, failures=None):
         """Run `fn(index, item)` over independent items, results in order.
 
         Concurrency is bounded downstream by the adapter's slot semaphore, so
@@ -465,25 +607,60 @@ class PlanSearch:
 
         One item raising drops that item and leaves the rest — a candidate
         that fails to generate is a smaller loss than the batch, and the
-        caller already tolerates a short candidate list.
+        caller already tolerates a short candidate list. That tolerance is
+        for the model failing to produce a usable plan or candidate. It is
+        NOT for the call never reaching the model: an infrastructure or
+        authentication failure is raised to the caller, because the
+        difference between "the model could not solve it" and "the request
+        was refused" is invisible in a short candidate list, and the
+        DivSampling backfill downstream would close over the gap.
+
+        Worker threads do not inherit the request thread's ContextVars, so
+        the request ID used for log correlation is captured here, on the
+        owning thread, and re-established inside each worker. The identity
+        that authorizes the outbound call does not travel this way at all —
+        it lives on the request-scoped LLM adapter (see
+        LLMAdapter._inference_headers), so no worker depends on a ContextVar
+        being set to send an attributed request.
         """
+        infra: List[Tuple[int, Exception]] = []
+        seen = failures if failures is not None else []
+
+        def _record(idx, exc):
+            print(f"  [plansearch] item {idx} failed: {exc}", flush=True)
+            is_infra = _is_infrastructure_failure(exc)
+            seen.append((idx, exc, is_infra))
+            if is_infra:
+                infra.append((idx, exc))
+
         if len(items) <= 1:
             out = []
             for idx, item in items:
                 try:
                     out.append((idx, fn(idx, item)))
                 except Exception as exc:  # noqa: BLE001 — one item, not the batch
-                    print(f"  [plansearch] item {idx} failed: {exc}", flush=True)
+                    _record(idx, exc)
+            _raise_if_infrastructure(infra)
             return out
+
+        # Captured on the owning request thread; a worker that reads the
+        # ContextVar directly would read the default, not this.
+        owner_rid = _current_request_id()
+
+        def _in_worker(idx, item):
+            _set_request_id(owner_rid)
+            return fn(idx, item)
 
         results = []
         with ThreadPoolExecutor(max_workers=len(items)) as pool:
-            futures = {pool.submit(fn, idx, item): idx for idx, item in items}
+            futures = {pool.submit(_in_worker, idx, item): idx
+                       for idx, item in items}
             for fut, idx in futures.items():
                 try:
                     results.append((idx, fut.result()))
                 except Exception as exc:  # noqa: BLE001
-                    print(f"  [plansearch] item {idx} failed: {exc}", flush=True)
+                    _record(idx, exc)
+        _raise_if_infrastructure(infra)
         # Ordered by index so seeds, plans and candidates stay aligned with
         # the constraint sets they came from — selection reports winners by
         # index, and a reordered list would rename them.

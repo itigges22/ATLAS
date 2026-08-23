@@ -18,7 +18,8 @@ from typing import Any, Dict, List, Optional
 from stages.llm_client import extract_code
 from stages.budget_forcing import BudgetForcing, BudgetForcingConfig
 from stages import cxgx_gate
-from stages.plan_search import PlanSearch, PlanSearchConfig
+from stages.plan_search import (
+    PlanSearch, PlanSearchConfig, PlanSearchInfrastructureError)
 from stages.div_sampling import DivSampling, DivSamplingConfig
 from stages.failure_analysis import FailingCandidate
 from stages.pr_cot import PRCoT, PRCoTConfig
@@ -1588,7 +1589,14 @@ class V3PipelineService:
                 files=files, file_path=file_path, build_command=build_command,
                 working_dir=working_dir, baseline_code=baseline_code,
                 diagnostic_total_candidates=_diag_floor, _capture=capture,
-                cancel_scope=cancel_scope)
+                cancel_scope=cancel_scope,
+                # Built here, where both halves of the identity are in scope,
+                # and frozen: it reaches PlanSearch's worker threads on the
+                # adapter, which is the only carrier that survives a thread
+                # boundary.
+                request_identity=adapters.RequestIdentity(
+                    request_id=trace_request_id or "",
+                    invocation_id=v3_invocation_id or ""))
             _ensure_delivered_evidence(result, file_path=file_path, problem=problem)
             return result
         except Exception as e:
@@ -1648,7 +1656,8 @@ class V3PipelineService:
                   working_dir: str = "/workspace", baseline_code: str = "",
                   diagnostic_total_candidates: int = 0,
                   _capture: Optional["_PoolCapture"] = None,
-                  cancel_scope=None) -> Dict[str, Any]:
+                  cancel_scope=None,
+                  request_identity=None) -> Dict[str, Any]:
         """The pipeline body — see run() for the argument contract.
 
         `_capture` is the benchmark-only pool sink run() owns; it observes
@@ -1730,6 +1739,12 @@ class V3PipelineService:
         # moment the parent goes away -- without waiting to discover a broken
         # SSE write, which never happens while a call is in flight.
         llm.cancel_scope = cancel_scope
+        # The identity every generation this adapter opens is sent under.
+        # Set beside cancel_scope because it has the same lifetime and the
+        # same reason for living on the adapter: PlanSearch dispatches from
+        # worker threads, and a thread inherits neither a ContextVar nor a
+        # local — it only sees the request-scoped object it was handed.
+        llm.request_identity = request_identity
         # Assigned rather than passed to the constructor: tests substitute
         # their own LLM doubles here, and a new required kwarg would break
         # every one of them for a value only the real adapter reads.
@@ -2337,8 +2352,24 @@ class V3PipelineService:
                          f"{len(ps_result.candidates)} candidates from PlanSearch",
                          candidates=len(ps_result.candidates),
                          tokens=ps_result.total_tokens)
+                except PlanSearchInfrastructureError as e:
+                    # PlanSearch never reached the model. DivSampling still
+                    # fills the slots below — that is unchanged — but the
+                    # backfill must not be the only trace of what happened:
+                    # an empty PlanSearch batch and a refused one produce the
+                    # same candidate count, and only one of them is a result.
+                    partial = getattr(e, "result", None)
+                    if partial is not None:
+                        capture.note_cost(
+                            code=None, phase="plansearch",
+                            tokens=getattr(partial, "total_tokens", 0),
+                            latency_ms=getattr(partial, "total_time_ms", 0.0))
+                        result["total_tokens"] += getattr(partial, "total_tokens", 0)
+                    emit("plansearch_error", str(e)[:200],
+                         kind="infrastructure",
+                         infrastructure_failures=len(getattr(e, "failures", ())))
                 except Exception as e:
-                    emit("plansearch_error", str(e)[:200])
+                    emit("plansearch_error", str(e)[:200], kind="stage")
 
             # Step 1B: DivSampling to fill remaining slots
             remaining_k = max(0, k - len(candidates))

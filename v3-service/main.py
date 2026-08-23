@@ -425,6 +425,8 @@ class V3Handler(BaseHTTPRequestHandler):
                 n_candidates=n_candidates,
                 progress_callback=emit_progress,
                 cancel_scope=scope,
+                request_identity=adapters.RequestIdentity(
+                    request_id=trace_id, invocation_id=scope.invocation_id),
             )
         except Exception as e:
             print(f"  [plan ERROR] {e}", flush=True)

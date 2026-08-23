@@ -546,7 +546,7 @@ Live-path difference: the proxy's V3 bridge abandons a pipeline call after `ATLA
 
 **Phase 1: Constraint-Driven Generation**
 
-- **PlanSearch** generates structurally different implementation plans by extracting distinct constraint sets — one per allocated candidate slot the probe did not already fill (k-1)
+- **PlanSearch** generates structurally different implementation plans by extracting distinct constraint sets — one per allocated candidate slot the probe did not already fill (k-1). Its plan-construction and code-generation steps fan out across worker threads (`_fan_out` in `v3-service/stages/plan_search.py`), which makes it the only V3 stage that dispatches inference off the request thread. A worker inherits no ContextVar and no local from its parent, so request-scoped state reaches it on the request-scoped `LLMAdapter` — the same carrier as the cancellation scope. That is where the identity each inference call is sent under lives (`LLMAdapter.request_identity`); the header resolver takes no ContextVar fallback, because in a worker a fallback reads as "no request" and silently strips attribution. A PlanSearch call that cannot reach the model at all raises `PlanSearchInfrastructureError` rather than returning a short candidate list: DivSampling still backfills the slots below, and an empty batch and a refused one are otherwise indistinguishable downstream.
 - **DivSampling** applies perturbation diversity: 4 roles (competitive_programmer, systems_engineer, mathematician, pragmatist) + 4 instructions (step_by_step, edge_case_first, complexity_aware, constraint_driven) + 4 styles (functional, pythonic, optimize_iteratively, structured)
 - **Budget Forcing** controls thinking token allocation:
 

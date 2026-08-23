@@ -115,6 +115,13 @@ def run_call(scope, payload=b'{"x":1}', collect=None):
     """Drive one real inference connection through the production helper."""
     a = adapters.LLMAdapter(progress_callback=None)
     a.cancel_scope = scope
+    # An adapter serving a request carries the identity its calls go out
+    # under, alongside the scope. Set here for the same reason the scope is:
+    # this stands in for a served request, and one without an identity is a
+    # wiring error the adapter refuses rather than sends.
+    a.request_identity = adapters.RequestIdentity(
+        request_id=f"req-{scope.invocation_id}",
+        invocation_id=scope.invocation_id)
     err = {}
     def _go():
         try:
