@@ -5,6 +5,7 @@ write hook."""
 import json
 import os
 import re
+import socket
 import threading
 import time
 import contextlib
@@ -564,6 +565,20 @@ class CancelScope:
             self._cancelled = True
             live, self._live = list(self._live), set()
         for conn in live:
+            # shutdown BEFORE close. Closing the file object drops the
+            # descriptor, but a thread already blocked in recv() is not woken
+            # by that: measured here, a call blocked waiting for response
+            # headers took the upstream's full 5.76s to return, and a
+            # mid-stream cancellation never reached the upstream at all.
+            # shutdown() tears the connection down in both directions, which
+            # is what wakes the blocked read and what makes the peer see its
+            # client leave.
+            try:
+                sock = getattr(conn, "sock", None)
+                if sock is not None:
+                    sock.shutdown(socket.SHUT_RDWR)
+            except (OSError, AttributeError):
+                pass
             try:
                 conn.close()
             except Exception:  # noqa: BLE001 - a close that fails is still cancelled
