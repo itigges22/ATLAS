@@ -360,6 +360,10 @@ def health():
     return {
         "service": "geometric-lens",
         "status": "healthy" if overall else "degraded",
+        # Stated rather than inferred: a frozen cache and a cache whose
+        # writes are silently failing look identical from the outside, and
+        # an experiment that needs the freeze has to be able to check it.
+        "online_learning": online_learning_enabled(),
         "subsystems": {
             "sqlite": db_st,
             "llama_server": llama_st,
@@ -441,10 +445,37 @@ class PatternWriteRequest(BaseModel):
 _pattern_write_tasks: set = set()
 
 
+def online_learning_enabled() -> bool:
+    """Whether the pattern cache may change while the service is running.
+
+    On by default: the cache learns from what it serves, which is the point
+    of it. ATLAS_LENS_ONLINE_LEARNING=0 freezes it -- patterns are still
+    retrieved and served, and scoring is untouched, but nothing writes back.
+
+    A controlled paired run needs this. Both the write path and the read
+    path mutate state: writes add patterns, and reads update last_accessed
+    and access_count, which retrieval scores on. Without a freeze the
+    patterns an early case touches change what a later case is served, so
+    the two arms are no longer being run against the same cache and case
+    order becomes a variable in the result.
+    """
+    raw = os.environ.get("ATLAS_LENS_ONLINE_LEARNING", "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
 def _spawn_pattern_task(coro) -> None:
-    """create_task with a strong reference held until the task completes."""
+    """create_task with a strong reference held until the task completes.
+
+    Refuses to start anything while online learning is frozen, and closes
+    the coroutine rather than leaving it un-awaited. Gating here rather than
+    at each call site means a new mutating path is frozen by default instead
+    of being frozen only if someone remembered.
+    """
     import asyncio
 
+    if not online_learning_enabled():
+        coro.close()
+        return
     task = asyncio.create_task(coro)
     _pattern_write_tasks.add(task)
     task.add_done_callback(_pattern_write_tasks.discard)
