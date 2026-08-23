@@ -157,6 +157,15 @@ class PatternStore:
                     "error": f"{type(e).__name__}: stats unavailable"}
 
     def _incr_stat(self, key: str):
+        # Frozen cache: the read path bumps these counters synchronously, so
+        # without this a pure read still writes and "the cache did not change
+        # across the run" stops being checkable by comparing the state.
+        try:
+            from config import online_learning_enabled
+            if not online_learning_enabled():
+                return
+        except ImportError:
+            pass
         if self._available:
             try:
                 with self._pool.get_connection() as conn:

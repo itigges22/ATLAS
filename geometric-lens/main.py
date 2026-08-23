@@ -445,22 +445,10 @@ class PatternWriteRequest(BaseModel):
 _pattern_write_tasks: set = set()
 
 
-def online_learning_enabled() -> bool:
-    """Whether the pattern cache may change while the service is running.
-
-    On by default: the cache learns from what it serves, which is the point
-    of it. ATLAS_LENS_ONLINE_LEARNING=0 freezes it -- patterns are still
-    retrieved and served, and scoring is untouched, but nothing writes back.
-
-    A controlled paired run needs this. Both the write path and the read
-    path mutate state: writes add patterns, and reads update last_accessed
-    and access_count, which retrieval scores on. Without a freeze the
-    patterns an early case touches change what a later case is served, so
-    the two arms are no longer being run against the same cache and case
-    order becomes a variable in the result.
-    """
-    raw = os.environ.get("ATLAS_LENS_ONLINE_LEARNING", "1").strip().lower()
-    return raw not in ("0", "false", "no", "off")
+# One definition, in config, so the store honours the same flag: its read
+# path bumps hit/miss counters synchronously and never passes through the
+# spawn helper below.
+from config import online_learning_enabled  # noqa: E402
 
 
 def _spawn_pattern_task(coro) -> None:

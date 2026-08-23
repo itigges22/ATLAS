@@ -1,11 +1,13 @@
 """Lens state policy: one frozen snapshot, shared by every case, never written.
 
-A paired A/B run reads the pattern cache on both arms. Two things mutate it,
-and only one of them is obvious:
+A paired A/B run reads the pattern cache on both arms. Three things mutate
+it, and only the first is obvious:
 
   the write path  adds patterns after a solve;
   the read path   updates last_accessed and access_count, which retrieval
-                  scores on.
+                  scores on;
+  the read path   also bumps hit/miss counters, synchronously, without going
+                  through the async spawn helper the other two use.
 
 So without a freeze, the patterns an early case touches change what a later
 case is served, the two arms are no longer being run against the same cache,
@@ -139,6 +141,51 @@ def test_health_states_the_policy(monkeypatch):
     monkeypatch.setattr(main, "_db_state", lambda: {"connected": True})
     monkeypatch.setattr(main, "_llama_state", lambda: {"reachable": True})
     assert main.health()["online_learning"] is True
+
+
+def test_read_path_stat_counters_are_frozen_too(monkeypatch):
+    """The read path bumps hit/miss counters synchronously.
+
+    They never pass through _spawn_pattern_task, so gating only the spawn
+    helper left a pure read still writing. Measured on the 42-case rehearsal:
+    booting the lens on a snapshot changed nothing, and three pattern-context
+    reads moved the state.
+
+    The store here has no connection pool, so reaching the write raises. That
+    is the signal: frozen returns quietly, unfrozen blows up on the pool it
+    tried to use.
+    """
+    saved_path = list(sys.path)
+    saved_modules = {n: sys.modules.pop(n) for n in _COLLIDING if n in sys.modules}
+    sys.path.insert(0, LENS)
+    try:
+        import importlib
+        store_mod = importlib.import_module("cache.pattern_store")
+
+        store = store_mod.PatternStore.__new__(store_mod.PatternStore)
+        store._available = True
+        store._pool = None
+
+        monkeypatch.setenv("ATLAS_LENS_ONLINE_LEARNING", "0")
+        store._incr_stat("hits")  # frozen: returns before touching the pool
+
+        monkeypatch.setenv("ATLAS_LENS_ONLINE_LEARNING", "1")
+        reached = []
+        original = store_mod.PatternStore._incr_stat
+
+        class _Pool:
+            def get_connection(self):
+                reached.append(True)
+                raise RuntimeError("no pool in this test")
+
+        store._pool = _Pool()
+        original(store, "hits")  # errors are swallowed by design
+        assert reached, "unfrozen _incr_stat never reached the store"
+    finally:
+        sys.path[:] = saved_path
+        for n in _COLLIDING:
+            sys.modules.pop(n, None)
+        sys.modules.update(saved_modules)
 
 
 def test_every_mutating_path_goes_through_the_gate():
