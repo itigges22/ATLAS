@@ -242,6 +242,24 @@ class LLMAdapter:
     def __call__(self, prompt: str, temperature: float,
                  max_tokens: int, seed: Optional[int],
                  thinking: Optional[bool] = None) -> Tuple[str, int, float]:
+        # No new inference once the caller is gone.
+        #
+        # V3 is a synchronous server: its only disconnect signal is a
+        # BrokenPipeError on the next SSE write, which sets `disconnected` on
+        # the progress callback, and the pipeline consulted that flag only at
+        # PHASE boundaries. Nothing consulted it where the GPU is actually
+        # spent. Measured on a real acquisition: a run whose agent request had
+        # already returned at its 570 s work deadline STARTED a 24th
+        # generation at +569.8 s and ran it 39.8 s to completion, leaving the
+        # relay holding an in-flight call after the terminal.
+        #
+        # This is the one chokepoint every V3 generation passes through, so
+        # the check belongs here rather than at each of its callers. It stops
+        # a call from STARTING; a call already in flight is a separate
+        # concern and is not claimed to be handled by this.
+        if getattr(self._progress, "disconnected", False):
+            raise ClientDisconnected(
+                "client disconnected; refusing to start another generation")
         max_tokens = self._budget_max_tokens(max_tokens)
         with LLMAdapter._counter_lock:
             self.call_count += 1
