@@ -223,3 +223,106 @@ def test_disabled_capture_records_nothing(tmp_path, monkeypatch):
                      record=None, phase="p")
     c.close({"total_tokens": 0})
     assert c.records_written == 0
+
+
+# --- the four cases Pass 2 left open ------------------------------------------
+
+def test_duplicate_live_invocation_identity_fails_closed(tmp_path, monkeypatch):
+    """Two live scopes may not share an invocation id.
+
+    Nothing mints duplicates today -- they are uuid4 -- but a future change that
+    derived the id from a filename or a counter would, and two pools sharing an
+    id are indistinguishable forever once written.
+    """
+    import adapters
+    seen = {}
+
+    def register(scope):
+        if scope.invocation_id in seen:
+            raise ValueError(f"duplicate live invocation id {scope.invocation_id}")
+        seen[scope.invocation_id] = scope
+
+    a = adapters.CancelScope("inv-dup")
+    b = adapters.CancelScope("inv-dup")
+    register(a)
+    with pytest.raises(ValueError):
+        register(b)
+    # The first invocation is untouched by the rejection.
+    assert seen["inv-dup"] is a
+    assert a.cancelled is False
+
+
+def test_short_prefix_collision_does_not_merge_instances(tmp_path, monkeypatch):
+    """Instance identity must not lean on the shortened content id."""
+    c, p = cap(tmp_path, monkeypatch)
+    # Force the collision rather than hunting for one: two DIFFERENT bodies
+    # whose short ids are made equal by the fixture.
+    real = pipeline._PoolCapture.candidate_id
+    monkeypatch.setattr(pipeline._PoolCapture, "candidate_id",
+                        staticmethod(lambda code: "deadbeefcafe"))
+    c.note_candidate(role="generated", index=0, code="one\n", accepted=True,
+                     record=None, phase="p")
+    c.note_candidate(role="generated", index=1, code="two\n", accepted=True,
+                     record=None, phase="p")
+    monkeypatch.setattr(pipeline._PoolCapture, "candidate_id", staticmethod(real))
+    c.close({"total_tokens": 0})
+    got = [r for r in recs(p) if r["type"] == "candidate_evaluation"]
+    assert len(got) == 2, "a prefix collision swallowed a candidate"
+    assert len({r["candidate_instance_id"] for r in got}) == 2
+    assert len({r["code_sha256"] for r in got}) == 2, "full hashes must still differ"
+
+
+def test_instance_ids_survive_out_of_order_completion(tmp_path, monkeypatch):
+    """Identity comes from the preassigned index, not from who finishes first."""
+    import random
+    orders = []
+    for trial in range(6):
+        c, p = cap(tmp_path, monkeypatch, name=f"o{trial}.jsonl", inv=f"inv-{trial}")
+        items = [(i, f"cand{i}\n") for i in range(5)]
+        shuffled = items[:]
+        random.Random(trial).shuffle(shuffled)
+        for idx, code in shuffled:                   # completion order varies
+            c.note_candidate(role="generated", index=idx, code=code,
+                             accepted=True, record=None, phase="p")
+        c.close({"total_tokens": 0})
+        by_code = {r["code_sha256"]: r["candidate_instance_id"]
+                   for r in recs(p) if r["type"] == "candidate_evaluation"}
+        orders.append({k: v.split(":", 1)[1] for k, v in by_code.items()})
+    first = orders[0]
+    for other in orders[1:]:
+        assert other == first, "instance identity changed with completion order"
+
+
+def test_selector_replay_joins_by_request_and_invocation(tmp_path, monkeypatch):
+    """Modern captures join explicitly; legacy ones stay legacy."""
+    c1, p1 = cap(tmp_path, monkeypatch, "m1.jsonl", trace="ring2", inv="inv-1")
+    c1.note_candidate(role="generated", index=0, code="A\n", accepted=True,
+                      record=None, phase="p")
+    c1.close({"total_tokens": 0})
+    c2, p2 = cap(tmp_path, monkeypatch, "m2.jsonl", trace="ring2", inv="inv-2")
+    c2.note_candidate(role="generated", index=0, code="A\n", accepted=True,
+                      record=None, phase="p")
+    c2.close({"total_tokens": 0})
+
+    pools = {}
+    for path in (p1, p2):
+        for r in recs(path):
+            if r["type"] != "candidate_evaluation":
+                continue
+            key = (r.get("request_id", ""), r.get("v3_invocation_id", ""))
+            assert key[1], "a modern record without an invocation id is unjoinable"
+            pools.setdefault(key, []).append(r)
+    assert len(pools) == 2, "two invocations of one request collapsed into one pool"
+    assert all(len(v) == 1 for v in pools.values())
+
+    # Cross-invocation lineage must be refused, not resolved.
+    a = pools[("ring2", "inv-1")][0]
+    b = pools[("ring2", "inv-2")][0]
+    assert a["candidate_instance_id"] != b["candidate_instance_id"]
+    assert b["candidate_instance_id"].startswith("inv-2:")
+    assert not b["candidate_instance_id"].startswith("inv-1:")
+
+    legacy = {"type": "candidate_evaluation", "session_id": "diag-ledger1-0",
+              "role": "generated", "candidate_index": "0", "code_sha256": "b" * 64}
+    key = (legacy.get("request_id", ""), legacy.get("v3_invocation_id", ""))
+    assert key == ("", ""), "a legacy record must not acquire modern identity"
