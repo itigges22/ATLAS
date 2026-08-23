@@ -239,6 +239,14 @@ class _PoolCapture:
         self._cost: Dict[str, Dict[str, Any]] = {}
         self._shared: Dict[str, Dict[str, Any]] = {}
         self._parent: Dict[str, str] = {}
+        # Trace identity joins a pool to the request that caused it; the
+        # invocation id is what makes THIS pool unique, because one request can
+        # call V3 several times and a filename or pool name cannot tell them
+        # apart. An absent trace id is recorded as unattributed and is never
+        # inferred from order.
+        self._trace_request_id = ""
+        self._v3_invocation_id = ""
+        self._instances: Dict[str, str] = {}
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -345,8 +353,15 @@ class _PoolCapture:
         oracle = self._oracle.get(digest) or {
             "suite_available": False, "cases": [],
             "cases_passed": 0, "cases_total": 0}
+        instance = self.instance_id(role, index)
+        parent_instance = self._instances.get(
+            self._parent.get(self.candidate_id(code), ""), "")
+        self._instances[self.candidate_id(code)] = instance
         payload = {
             "type": "candidate_evaluation",
+            **self._identity(),
+            "candidate_instance_id": instance,
+            "parent_candidate_instance_id": parent_instance,
             "session_id": self._session_id, "phase": phase,
             "candidate_index": index, "role": role,
             "code_b64": base64.b64encode(raw).decode("ascii"),
@@ -364,6 +379,29 @@ class _PoolCapture:
                                    {"tokens": 0, "latency_ms": 0.0, "model_calls": 0}),
         }
         self.write(payload)
+
+    def identify(self, trace_request_id: str, v3_invocation_id: str) -> None:
+        """Bind the request and invocation this pool belongs to."""
+        self._trace_request_id = trace_request_id or ""
+        self._v3_invocation_id = v3_invocation_id or ""
+
+    def _identity(self) -> Dict[str, Any]:
+        return {
+            "request_id": self._trace_request_id,
+            "request_id_state": "attributed" if self._trace_request_id else "unattributed",
+            "v3_invocation_id": self._v3_invocation_id,
+        }
+
+    def instance_id(self, role: str, index) -> str:
+        """Instance identity, distinct from content identity.
+
+        Two independently generated candidates can hold identical bytes, and a
+        repair can return exactly its parent's bytes; a content hash cannot
+        tell those apart, so lineage keyed on bytes would silently merge them.
+        The index is preassigned at generation time, before parallel
+        completion order can affect it, so this is stable across replay.
+        """
+        return f"{self._v3_invocation_id or 'noinv'}:{role}:{index}"
 
     # -- cost attribution ---------------------------------------------------
 
@@ -428,6 +466,7 @@ class _PoolCapture:
         total = int((result or {}).get("total_tokens") or 0)
         self.write({
             "type": "cost_reconciliation",
+            **self._identity(),
             "session_id": self._session_id,
             "candidates": {cid: dict(v) for cid, v in sorted(self._cost.items())},
             "shared_overhead": {k: dict(v) for k, v in sorted(self._shared.items())},
@@ -458,6 +497,8 @@ class _PoolCapture:
         raw = code.encode("utf-8")
         self.write({
             "type": "incumbent_observation",
+            **self._identity(),
+            "candidate_instance_id": self.instance_id("incumbent_baseline", 0),
             "session_id": self._session_id,
             "role": "incumbent_baseline",
             "pool": "shadow_comparison",
@@ -584,7 +625,14 @@ class _PoolCapture:
             "selection_status": "not_run", "selection_reason": "",
             "tied_count": 0, "incomparable_count": 0, "ineligible_count": 0})
         summary["type"] = "selection_summary"
+        summary.update(self._identity())
         summary["session_id"] = self._session_id
+        # Name the instance that was selected, not only its bytes: two
+        # instances can share content, and a summary that says only "this
+        # hash" cannot say which candidate the lens actually picked.
+        lens_index = summary.get("lens_index")
+        summary["selected_candidate_instance_id"] = (
+            self.instance_id("generated", lens_index) if lens_index is not None else "")
         # The service does not know what Go finally wrote. This names the
         # bytes the service RETURNED; the delivered artifact is joined
         # offline from the runner's own authorization telemetry.
@@ -594,7 +642,8 @@ class _PoolCapture:
         self.write(summary)
 
     def _write_status(self) -> None:
-        status = {"type": "capture_status", "session_id": self._session_id,
+        status = {"type": "capture_status", **self._identity(),
+                  "session_id": self._session_id,
                   "max_bytes": CAPTURE_DEFAULT_MAX_BYTES,
                   "bytes_written": self.bytes_written,
                   "records_written": self.records_written,
@@ -1495,7 +1544,9 @@ class V3PipelineService:
             working_dir: str = "/workspace",
             baseline_code: str = "",
             diagnostic_total_candidates=None,
-            cancel_scope=None) -> Dict[str, Any]:
+            cancel_scope=None,
+            trace_request_id: str = "",
+            v3_invocation_id: str = "") -> Dict[str, Any]:
         """Run the full V3 pipeline on a coding problem.
 
         Args:
@@ -1529,6 +1580,8 @@ class V3PipelineService:
         _diag_floor = _diagnostic_total_candidates(diagnostic_total_candidates)
         capture = _PoolCapture.from_env()
         capture.bind(task_id)
+        # Identity travels with the capture, not with the records' order.
+        capture.identify(trace_request_id, v3_invocation_id)
         try:
             result = self._run_impl(
                 problem, task_id=task_id, progress_callback=progress_callback,

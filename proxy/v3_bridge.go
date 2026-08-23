@@ -87,6 +87,13 @@ func callV3GenerateStreaming(reqCtx context.Context, v3URL string, req V3Generat
 		return nil, fmt.Errorf("create V3 request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	// Trace identity, forwarded so a candidate pool can be joined back to the
+	// request that caused it. It is a JOIN KEY only: it may be absent, it may
+	// repeat outside a controlled harness, and nothing downstream may treat it
+	// as unique or as cancellation authority. It never reaches the model.
+	if id := requestIDFromContext(reqCtx); id != "" {
+		httpReq.Header.Set(requestIDHeader, id)
+	}
 
 	// Abort is user-driven via the bound request context, plus the
 	// interactive deadline applied above.
@@ -199,6 +206,9 @@ func callV3PlanStreaming(reqCtx context.Context, v3URL string, req V3PlanRequest
 		return nil, fmt.Errorf("create plan request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	if id := requestIDFromContext(reqCtx); id != "" {
+		httpReq.Header.Set(requestIDHeader, id)
+	}
 
 	// May 10 2026: timeout removed (was 5 min). Plan generation can run
 	// long on multi-candidate scoring; bounding it via the client

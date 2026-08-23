@@ -1,0 +1,225 @@
+"""Candidate pools must join to their case by name, never by position.
+
+The first real V3 acquisition wrote every pool under session_id "gen-solve" --
+derived from the target filename. Twenty-one benchmark cases all write
+solve.py, and one case can call V3 several times, so nothing in the record said
+which case a pool belonged to. Joining by file order would have been a guess
+dressed as evidence.
+
+Trace identity answers "which request", the invocation id answers "which call
+within it", and instance identity answers "which candidate" when two candidates
+hold identical bytes.
+"""
+import json
+import os
+import sys
+import threading
+
+import pytest
+
+V3 = os.path.join(os.path.dirname(__file__), "..", "..", "v3-service")
+sys.path.insert(0, V3)
+import pipeline  # noqa: E402
+
+
+def cap(tmp_path, monkeypatch, name="pool.jsonl", trace="req-1", inv="inv-1"):
+    path = tmp_path / name
+    monkeypatch.setenv(pipeline.CAPTURE_ENV, str(path))
+    c = pipeline._PoolCapture.from_env()
+    c.bind("gen-solve")
+    c.identify(trace, inv)
+    assert c.enabled, c.write_error
+    return c, path
+
+
+def recs(path):
+    return [json.loads(l) for l in open(path) if l.strip()]
+
+
+def test_one_request_one_invocation(tmp_path, monkeypatch):
+    c, p = cap(tmp_path, monkeypatch)
+    c.note_candidate(role="generated", index=0, code="A\n", accepted=True,
+                     record=None, phase="divsampling")
+    c.close({"total_tokens": 0, "code": "A\n"})
+    for r in recs(p):
+        assert r["request_id"] == "req-1"
+        assert r["v3_invocation_id"] == "inv-1"
+        assert r["request_id_state"] == "attributed"
+
+
+def test_multiple_invocations_in_one_request_stay_distinct(tmp_path, monkeypatch):
+    c1, p1 = cap(tmp_path, monkeypatch, "a.jsonl", trace="req-9", inv="inv-A")
+    c1.note_candidate(role="generated", index=0, code="X\n", accepted=True,
+                      record=None, phase="p")
+    c1.close({"total_tokens": 0})
+    c2, p2 = cap(tmp_path, monkeypatch, "b.jsonl", trace="req-9", inv="inv-B")
+    c2.note_candidate(role="generated", index=0, code="X\n", accepted=True,
+                      record=None, phase="p")
+    c2.close({"total_tokens": 0})
+    a = [r for r in recs(p1) if r["type"] == "candidate_evaluation"][0]
+    b = [r for r in recs(p2) if r["type"] == "candidate_evaluation"][0]
+    assert a["request_id"] == b["request_id"] == "req-9"
+    assert a["v3_invocation_id"] != b["v3_invocation_id"]
+    assert a["candidate_instance_id"] != b["candidate_instance_id"], (
+        "identical bytes in two invocations collapsed to one instance")
+    assert a["code_sha256"] == b["code_sha256"], "content identity should still match"
+
+
+def test_same_filename_and_pool_name_across_requests_cannot_collide(tmp_path, monkeypatch):
+    c1, p1 = cap(tmp_path, monkeypatch, "r1.jsonl", trace="ring2", inv="i1")
+    c1.note_candidate(role="generated", index=0, code="S\n", accepted=True,
+                      record=None, phase="p")
+    c1.close({"total_tokens": 0})
+    c2, p2 = cap(tmp_path, monkeypatch, "r2.jsonl", trace="ring5", inv="i2")
+    c2.note_candidate(role="generated", index=0, code="S\n", accepted=True,
+                      record=None, phase="p")
+    c2.close({"total_tokens": 0})
+    a = [r for r in recs(p1) if r["type"] == "candidate_evaluation"][0]
+    b = [r for r in recs(p2) if r["type"] == "candidate_evaluation"][0]
+    assert a["session_id"] == b["session_id"] == "gen-solve"   # the old, useless key
+    assert a["request_id"] != b["request_id"]                  # the useful one
+
+
+def test_duplicate_trace_ids_remain_distinguishable(tmp_path, monkeypatch):
+    c1, p1 = cap(tmp_path, monkeypatch, "d1.jsonl", trace="dup", inv="x1")
+    c1.note_candidate(role="generated", index=0, code="D\n", accepted=True,
+                      record=None, phase="p")
+    c1.close({"total_tokens": 0})
+    c2, p2 = cap(tmp_path, monkeypatch, "d2.jsonl", trace="dup", inv="x2")
+    c2.note_candidate(role="generated", index=0, code="D\n", accepted=True,
+                      record=None, phase="p")
+    c2.close({"total_tokens": 0})
+    a = [r for r in recs(p1) if r["type"] == "candidate_evaluation"][0]
+    b = [r for r in recs(p2) if r["type"] == "candidate_evaluation"][0]
+    assert a["v3_invocation_id"] != b["v3_invocation_id"]
+
+
+def test_missing_trace_id_is_marked_not_guessed(tmp_path, monkeypatch):
+    c, p = cap(tmp_path, monkeypatch, trace="", inv="inv-only")
+    c.note_candidate(role="generated", index=0, code="M\n", accepted=True,
+                     record=None, phase="p")
+    c.close({"total_tokens": 0})
+    for r in recs(p):
+        assert r["request_id"] == ""
+        assert r["request_id_state"] == "unattributed"
+        assert r["v3_invocation_id"] == "inv-only"
+
+
+def test_two_instances_with_identical_bytes_are_distinct(tmp_path, monkeypatch):
+    c, p = cap(tmp_path, monkeypatch)
+    same = "print(1)\n"
+    c.note_candidate(role="generated", index=0, code=same, accepted=True,
+                     record=None, phase="p")
+    c.note_candidate(role="repair", index=1, code=same, accepted=True,
+                     record=None, phase="repair_pr_cot")
+    got = [r for r in recs(p) if r["type"] == "candidate_evaluation"]
+    assert len({r["candidate_instance_id"] for r in got}) == 2
+    assert len({r["code_sha256"] for r in got}) == 1
+    c.close({"total_tokens": 0})
+
+
+def test_repair_lineage_resolves_within_the_invocation(tmp_path, monkeypatch):
+    c, p = cap(tmp_path, monkeypatch)
+    parent, child = "def f(:\n", "def f():\n    return 1\n"
+    c.note_cost(code=parent, phase="divsampling", tokens=10, latency_ms=1.0)
+    c.note_candidate(role="generated", index=0, code=parent, accepted=False,
+                     record=None, phase="divsampling")
+    c.note_cost(code=child, phase="repair_pr_cot", tokens=5, latency_ms=1.0,
+                parent_code=parent)
+    c.note_candidate(role="repair", index=1, code=child, accepted=True,
+                     record=None, phase="repair_pr_cot")
+    c.close({"total_tokens": 15, "code": child})
+    by_role = {r["role"]: r for r in recs(p) if r["type"] == "candidate_evaluation"}
+    assert by_role["repair"]["parent_candidate_instance_id"] == \
+        by_role["generated"]["candidate_instance_id"]
+    assert by_role["generated"]["parent_candidate_instance_id"] == ""
+
+
+def test_instance_ids_are_scoped_to_the_invocation(tmp_path, monkeypatch):
+    c, _ = cap(tmp_path, monkeypatch, inv="inv-Z")
+    assert c.instance_id("generated", 3).startswith("inv-Z:")
+    other = pipeline._PoolCapture.disabled()
+    other.identify("r", "inv-Y")
+    assert other.instance_id("generated", 3) != c.instance_id("generated", 3)
+
+
+def test_selection_summary_names_instance_and_hash(tmp_path, monkeypatch):
+    c, p = cap(tmp_path, monkeypatch)
+    c.note_candidate(role="generated", index=0, code="W\n", accepted=True,
+                     record=None, phase="p")
+    c._selection = {"phase": "phase1", "pool": [], "pool_indices": [0],
+                    "lens_index": 0, "evidence_index": None, "verified_index": 0,
+                    "selection_status": "ok", "selection_reason": "lens",
+                    "tied_count": 0, "incomparable_count": 0, "ineligible_count": 0}
+    c.close({"total_tokens": 0, "code": "W\n"})
+    sel = [r for r in recs(p) if r["type"] == "selection_summary"][0]
+    assert sel["v3_invocation_id"] == "inv-1"
+    assert sel["selected_candidate_instance_id"] == c.instance_id("generated", 0)
+    assert sel["service_returned_candidate_hash"]
+
+
+def test_cost_reconciliation_carries_identity(tmp_path, monkeypatch):
+    c, p = cap(tmp_path, monkeypatch)
+    c.note_cost(code="C\n", phase="divsampling", tokens=10, latency_ms=1.0)
+    c.note_cost(code=None, phase="self_test_gen", tokens=5, latency_ms=1.0)
+    c.close({"total_tokens": 15})
+    rec = [r for r in recs(p) if r["type"] == "cost_reconciliation"][0]
+    assert rec["request_id"] == "req-1" and rec["v3_invocation_id"] == "inv-1"
+    assert rec["shared_overhead"]["self_test_gen"]["tokens"] == 5
+    assert rec["reconciles"] is True
+
+
+def test_capture_status_carries_identity(tmp_path, monkeypatch):
+    c, p = cap(tmp_path, monkeypatch)
+    c.close({"total_tokens": 0})
+    st = [r for r in recs(p) if r["type"] == "capture_status"][0]
+    assert st["request_id"] == "req-1" and st["v3_invocation_id"] == "inv-1"
+
+
+def test_legacy_stage2_records_remain_readable():
+    """Old captures predate every identity field and must not be re-attributed."""
+    legacy = {"type": "candidate_evaluation", "session_id": "diag-ledger1-0",
+              "role": "generated", "candidate_index": "0",
+              "code_sha256": "a" * 64, "code_bytes": "10"}
+    assert legacy.get("request_id") is None
+    assert legacy.get("v3_invocation_id") is None
+    # A reader must treat absence as unattributed, never infer from order.
+    state = "attributed" if legacy.get("request_id") else "legacy_unattributed"
+    assert state == "legacy_unattributed"
+
+
+def test_identity_never_reaches_generation_or_selection():
+    """Identity may be carried. It may not be consulted.
+
+    Every mention must sit inside the diagnostic sink, in run()'s signature, or
+    on the single line that hands it to the sink. Anything else would mean a
+    decision path can see which request it is serving.
+    """
+    import ast as _ast
+    src = open(os.path.join(V3, "pipeline.py"), encoding="utf-8").read()
+    tree = _ast.parse(src)
+    sink = next(n for n in _ast.walk(tree)
+                if isinstance(n, _ast.ClassDef) and n.name == "_PoolCapture")
+    run = next(n for n in _ast.walk(tree)
+               if isinstance(n, _ast.FunctionDef) and n.name == "run")
+    lines = src.split("\n")
+    stray = []
+    for idx, line in enumerate(lines, start=1):
+        if "trace_request_id" not in line and "v3_invocation_id" not in line:
+            continue
+        in_sink = sink.lineno <= idx <= (sink.end_lineno or sink.lineno)
+        in_run_sig = run.lineno <= idx <= run.lineno + 8
+        hands_off = "capture.identify(" in line
+        if not (in_sink or in_run_sig or hands_off):
+            stray.append((idx, line.strip()))
+    assert not stray, f"identity reaches a decision path: {stray}"
+
+
+def test_disabled_capture_records_nothing(tmp_path, monkeypatch):
+    monkeypatch.delenv(pipeline.CAPTURE_ENV, raising=False)
+    c = pipeline._PoolCapture.from_env()
+    c.identify("req", "inv")
+    c.note_candidate(role="generated", index=0, code="Z\n", accepted=True,
+                     record=None, phase="p")
+    c.close({"total_tokens": 0})
+    assert c.records_written == 0

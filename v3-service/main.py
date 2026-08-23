@@ -24,6 +24,9 @@ import select
 
 # Watcher poll interval, included in every measured cancellation latency.
 WATCH_POLL_SEC = 0.25
+
+# The proxy forwards this; absence is normal for direct callers.
+REQUEST_ID_HEADER = "X-ATLAS-Request-ID"
 import os
 import sys
 from pathlib import Path
@@ -265,11 +268,16 @@ class V3Handler(BaseHTTPRequestHandler):
                 print(f"  [SSE ERROR] {e}", flush=True)
 
         scope, stop_watch, watcher = _watch_parent_for(self, "generate")
+        # Trace identity is a JOIN KEY, never authority: it may be missing, it
+        # may repeat, and the invocation id is what makes a pool unique.
+        trace_id = self.headers.get(REQUEST_ID_HEADER, "") or ""
 
         # Run V3 pipeline with streaming progress
         try:
             result = pipeline.run(
                 cancel_scope=scope,
+                trace_request_id=trace_id,
+                v3_invocation_id=scope.invocation_id,
                 problem=problem,
                 task_id=f"gen-{Path(file_path).stem}",
                 progress_callback=emit_progress,
@@ -407,6 +415,7 @@ class V3Handler(BaseHTTPRequestHandler):
                 print(f"  [SSE plan ERROR] {e}", flush=True)
 
         scope, stop_watch, watcher = _watch_parent_for(self, "plan")
+        trace_id = self.headers.get(REQUEST_ID_HEADER, "") or ""
         try:
             plan = generate_plan(
                 user_message=user_message,
