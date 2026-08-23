@@ -1494,7 +1494,8 @@ class V3PipelineService:
             file_path: str = "", build_command: str = "",
             working_dir: str = "/workspace",
             baseline_code: str = "",
-            diagnostic_total_candidates=None) -> Dict[str, Any]:
+            diagnostic_total_candidates=None,
+            cancel_scope=None) -> Dict[str, Any]:
         """Run the full V3 pipeline on a coding problem.
 
         Args:
@@ -1533,7 +1534,8 @@ class V3PipelineService:
                 problem, task_id=task_id, progress_callback=progress_callback,
                 files=files, file_path=file_path, build_command=build_command,
                 working_dir=working_dir, baseline_code=baseline_code,
-                diagnostic_total_candidates=_diag_floor, _capture=capture)
+                diagnostic_total_candidates=_diag_floor, _capture=capture,
+                cancel_scope=cancel_scope)
             _ensure_delivered_evidence(result, file_path=file_path, problem=problem)
             return result
         except Exception as e:
@@ -1592,7 +1594,8 @@ class V3PipelineService:
                   file_path: str = "", build_command: str = "",
                   working_dir: str = "/workspace", baseline_code: str = "",
                   diagnostic_total_candidates: int = 0,
-                  _capture: Optional["_PoolCapture"] = None) -> Dict[str, Any]:
+                  _capture: Optional["_PoolCapture"] = None,
+                  cancel_scope=None) -> Dict[str, Any]:
         """The pipeline body — see run() for the argument contract.
 
         `_capture` is the benchmark-only pool sink run() owns; it observes
@@ -1661,12 +1664,19 @@ class V3PipelineService:
             hits BrokenPipeError; a dead client must not keep burning GPU."""
             if getattr(progress_callback, "disconnected", False):
                 raise adapters.ClientDisconnected(f"client disconnected during task {task_id}")
+            if cancel_scope is not None and cancel_scope.cancelled:
+                raise adapters.Cancelled(f"request cancelled during task {task_id}")
 
         # The adapter refuses to start a generation that cannot finish
         # before the cap, so every phase and every loop inside one is
         # covered by a single check rather than a boundary guard each.
         _budget_ms = _remaining_budget_ms(start)
         llm = adapters.LLMAdapter(progress_callback=emit)
+        # The request's cancellation handle. Every generation this adapter
+        # opens registers with it, so the handler can close them all the
+        # moment the parent goes away -- without waiting to discover a broken
+        # SSE write, which never happens while a call is in flight.
+        llm.cancel_scope = cancel_scope
         # Assigned rather than passed to the constructor: tests substitute
         # their own LLM doubles here, and a new required kwarg would break
         # every one of them for a value only the real adapter reads.

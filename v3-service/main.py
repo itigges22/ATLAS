@@ -17,6 +17,10 @@ tooling), planning.py (/v3/plan), and pipeline.py (the orchestrator).
 """
 
 import json
+import uuid
+import threading
+import socket
+import select
 import os
 import sys
 from pathlib import Path
@@ -208,9 +212,44 @@ class V3Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 print(f"  [SSE ERROR] {e}", flush=True)
 
+        # Parent-disconnect detection that does not wait on an output write.
+        #
+        # This handler is synchronous, so nothing notices the caller leaving
+        # until the next SSE write fails -- and while a generation is in
+        # flight there is no write. A watcher on the request socket sees the
+        # peer's EOF immediately and cancels the scope, which closes every
+        # outbound inference connection this invocation opened.
+        scope = adapters.CancelScope(invocation_id=str(uuid.uuid4()))
+        stop_watch = threading.Event()
+
+        def _watch_parent():
+            sock = self.connection
+            while not stop_watch.is_set():
+                try:
+                    r, _, _ = select.select([sock], [], [], 0.25)
+                except (OSError, ValueError):
+                    break
+                if not r:
+                    continue
+                try:
+                    if sock.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b"":
+                        closed = scope.cancel()
+                        print(f"[generate] parent disconnected; cancelled "
+                              f"{closed} in-flight generation(s)", flush=True)
+                        return
+                except BlockingIOError:
+                    continue
+                except (OSError, ValueError):
+                    scope.cancel()
+                    return
+
+        watcher = threading.Thread(target=_watch_parent, daemon=True)
+        watcher.start()
+
         # Run V3 pipeline with streaming progress
         try:
             result = pipeline.run(
+                cancel_scope=scope,
                 problem=problem,
                 task_id=f"gen-{Path(file_path).stem}",
                 progress_callback=emit_progress,
@@ -223,9 +262,18 @@ class V3Handler(BaseHTTPRequestHandler):
                 # only by the diagnostic capture.
                 baseline_code=baseline_code,
             )
-        except adapters.ClientDisconnected as e:
+        except (adapters.ClientDisconnected, adapters.Cancelled) as e:
             print(f"[generate] pipeline aborted: {e}", flush=True)
             return
+        finally:
+            # The invocation owns its scope: cancel anything still open, stop
+            # the watcher, and let no connection outlive the handler.
+            stop_watch.set()
+            leaked = scope.cancel()
+            if leaked:
+                print(f"[generate] closed {leaked} connection(s) still open at "
+                      f"handler exit", flush=True)
+            watcher.join(timeout=2)
 
         # If baseline code was provided and pipeline didn't produce anything better,
         # use the baseline

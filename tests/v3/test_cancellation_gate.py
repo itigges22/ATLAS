@@ -101,3 +101,112 @@ def test_the_walk4_shape_starts_no_late_call():
     with pytest.raises(adapters.ClientDisconnected):
         a("prompt", 0.7, 128, 22)
     assert len(sent) == 22, "the late call was dispatched anyway"
+
+
+# --- request-scoped cancellation ----------------------------------------------
+#
+# The dispatch guard above only helps when something already noticed the client
+# left. While a generation is in flight nothing is written, so nothing notices.
+# Measured against a real V3 service over a real socket: an in-flight call ran
+# its full 25s with the upstream still seeing a connected client, and a further
+# call started afterwards. The scope is the signal that does not wait for a
+# broken write, and closing the registered connection is what actually stops
+# the upstream.
+
+
+class FakeConn:
+    def __init__(self):
+        self.closed = 0
+
+    def close(self):
+        self.closed += 1
+
+
+def test_cancel_closes_every_live_connection():
+    scope = adapters.CancelScope("inv-1")
+    a, b = FakeConn(), FakeConn()
+    assert scope.register(a) and scope.register(b)
+    assert scope.cancel() == 2
+    assert a.closed == 1 and b.closed == 1
+    assert scope.cancelled
+
+
+def test_cancel_is_idempotent():
+    scope = adapters.CancelScope("inv-1")
+    c = FakeConn()
+    scope.register(c)
+    scope.cancel()
+    scope.cancel()
+    assert c.closed == 1, "a second cancel re-closed a connection it no longer owns"
+
+
+def test_register_after_cancel_is_refused():
+    scope = adapters.CancelScope("inv-1")
+    scope.cancel()
+    assert scope.register(FakeConn()) is False, "a call opened after cancellation"
+
+
+def test_one_scope_never_touches_another():
+    mine, theirs = adapters.CancelScope("a"), adapters.CancelScope("b")
+    ours, yours = FakeConn(), FakeConn()
+    mine.register(ours)
+    theirs.register(yours)
+    mine.cancel()
+    assert ours.closed == 1 and yours.closed == 0
+    assert theirs.cancelled is False
+
+
+def test_dispatch_refused_on_a_cancelled_scope_without_any_sse_signal():
+    sent = []
+    cb = Callback(disconnected=False)      # nothing ever noticed a broken write
+    a = adapter(cb, sent)
+    a.cancel_scope = adapters.CancelScope("inv-1")
+    a.cancel_scope.cancel()
+    with pytest.raises(adapters.Cancelled):
+        a("prompt", 0.7, 128, 42)
+    assert sent == []
+
+
+def test_no_scope_means_no_cancellation_path():
+    """Bench and CLI callers have no request; they must be unaffected."""
+    sent = []
+    a = adapter(Callback(), sent)
+    assert a.cancel_scope is None
+    assert a("prompt", 0.7, 128, 42)[0]
+    assert sent == [1]
+
+
+def test_unregister_leaves_the_scope_usable():
+    scope = adapters.CancelScope("inv-1")
+    c = FakeConn()
+    scope.register(c)
+    scope.unregister(c)
+    assert scope.cancel() == 0
+    assert c.closed == 0, "an unregistered connection was closed by cancel"
+
+
+def test_concurrent_register_and_cancel_never_leaks():
+    import threading as _t
+    scope = adapters.CancelScope("inv-1")
+    conns, leaked = [], []
+
+    def worker():
+        c = FakeConn()
+        if scope.register(c):
+            conns.append(c)
+        else:
+            leaked.append(c)
+
+    threads = [_t.Thread(target=worker) for _ in range(32)]
+    for t in threads[:16]:
+        t.start()
+    for t in threads[:16]:
+        t.join()
+    scope.cancel()
+    for t in threads[16:]:
+        t.start()
+    for t in threads[16:]:
+        t.join()
+    assert all(c.closed == 1 for c in conns), "a registered connection survived cancel"
+    assert all(c.closed == 0 for c in leaked)
+    assert len(conns) + len(leaked) == 32

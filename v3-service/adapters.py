@@ -7,8 +7,11 @@ import os
 import re
 import threading
 import time
+import contextlib
+import http.client
 import urllib.request
 import urllib.error
+import urllib.parse
 from typing import Any, Dict, List, Optional, Tuple
 
 from stages.llm_client import chatml_to_messages
@@ -176,6 +179,9 @@ class LLMAdapter:
         self.total_tokens = 0
         self.total_time_ms = 0.0
         self._progress = progress_callback
+        # Request-scoped cancellation. None for callers with no request
+        # (bench, CLI): they are never cancelled and must not be affected.
+        self.cancel_scope = None
         self.thinking = thinking
         # Monotonic wall-clock (time.time()) after which no new generation
         # may start. None leaves the adapter unbounded, which is what the
@@ -260,6 +266,10 @@ class LLMAdapter:
         if getattr(self._progress, "disconnected", False):
             raise ClientDisconnected(
                 "client disconnected; refusing to start another generation")
+        # The scope is the signal that does not depend on discovering a broken
+        # output socket: the handler cancels it the moment the parent goes.
+        if self.cancel_scope is not None and self.cancel_scope.cancelled:
+            raise Cancelled("request cancelled; refusing to start another generation")
         max_tokens = self._budget_max_tokens(max_tokens)
         with LLMAdapter._counter_lock:
             self.call_count += 1
@@ -317,6 +327,42 @@ class LLMAdapter:
             self.total_tokens += tokens
         return content, tokens, elapsed_ms
 
+    @contextlib.contextmanager
+    def _open_inference(self, payload: bytes):
+        """One inference connection, registered with the request's scope.
+
+        Registration is the cancellation handle. A scope already cancelled
+        refuses to open at all, so no call can slip through between the
+        dispatch check and the socket.
+        """
+        parsed = urllib.parse.urlsplit(INFERENCE_URL)
+        host, port = parsed.hostname or "127.0.0.1", parsed.port
+        if parsed.scheme == "https":
+            conn = http.client.HTTPSConnection(host, port, timeout=600)
+        else:
+            conn = http.client.HTTPConnection(host, port, timeout=600)
+        scope = self.cancel_scope
+        if scope is not None and not scope.register(conn):
+            conn.close()
+            raise Cancelled("request cancelled before the connection opened")
+        try:
+            path = (parsed.path or "") + "/v1/chat/completions"
+            conn.request("POST", path, body=payload, headers=_service_headers())
+            resp = conn.getresponse()
+            if resp.status != 200:
+                detail = resp.read()[:200]
+                raise urllib.error.HTTPError(
+                    INFERENCE_URL, resp.status, detail.decode("utf-8", "replace"),
+                    hdrs=None, fp=None)
+            yield resp
+        finally:
+            if scope is not None:
+                scope.unregister(conn)
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+
     def _send(self, body: dict, call_no: int = 0) -> dict:
         """Send to llama-server via /v1/chat/completions.
 
@@ -363,15 +409,17 @@ class LLMAdapter:
         if "seed" in body:
             chat_body["seed"] = body["seed"]
 
-        req = urllib.request.Request(
-            f"{INFERENCE_URL}/v1/chat/completions",
-            data=json.dumps(chat_body).encode(),
-            headers=_service_headers(),
-        )
+        payload = json.dumps(chat_body).encode()
         for attempt in range(5):
             try:
                 with LLMAdapter._slots:
-                    with urllib.request.urlopen(req, timeout=600) as resp:
+                    # http.client, not urlopen: the connection object exists
+                    # BEFORE the request is sent, so a cancelling thread has a
+                    # handle at every point -- waiting for response headers,
+                    # mid-stream, and deep inside a long generation. urlopen
+                    # offers no handle until headers arrive, which is exactly
+                    # the window a cancellation has to survive.
+                    with self._open_inference(payload) as resp:
                         if not chat_body["stream"]:
                             data = json.loads(resp.read())
                             # Convert chat response to completions format
@@ -465,6 +513,69 @@ class BudgetExhausted(Exception):
     The pipeline catches this and returns its best candidate so far, which is
     the contract an anytime algorithm owes its caller.
     """
+
+
+class CancelScope:
+    """Request-scoped cancellation for one V3 invocation.
+
+    V3 is a synchronous server, so there is no task tree to cancel. What it
+    does have is a set of live outbound connections, and closing those is what
+    actually stops work: a blocked read returns, and the upstream sees its
+    client go away.
+
+    Measured before this existed: a generation dispatched at a parent's work
+    deadline ran 39.8s to completion after the agent request had returned,
+    and the inference stub recorded its client as still connected the whole
+    time. Waiting for a broken SSE write to notice cannot fix that -- while a
+    call is in flight nothing is being written.
+
+    Cancellation is idempotent, scoped to one invocation, and never reaches
+    another request's connections.
+    """
+
+    def __init__(self, invocation_id: str = ""):
+        self.invocation_id = invocation_id
+        self._lock = threading.Lock()
+        self._cancelled = False
+        self._live = set()
+        self.closed_on_cancel = 0
+
+    @property
+    def cancelled(self) -> bool:
+        with self._lock:
+            return self._cancelled
+
+    def register(self, conn) -> bool:
+        """Track a live connection. Returns False if already cancelled, in
+        which case the caller must not proceed."""
+        with self._lock:
+            if self._cancelled:
+                return False
+            self._live.add(conn)
+            return True
+
+    def unregister(self, conn) -> None:
+        with self._lock:
+            self._live.discard(conn)
+
+    def cancel(self) -> int:
+        """Close every live connection. Safe to call repeatedly."""
+        with self._lock:
+            self._cancelled = True
+            live, self._live = list(self._live), set()
+        for conn in live:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001 - a close that fails is still cancelled
+                pass
+        with self._lock:
+            self.closed_on_cancel += len(live)
+        return len(live)
+
+
+class Cancelled(Exception):
+    """Raised where a cancelled scope stops work, so callers can tell an
+    intentional stop from a transport failure."""
 
 
 class ClientDisconnected(Exception):
