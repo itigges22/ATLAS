@@ -21,6 +21,9 @@ import uuid
 import threading
 import socket
 import select
+
+# Watcher poll interval, included in every measured cancellation latency.
+WATCH_POLL_SEC = 0.25
 import os
 import sys
 from pathlib import Path
@@ -68,6 +71,55 @@ PORT = int(os.environ.get("ATLAS_V3_PORT", "8070"))
 # --- HTTP Handler (SSE streaming) --------------------------------------------
 
 pipeline = V3PipelineService()
+
+
+def _watch_parent_for(handler, label):
+    """Request-scoped cancellation plus an EOF watcher on the parent socket.
+
+    Shared by every production handler that runs inference. A handler that
+    forgets this leaves its generations uncancellable -- exactly the defect
+    this exists to prevent -- so a structural test asserts each one calls it.
+
+    MSG_PEEK is deliberate: the watcher must never consume a byte the handler
+    still needs, and it starts only after the request body has been read.
+    """
+    scope = adapters.CancelScope(invocation_id=str(uuid.uuid4()))
+    stop_watch = threading.Event()
+
+    def _watch():
+        sock = handler.connection
+        while not stop_watch.is_set():
+            try:
+                r, _, _ = select.select([sock], [], [], WATCH_POLL_SEC)
+            except (OSError, ValueError):
+                break
+            if not r:
+                continue
+            try:
+                if sock.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b"":
+                    closed = scope.cancel()
+                    print(f"[{label}] parent disconnected; cancelled {closed} "
+                          f"in-flight generation(s)", flush=True)
+                    return
+            except BlockingIOError:
+                continue
+            except (OSError, ValueError):
+                scope.cancel()
+                return
+
+    t = threading.Thread(target=_watch, daemon=True)
+    t.start()
+    return scope, stop_watch, t
+
+
+def _release_scope(scope, stop_watch, watcher, label):
+    """Idempotent teardown: stop the watcher, close anything still open."""
+    stop_watch.set()
+    leaked = scope.cancel()
+    if leaked:
+        print(f"[{label}] closed {leaked} connection(s) still open at handler exit",
+              flush=True)
+    watcher.join(timeout=2)
 
 
 class V3Handler(BaseHTTPRequestHandler):
@@ -212,39 +264,7 @@ class V3Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 print(f"  [SSE ERROR] {e}", flush=True)
 
-        # Parent-disconnect detection that does not wait on an output write.
-        #
-        # This handler is synchronous, so nothing notices the caller leaving
-        # until the next SSE write fails -- and while a generation is in
-        # flight there is no write. A watcher on the request socket sees the
-        # peer's EOF immediately and cancels the scope, which closes every
-        # outbound inference connection this invocation opened.
-        scope = adapters.CancelScope(invocation_id=str(uuid.uuid4()))
-        stop_watch = threading.Event()
-
-        def _watch_parent():
-            sock = self.connection
-            while not stop_watch.is_set():
-                try:
-                    r, _, _ = select.select([sock], [], [], 0.25)
-                except (OSError, ValueError):
-                    break
-                if not r:
-                    continue
-                try:
-                    if sock.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b"":
-                        closed = scope.cancel()
-                        print(f"[generate] parent disconnected; cancelled "
-                              f"{closed} in-flight generation(s)", flush=True)
-                        return
-                except BlockingIOError:
-                    continue
-                except (OSError, ValueError):
-                    scope.cancel()
-                    return
-
-        watcher = threading.Thread(target=_watch_parent, daemon=True)
-        watcher.start()
+        scope, stop_watch, watcher = _watch_parent_for(self, "generate")
 
         # Run V3 pipeline with streaming progress
         try:
@@ -266,14 +286,7 @@ class V3Handler(BaseHTTPRequestHandler):
             print(f"[generate] pipeline aborted: {e}", flush=True)
             return
         finally:
-            # The invocation owns its scope: cancel anything still open, stop
-            # the watcher, and let no connection outlive the handler.
-            stop_watch.set()
-            leaked = scope.cancel()
-            if leaked:
-                print(f"[generate] closed {leaked} connection(s) still open at "
-                      f"handler exit", flush=True)
-            watcher.join(timeout=2)
+            _release_scope(scope, stop_watch, watcher, "generate")
 
         # If baseline code was provided and pipeline didn't produce anything better,
         # use the baseline
@@ -393,6 +406,7 @@ class V3Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 print(f"  [SSE plan ERROR] {e}", flush=True)
 
+        scope, stop_watch, watcher = _watch_parent_for(self, "plan")
         try:
             plan = generate_plan(
                 user_message=user_message,
@@ -401,6 +415,7 @@ class V3Handler(BaseHTTPRequestHandler):
                 existing_files=body.get("existing_files") or [],
                 n_candidates=n_candidates,
                 progress_callback=emit_progress,
+                cancel_scope=scope,
             )
         except Exception as e:
             print(f"  [plan ERROR] {e}", flush=True)
@@ -411,8 +426,11 @@ class V3Handler(BaseHTTPRequestHandler):
                 "rationale": f"planner failed: {e}",
                 "reasons": [str(e)],
             }
+        finally:
+            _release_scope(scope, stop_watch, watcher, "plan")
 
         final = json.dumps(plan)
+
         try:
             self.wfile.write(f"event: result\ndata: {final}\n\n".encode())
             self.wfile.write(b"data: [DONE]\n\n")

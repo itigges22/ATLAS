@@ -414,6 +414,7 @@ def generate_plan(
     existing_files: Optional[List[str]] = None,
     n_candidates: int = 3,
     progress_callback=None,
+    cancel_scope=None,
 ) -> dict:
     """Generate a plan via diverse LLM sampling + heuristic scoring.
 
@@ -453,6 +454,10 @@ def generate_plan(
     plan_thinking = os.environ.get("ATLAS_PLAN_THINKING", "0").lower() in ("1", "true", "yes")
     plan_max_tokens = 8192 if plan_thinking else 2048
     llm = adapters.LLMAdapter(progress_callback=progress_callback, thinking=plan_thinking)
+    # Same request-scoped cancellation as the generate path: a planner call is
+    # inference like any other, and an uncancellable one outlives its parent
+    # exactly the same way.
+    llm.cancel_scope = cancel_scope
     # What is already on disk. The proxy sends the listing because this
     # service has no /workspace mount — walking working_dir here finds
     # nothing, which is why the first version of this check never fired.
