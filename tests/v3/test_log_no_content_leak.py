@@ -253,3 +253,61 @@ def test_private_evidence_still_retains_candidate_bytes():
     assert "code_b64" in src, "the pool capture stopped retaining candidate bytes"
     assert "code_sha256" in src, "the pool capture stopped retaining the content hash"
     assert hasattr(pipeline, "_PoolCapture")
+
+
+# --- the SSE progress emitter ------------------------------------------------
+# The first-delta sample was not the only content-bearing log. emit_progress
+# logged `detail[:80]`, and for a token stage the detail IS model output --
+# and because the stdout wrapper writes one record per line, a multi-line
+# token became several records, each carrying candidate source. 84 of them
+# survived in a rehearsal taken AFTER the first-delta fix.
+
+def _safe_detail():
+    import main
+    return main._safe_progress_detail
+
+
+def test_token_stage_detail_is_never_logged_verbatim():
+    safe = _safe_detail()
+    out = safe("token", CANDIDATE_CODE)
+    assert CANDIDATE_SENTINEL not in out
+    assert out.startswith("<") and "chars>" in out
+
+
+def test_multiline_detail_is_reduced_whatever_the_stage():
+    """A description of progress does not span lines; content does."""
+    safe = _safe_detail()
+    out = safe("some_future_stage", f"line one\n{CANDIDATE_SENTINEL}\nline three")
+    assert CANDIDATE_SENTINEL not in out
+    assert "chars>" in out
+
+
+def test_ordinary_metadata_detail_still_reads_normally():
+    safe = _safe_detail()
+    assert safe("plansearch_done", "2 candidates from PlanSearch") == \
+        "2 candidates from PlanSearch"
+    assert safe("llm_end", "125 tok · 2ms") == "125 tok · 2ms"
+
+
+def test_every_sse_debug_print_goes_through_the_reducer():
+    """Structural: a new SSE debug line that formats `detail` directly would
+    reintroduce exactly this leak."""
+    import ast
+    src = open(os.path.join(V3, "main.py"), encoding="utf-8").read()
+    bad = []
+    for i, line in enumerate(src.splitlines(), start=1):
+        if "[SSE" not in line or "print(" not in line:
+            continue
+        if "detail" in line and "_safe_progress_detail" not in line:
+            bad.append((i, line.strip()))
+    assert not bad, f"SSE debug line logs detail directly: {bad}"
+    ast.parse(src)
+
+
+def test_sse_emitter_payload_to_the_proxy_is_unchanged():
+    """Only the local debug line is reduced. The SSE event the proxy receives
+    must still carry the full detail, or model-visible behaviour changes."""
+    src = open(os.path.join(V3, "main.py"), encoding="utf-8").read()
+    assert 'payload = {"stage": stage, "detail": detail}' in src, (
+        "the SSE payload stopped carrying the full detail; that is a "
+        "behaviour change, not an observability change")

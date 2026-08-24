@@ -130,6 +130,29 @@ def _release_scope(scope, stop_watch, watcher, label):
     watcher.join(timeout=2)
 
 
+# Progress stages whose `detail` IS model output rather than a description of
+# it. Logging those verbatim puts candidate source into operational records --
+# and because the stdout wrapper emits one record per line, a multi-line token
+# becomes several records, each carrying source. Measured: 84 such records in
+# one 63-cell rehearsal, after the first-delta sample had already been fixed.
+#
+# The SSE payload the proxy receives is unchanged. Only the local debug line is
+# reduced to metadata.
+_CONTENT_BEARING_STAGES = frozenset({"token", "v3_token", "reasoning"})
+
+
+def _safe_progress_detail(stage, detail):
+    """What may be logged for a progress event: never model output.
+
+    Fail closed twice over -- a named content stage is always reduced, and so
+    is any detail that spans lines, since a description of progress does not.
+    """
+    text = detail if isinstance(detail, str) else str(detail)
+    if stage in _CONTENT_BEARING_STAGES or "\n" in text:
+        return f"<{len(text)} chars>"
+    return text[:80]
+
+
 class V3Handler(BaseHTTPRequestHandler):
     def _authorized(self) -> bool:
         """Token check for every route except /health. Constant-time
@@ -264,7 +287,8 @@ class V3Handler(BaseHTTPRequestHandler):
                 self.wfile.write(f"data: {event}\n\n".encode())
                 self.wfile.flush()
                 # Also log for debugging
-                print(f"  [SSE] {stage}: {detail[:80]}", flush=True)
+                print(f"  [SSE] {stage}: {_safe_progress_detail(stage, detail)}",
+                      flush=True)
             except (BrokenPipeError, ConnectionResetError):
                 # Client gone — flag it so pipeline.run aborts at the
                 # next phase boundary instead of grinding on.
@@ -412,7 +436,8 @@ class V3Handler(BaseHTTPRequestHandler):
             try:
                 self.wfile.write(f"data: {event}\n\n".encode())
                 self.wfile.flush()
-                print(f"  [SSE plan] {stage}: {detail[:80]}", flush=True)
+                print(f"  [SSE plan] {stage}: {_safe_progress_detail(stage, detail)}",
+                      flush=True)
             except BrokenPipeError:
                 # best-effort: swallow on failure (caller continues)
                 pass
