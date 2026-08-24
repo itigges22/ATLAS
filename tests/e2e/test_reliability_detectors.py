@@ -9,6 +9,7 @@ stream, so a detector cannot pass by flagging everything.
 No live stack: streams are literals and the workspace is a tmp_path.
 """
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -502,12 +503,122 @@ def test_the_proxy_declares_the_field():
     assert 'BypassV3         bool   `json:"bypass_v3,omitempty"`' in agent
 
 
+# Every symbol through which a request's V3 capability mode can be read. A
+# mutation gate that mentions any of them has stopped being mode-independent.
+_V3_MODE_SYMBOLS = ("BypassV3", "V3Mode", "effectiveV3Mode", "V3Bypassed",
+                    "V3GenerationEnabled", "V3PlanningEnabled")
+
+# The gate implementations, and the v3-service route each one must still reach.
+_MUTATION_GATES = {
+    "checkStructuralUnresolved": "/internal/structural_check",
+    "embeddedScriptOutcome": "/internal/embedded_script_check",
+}
+
+# The bridge call that dispatches candidate generation. Everything upstream of
+# it is what "V3 generation" means at the proxy.
+_GENERATION_BRIDGE = "callV3GenerateStreaming("
+
+
+def _go_funcs(src):
+    """{name: body} for every top-level func in a gofmt-formatted Go file.
+
+    gofmt puts `func` in column 0 and closes a top-level declaration with a
+    lone `}` in column 0, so this needs no brace matching and cannot be misled
+    by a brace inside a string literal or a comment.
+    """
+    funcs, lines = {}, src.splitlines()
+    for i, line in enumerate(lines):
+        if not line.startswith("func "):
+            continue
+        sig = line[len("func "):]
+        if sig.startswith("("):                     # method receiver
+            sig = sig[sig.index(")") + 1:].lstrip()
+        name = re.match(r"[A-Za-z_][A-Za-z0-9_]*", sig)
+        if not name:
+            continue
+        for j in range(i + 1, len(lines)):
+            if lines[j] == "}":
+                funcs[name.group(0)] = "\n".join(lines[i:j + 1])
+                break
+    return funcs
+
+
+def _proxy_funcs():
+    """{(file, func): body} across the proxy's non-test sources."""
+    out = {}
+    for path in sorted((REPO / "proxy").glob("*.go")):
+        if path.name.endswith("_test.go"):
+            continue
+        for name, body in _go_funcs(path.read_text()).items():
+            out[(path.name, name)] = body
+    return out
+
+
 def test_disabling_v3_does_not_disable_the_mutation_gates():
-    """ctx.V3URL still reaches the structural and embedded checks; only the
-    generation call sites consult BypassV3."""
-    gates = (REPO / "proxy" / "gates.go").read_text()
-    tools = (REPO / "proxy" / "tools.go").read_text()
-    for probe in ("/internal/structural_check", "/internal/embedded_script_check"):
-        block = gates.split(probe)[0].rsplit("func ", 1)[1]
-        assert "BypassV3" not in block, f"{probe} must not consult BypassV3"
-    assert tools.count("!ctx.BypassV3") >= 2, "the generation sites do consult it"
+    """Turning V3 candidate generation off must leave every mutation gate on.
+
+    Pinned to the property, not to a spelling. The previous version counted
+    literal `!ctx.BypassV3` expressions; fb45b74 moved the generation call
+    sites to the typed predicate `ctx.V3GenerationEnabled()` and the count
+    went to zero, so the test failed while the property it named still held.
+    A count would have gone vacuous just as quietly had it been relaxed.
+
+    Three facts, each read out of the source rather than assumed:
+
+      1. the gate implementations name no V3-mode symbol at all -- they gate
+         on ctx.V3URL, so they run identically in every mode;
+      2. every function that reaches the generation bridge is called only from
+         a function that consults ctx.V3GenerationEnabled() first;
+      3. the demo-baseline relaxation is off-mode only, so planner_only turns
+         generation off and keeps the whole guarded write path.
+    """
+    sources = {p.name: p.read_text()
+               for p in (REPO / "proxy").glob("*.go")
+               if not p.name.endswith("_test.go")}
+
+    # 1. the gates are mode-independent
+    gates = _go_funcs(sources["gates.go"])
+    for fn, route in _MUTATION_GATES.items():
+        body = gates.get(fn)
+        assert body, f"{fn} is gone; repoint this test at its replacement"
+        assert route in body, f"{fn} no longer reaches {route}"
+        leaked = [s for s in _V3_MODE_SYMBOLS if s in body]
+        assert not leaked, (
+            f"{fn} consults {leaked}; a mutation gate must depend on "
+            "ctx.V3URL alone so that disabling V3 cannot disable it")
+
+    # 2. every generation dispatch is guarded, before the call, by the typed
+    #    predicate -- and by nothing else
+    funcs = _proxy_funcs()
+    dispatchers = {name for (_f, name), body in funcs.items()
+                   if _GENERATION_BRIDGE in body.split("\n", 1)[1]}
+    dispatchers.discard(_GENERATION_BRIDGE.rstrip("("))
+    assert dispatchers, (
+        "no function dispatches V3 candidate generation; repoint this test "
+        f"at whatever replaced {_GENERATION_BRIDGE}")
+    for dispatcher in sorted(dispatchers):
+        callers = {(f, n): b for (f, n), b in funcs.items()
+                   if n != dispatcher and dispatcher + "(" in b.split("\n", 1)[1]}
+        assert callers, f"{dispatcher} is unreachable from any tool"
+        for (fname, caller), body in sorted(callers.items()):
+            guard = body.find("ctx.V3GenerationEnabled()")
+            call = body.find(dispatcher + "(", body.find("\n"))
+            assert guard != -1, (
+                f"{fname}:{caller} reaches {dispatcher} without consulting "
+                "ctx.V3GenerationEnabled()")
+            assert guard < call, (
+                f"{fname}:{caller} calls {dispatcher} before it consults "
+                "ctx.V3GenerationEnabled()")
+            assert "ctx.BypassV3" not in body, (
+                f"{fname}:{caller} reads the legacy boolean directly; the "
+                "typed predicate is the only authority at a generation site")
+
+    # 3. planner_only disables generation and keeps the gates
+    types = _go_funcs(sources["types.go"])
+    assert "V3ModeOff" in types["V3Bypassed"], (
+        "V3Bypassed must name the off mode it relaxes for")
+    assert "V3ModePlannerOnly" not in types["V3Bypassed"], (
+        "the demo-baseline relaxation must be off-mode only; planner_only "
+        "executes through the ordinary guarded write path")
+    assert "V3ModeFull" in types["V3GenerationEnabled"], (
+        "only full mode may dispatch candidate generation")
