@@ -64,18 +64,20 @@ LLMCallable = Callable[[str, float, int, Optional[int]], Tuple[str, int, float]]
 _AUTH_STATUSES = frozenset({401, 403})
 
 
-def _current_request_id() -> str:
+def _current_identity():
+    """(request_id, invocation_id) captured on the owning request thread."""
     try:
-        from structured_log import get_request_id
-        return get_request_id()
+        from structured_log import current_identity
+        return current_identity()
     except ImportError:
-        return ""
+        return "", ""
 
 
-def _set_request_id(rid: str) -> None:
+def _bind_identity(identity) -> None:
+    """Re-establish the owner's identity inside a worker thread."""
     try:
-        from structured_log import set_request_id
-        set_request_id(rid)
+        from structured_log import bind_identity
+        bind_identity(identity[0], identity[1])
     except ImportError:
         pass
 
@@ -644,11 +646,13 @@ class PlanSearch:
             return out
 
         # Captured on the owning request thread; a worker that reads the
-        # ContextVar directly would read the default, not this.
-        owner_rid = _current_request_id()
+        # ContextVars directly would read the defaults, not these. Both
+        # identities travel, so a worker's log line joins to the same
+        # invocation as the request thread's.
+        owner_identity = _current_identity()
 
         def _in_worker(idx, item):
-            _set_request_id(owner_rid)
+            _bind_identity(owner_identity)
             return fn(idx, item)
 
         results = []
