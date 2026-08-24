@@ -112,7 +112,7 @@ def test_candidate_source_never_reaches_operational_logs(upstream):
     assert CANDIDATE_SENTINEL in content, "the stream did not deliver the candidate"
     assert CANDIDATE_SENTINEL not in logs, (
         "candidate source appeared in an operational log:\n"
-        + "\n".join(l for l in logs.splitlines() if CANDIDATE_SENTINEL in l)[:600])
+        + "\n".join(x for x in logs.splitlines() if CANDIDATE_SENTINEL in x)[:600])
 
 
 def test_user_prompt_never_reaches_operational_logs(upstream):
@@ -120,7 +120,7 @@ def test_user_prompt_never_reaches_operational_logs(upstream):
     _out, logs = _run_capturing(llm, _prompt())
     assert PROMPT_SENTINEL not in logs, (
         "user prompt text appeared in an operational log:\n"
-        + "\n".join(l for l in logs.splitlines() if PROMPT_SENTINEL in l)[:600])
+        + "\n".join(x for x in logs.splitlines() if PROMPT_SENTINEL in x)[:600])
 
 
 # --- 3: authorization material ----------------------------------------------
@@ -176,7 +176,10 @@ def test_two_concurrent_requests_stay_attributed(upstream):
 
     ta = threading.Thread(target=one, args=("A",))
     tb = threading.Thread(target=one, args=("B",))
-    ta.start(); tb.start(); ta.join(); tb.join()
+    ta.start()
+    tb.start()
+    ta.join()
+    tb.join()
     assert seen["A"][0] == ("req-A", "inv-A")
     assert seen["B"][0] == ("req-B", "inv-B")
     for tag in ("A", "B"):
