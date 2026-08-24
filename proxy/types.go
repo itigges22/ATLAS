@@ -816,7 +816,15 @@ type AgentContext struct {
 	// file/tool agent and its guardrails still run so /demo can compare
 	// executable outputs from the same model without falsely presenting
 	// the left side as a bare chat completion.
+	//
+	// It is the wire-compatible spelling of V3ModeOff. Read V3Mode, not this
+	// field: planning and generation are separate capabilities and a single
+	// boolean cannot express one without the other.
 	BypassV3 bool
+
+	// V3Mode says which V3 capabilities this request may use. Derived once,
+	// at request decode, from an explicit v3_mode or from BypassV3.
+	V3Mode V3Mode
 
 	// DisableFreshSlot skips the slot-erase at the start of the
 	// agent loop so the demo's pre-warm pass actually survives into the
@@ -1580,4 +1588,89 @@ type PermissionRequest struct {
 	TargetType    string `json:"target_type,omitempty"`
 	ContentSHA256 string `json:"content_sha256,omitempty"`
 	OneTimeOnly   bool   `json:"one_time_only,omitempty"`
+}
+
+// --- V3 capability mode -------------------------------------------------------
+//
+// Planning and candidate generation are separate capabilities that a single
+// bypass boolean conflated. A 2026-08-23 canary measured Arm B (V3 on) against
+// Arm A (V3 off) and found the arms differed in BOTH: bypass disabled the
+// planner as well as the candidate pipeline, so the comparison could not say
+// which one moved the result. V3ModePlannerOnly exists to answer that.
+//
+// A typed mode, not another boolean: "planner-only" must be unable to reach
+// candidate generation by forgetting a negation.
+
+type V3Mode string
+
+const (
+	// V3ModeFull is production behaviour: planning and candidate generation.
+	V3ModeFull V3Mode = "full"
+	// V3ModeOff disables both. The wire spelling bypass_v3=true maps here.
+	V3ModeOff V3Mode = "off"
+	// V3ModePlannerOnly runs the planner and plan-adherence steering, and
+	// executes writes through the ordinary proxy path. Candidate generation,
+	// PlanSearch, DivSampling, candidate sandbox evaluation, repair,
+	// Best-of-K selection, Lens candidate selection and every delivery
+	// attempt stay off. Experimental; never a production default.
+	V3ModePlannerOnly V3Mode = "planner_only"
+)
+
+// ValidV3Mode reports whether s names a mode. An unrecognised value is an
+// error at decode, never a silent fall back to full.
+func ValidV3Mode(s string) bool {
+	switch V3Mode(s) {
+	case V3ModeFull, V3ModeOff, V3ModePlannerOnly:
+		return true
+	}
+	return false
+}
+
+// effectiveV3Mode resolves the zero value.
+//
+// A context built directly -- a struct literal, a test fixture, any caller
+// that does not go through handleAgent's decode -- has an empty V3Mode. That
+// must mean production default, not "no capabilities": reading the zero value
+// as anything else silently disables V3 generation for every such caller,
+// which is a capability regression that compiles and passes review.
+func (c *AgentContext) effectiveV3Mode() V3Mode {
+	if c == nil {
+		return V3ModeFull
+	}
+	if c.V3Mode != "" {
+		return c.V3Mode
+	}
+	// Zero value: fall back to the wire-compatible boolean. Callers that
+	// predate the mode -- tests, /demo, anything building a context directly
+	// -- set BypassV3 and never V3Mode, so reading the mode alone would make
+	// bypass_v3 stop disabling V3 for every one of them. This is the ONLY
+	// place BypassV3 decides anything; every call site asks the predicates.
+	if c.BypassV3 {
+		return V3ModeOff
+	}
+	return V3ModeFull
+}
+
+// V3PlanningEnabled reports whether the pre-flight planner may run.
+func (c *AgentContext) V3PlanningEnabled() bool {
+	if c == nil {
+		return false
+	}
+	return c.effectiveV3Mode() != V3ModeOff
+}
+
+// V3GenerationEnabled reports whether the candidate pipeline may run. Only
+// full mode may generate, score, select or deliver a candidate.
+func (c *AgentContext) V3GenerationEnabled() bool {
+	if c == nil {
+		return false
+	}
+	return c.effectiveV3Mode() == V3ModeFull
+}
+
+// V3Bypassed reports the demo-baseline relaxation: the structural gates that
+// stay ungated so the baseline pane shows the raw model. Planner-only is NOT
+// bypassed -- it executes through the ordinary guarded path.
+func (c *AgentContext) V3Bypassed() bool {
+	return c != nil && c.effectiveV3Mode() == V3ModeOff
 }

@@ -4424,6 +4424,7 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 		SessionAllowedTools []string `json:"session_allowed_tools,omitempty"`
 		// /demo split-pane flags — tags match tui/chat.go's agentRequest.
 		BypassV3         bool   `json:"bypass_v3,omitempty"`          // baseline pane: disable V3 orchestration
+		V3ModeRaw        string `json:"v3_mode,omitempty"`            // explicit capability mode; overrides bypass_v3
 		DisableFreshSlot bool   `json:"disable_fresh_slot,omitempty"` // keep the pre-warmed KV prefix
 		SandboxSubdir    string `json:"sandbox_subdir,omitempty"`     // confine writes to this workspace subdir
 		// What the client declares about the request. Optional, and absent
@@ -4473,6 +4474,23 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 	// Create agent context
 	ctx := NewAgentContext(workingDir, tier)
 	ctx.BypassV3 = req.BypassV3
+	// One derivation, at decode. An explicit mode wins; otherwise bypass_v3
+	// picks off vs full. An unrecognised mode is refused rather than
+	// defaulted -- a typo must not silently enable candidate generation.
+	switch {
+	case req.V3ModeRaw == "":
+		if req.BypassV3 {
+			ctx.V3Mode = V3ModeOff
+		} else {
+			ctx.V3Mode = V3ModeFull
+		}
+	case ValidV3Mode(req.V3ModeRaw):
+		ctx.V3Mode = V3Mode(req.V3ModeRaw)
+	default:
+		writeError(w, http.StatusBadRequest, ErrInvalidInput,
+			fmt.Sprintf("unknown v3_mode %q (want full, off or planner_only)", req.V3ModeRaw))
+		return
+	}
 	ctx.DisableFreshSlot = req.DisableFreshSlot
 	// Stash the host path so resolveAgentPath can translate absolute
 	// host paths the model receives in user prompts (e.g. "fix
@@ -6205,7 +6223,7 @@ func shouldGeneratePlan(ctx *AgentContext, message string) bool {
 	// A V3-bypassed demo request is the baseline side of the comparison.
 	// Running the V3 planner here made that pane visibly orchestrated even
 	// though its file writes bypassed V3 later in the turn.
-	if ctx != nil && ctx.BypassV3 {
+	if !ctx.V3PlanningEnabled() {
 		return false
 	}
 	if ctx.Tier == Tier0Conversational {

@@ -981,7 +981,7 @@ func writeFileTool() *ToolDef {
 			// full timeout on every attempt. Observed live: a degenerating
 			// model emitted markdown bold inside code (`data = [1, 2, **3**]`)
 			// four times, each costing 180s before it was told anything.
-			if fileTier >= Tier2Medium && ctx.V3URL != "" && !ctx.BypassV3 && !iterating {
+			if fileTier >= Tier2Medium && ctx.V3URL != "" && ctx.V3GenerationEnabled() && !iterating {
 				// The regression gate above evaluated these exact bytes
 				// whenever the destination exists, so the evaluation here is
 				// for the case it skipped: a file that does not exist yet,
@@ -1126,7 +1126,7 @@ func writeFileTool() *ToolDef {
 					}
 				}
 			}
-			if ctx.BypassV3 {
+			if ctx.V3Bypassed() {
 				log.Printf("[write_file] V3 bypassed (demo baseline pane) — direct write %s", input.Path)
 			}
 
@@ -1140,7 +1140,7 @@ func writeFileTool() *ToolDef {
 			// skips the gate (fail open) — treating it as empty would count
 			// every pre-existing call as introduced. BypassV3 stays ungated
 			// so the demo baseline pane shows the raw model.
-			if !iterating && !ctx.BypassV3 {
+			if !iterating && !ctx.V3Bypassed() {
 				if original, ok := readOriginalForGate(path); ok {
 					if introduced := editIntroducesUnresolved(ctx, path, original, input.Content); len(introduced) > 0 {
 						log.Printf("[write_file] direct write introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
@@ -2929,7 +2929,7 @@ func structuralEditTool() *ToolDef {
 			// the edit path never consulted it. Measured: three 900s timeout
 			// deaths whose sessions each paid one full V3 run and then
 			// V3-improve on every corrective edit until the clock died.
-			if fileTier >= Tier2Medium && editWarrantsV3(finalContent, cc, ccOK) && ctx.V3URL != "" && !ctx.BypassV3 &&
+			if fileTier >= Tier2Medium && editWarrantsV3(finalContent, cc, ccOK) && ctx.V3URL != "" && ctx.V3GenerationEnabled() &&
 				!isActiveDebugIteration(ctx, input.Path) {
 				log.Printf("[structural_edit] V3 pipeline activating for %s (oldTier=%d newTier=%d max=%d, req_tier=%d, cc=%d) post-structural-edit", input.Path, oldTier, newTier, fileTier, ctx.Tier, cc)
 				improved, meta, err := improveContentWithV3(path, finalContent, ctx)
@@ -4603,7 +4603,7 @@ func resolvePath(path, workingDir string) string {
 // to catch garbage-quoted edits, not to make edits depend on v3-service
 // availability. Returns (false, error) only on a definitive SyntaxError.
 func pycheckViaV3(ctx *AgentContext, path, source string) (bool, string) {
-	if ctx.V3URL == "" || ctx.BypassV3 {
+	if ctx.V3URL == "" || !ctx.V3GenerationEnabled() {
 		return true, ""
 	}
 	body, err := json.Marshal(map[string]string{"path": path, "source": source})
@@ -5570,7 +5570,7 @@ func runEditPipeline(ctx *AgentContext, tool, path, relPath, original, edited st
 			fileTier = refined
 		}
 	}
-	if fileTier < Tier2Medium || !editWarrantsV3(edited, cc, ccOK) || ctx.V3URL == "" || ctx.BypassV3 {
+	if fileTier < Tier2Medium || !editWarrantsV3(edited, cc, ccOK) || ctx.V3URL == "" || !ctx.V3GenerationEnabled() {
 		return edited, meta, nil
 	}
 	// Same debug fast-track the write path has: mid-iteration edits skip the
