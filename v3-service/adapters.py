@@ -530,7 +530,24 @@ class LLMAdapter:
                             if choices:
                                 delta_obj = choices[0].get("delta", {}) or {}
                                 if not first_chunk_logged and delta_obj:
-                                    print(f"  [LLM] first delta keys={list(delta_obj.keys())} sample={json.dumps(delta_obj)[:200]}",
+                                    # Metadata only. This line used to carry a
+                                    # 200-character sample of the delta, which
+                                    # is candidate source: harmless while logs
+                                    # were unstructured and local, and a
+                                    # retained content leak the moment
+                                    # ATLAS_LOG_FORMAT=json makes these records
+                                    # evidence. 84 such records were captured in
+                                    # one 63-cell rehearsal. The diagnostic
+                                    # exists to say which keys a build sends and
+                                    # whether anything arrived; request and
+                                    # invocation identity already join the line
+                                    # to its call, so no sample, prefix, excerpt
+                                    # or encoding of the content is needed.
+                                    _c = delta_obj.get("content")
+                                    _r = delta_obj.get("reasoning_content")
+                                    print(f"  [LLM] first delta keys={sorted(delta_obj.keys())} "
+                                          f"content_chars={len(_c) if isinstance(_c, str) else 0} "
+                                          f"reasoning_chars={len(_r) if isinstance(_r, str) else 0}",
                                           flush=True)
                                     first_chunk_logged = True
                                 delta = delta_obj.get("content", "") or ""
