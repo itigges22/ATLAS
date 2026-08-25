@@ -182,7 +182,13 @@ func TestFencedExtractionHandlesCRLFFenceLine(t *testing.T) {
 // the sanitizer then removed the fence line, and a one-line `print(` landed
 // on disk. Six of twenty create sessions shipped an unparseable file that
 // way, each repeating the identical write for five more turns.
-func TestInlineFencedBodyDetectsTruncation(t *testing.T) {
+// This used to assert that a bare body is a complete file ("bare complete
+// body" -> accepted). That premise is what the sealed Stage-A acquisition
+// disproved: every one of its 42 inlined bodies was bare, so the
+// unterminated-fence branch never ran, and an unframed body that stopped
+// mid-emission was written to disk. A bare body carries no framing evidence
+// in either direction and is now resolved through the sub-call.
+func TestInlineFencedBodyRequiresFramingToProveCompletion(t *testing.T) {
 	cases := []struct {
 		name     string
 		inline   string
@@ -191,14 +197,13 @@ func TestInlineFencedBodyDetectsTruncation(t *testing.T) {
 		{"truncated fence", "```python\nprint(", ""},
 		{"opener only", "```python", ""},
 		{"complete fence", "```python\nprint(\"hi\")\n```", "print(\"hi\")\n"},
-		{"bare complete body", "print(\"hi\")\n", "print(\"hi\")\n"},
+		{"bare body, however finished it looks", "print(\"hi\")\n", ""},
+		{"bare body cut mid-emission", "print(", ""},
 	}
 	for _, c := range cases {
-		got := extractFencedContent(c.inline)
-		if got == "" && strings.Contains(c.inline, "```") {
-			got = "" // truncated: the caller falls back to the sub-call
-		} else if got == "" {
-			got = c.inline // bare body, no fence involved
+		got, ok, _ := resolveInlineFencedBody(c.inline)
+		if !ok {
+			got = ""
 		}
 		if got != c.wantBody {
 			t.Errorf("%s: resolved %q, want %q", c.name, got, c.wantBody)

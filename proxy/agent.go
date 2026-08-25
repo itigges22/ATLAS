@@ -1461,14 +1461,20 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						//     repeated the identical write for five more turns.
 						//     Measured at 6 of 20 create sessions.
 						//
-						// An opening fence with no closing fence is the
-						// signature of the truncated case; fall back to the
-						// sub-call, which is the channel that can carry it.
+						// Only protocol framing decides. An unterminated
+						// fence is one incomplete shape; a BARE body with no
+						// fence at all is the other, and it was accepted
+						// unconditionally until now. Across the sealed
+						// Stage-A run every inlined body was bare, so the
+						// unterminated check never fired once and the
+						// unframed case wrote 1106 truncated bytes that
+						// parsed cleanly. See classifyFencedPayload.
 						inline := strings.TrimLeft(strings.TrimPrefix(trimmed, "@fenced"), "\r\n")
-						if body := extractFencedContent(inline); body != "" {
-							inline = body
-						} else if strings.Contains(inline, "```") {
-							log.Printf("[agent] inline @fenced body for %s is truncated (fence opened, never closed) — falling back to the sub-call", wfInput.Path)
+						resolved, framed, why := resolveInlineFencedBody(inline)
+						if framed {
+							inline = resolved
+						} else {
+							log.Printf("[agent] inline @fenced body for %s does not prove completion (%s) — falling back to the sub-call", wfInput.Path, why)
 							inline = ""
 						}
 						if inline != "" {
@@ -5111,7 +5117,9 @@ func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error)
 		ctx.TotalTokens += tokens
 		ctx.FencedCalls++
 		ctx.FencedTokens += tokens
-		content := extractFencedContent(reply)
+		// The same framing decision the inline path makes, so a reply the
+		// parent would refuse inline cannot be accepted here instead.
+		framing, content := classifyFencedPayload(reply)
 		// The model sometimes wraps the SENTINEL in the fence instead of the
 		// file — measured: "```python\n@fenced\n```". That extracts as
 		// non-empty and would land a file whose entire contents are the word
@@ -5172,8 +5180,8 @@ func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error)
 		// why: the same request reproduced in a short context returns a clean
 		// block every time, so the cause lives in the session context and
 		// cannot be found without the reply.
-		log.Printf("[agent] fenced attempt %d for %s produced no block (%d chars, cut=%q, session failures %d/%d): %q",
-			attempt+1, path, len(reply), ctx.LastStreamCut,
+		log.Printf("[agent] fenced attempt %d for %s produced no usable block (%s, %d chars, cut=%q, session failures %d/%d): %q",
+			attempt+1, path, framing, len(reply), ctx.LastStreamCut,
 			ctx.FencedFailures[fencedKey(ctx, path)], maxFencedFailuresPerPath,
 			truncateStr(reply, 400))
 		msgs = append(msgs, AgentMessage{Role: "assistant", Content: reply},
