@@ -1050,8 +1050,8 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				}
 			}
 			category, feedback := classifyParseFailure(response, ctx.LastStreamCut)
-			log.Printf("[agent] parse error: %v | category=%s raw_len=%d | raw: %q",
-				parseErr, category, len(response), truncateStr(response, 500))
+			log.Printf("[agent] parse error: %v | category=%s raw_len=%d | raw %s",
+				parseErr, category, len(response), safeTextSummary(response))
 			ctx.Stream("error", map[string]string{
 				"error":    "failed to parse model response",
 				"category": category,
@@ -1092,14 +1092,16 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 		// breakpoints.
 		logEvent("info",
 			fmt.Sprintf("[agent] turn=%d type=%s name=%s args=%s",
-				turn, parsed.Type, parsed.Name, truncateStr(string(parsed.Args), 200)),
+				turn, parsed.Type, parsed.Name, safeArgsSummary(parsed.Name, parsed.Args)),
 			requestIDFromContext(ctx.Ctx), nil)
 
 		// When a tool_call still has no args after liftMissingArgs,
 		// log the raw model output so we can see exactly what shape was
 		// emitted — helps catch new alt-shapes the lift logic missed.
 		if parsed.Type == "tool_call" && (len(parsed.Args) == 0 || string(parsed.Args) == "null") {
-			log.Printf("[agent] turn=%d EMPTY ARGS — raw model output: %q", turn, truncateStr(response, 500))
+			// The shape is the diagnosis; the text is model output. A size and
+			// a stable hash correlate two occurrences without reproducing one.
+			log.Printf("[agent] turn=%d EMPTY ARGS — model output %s", turn, safeTextSummary(response))
 		}
 
 		switch parsed.Type {
@@ -2544,7 +2546,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						result.PhaseSolved, result.CandidatesTested, result.WinningScore,
 					),
 				})
-				log.Printf("[agent] V3-verified %s on %s — nudging toward done", parsed.Name, truncateStr(string(parsed.Args), 80))
+				log.Printf("[agent] V3-verified %s on %s — nudging toward done", parsed.Name, safeArgsSummary(parsed.Name, parsed.Args))
 			}
 
 			// Exploration budget: after 4 consecutive read-only calls,
@@ -5183,7 +5185,7 @@ func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error)
 		log.Printf("[agent] fenced attempt %d for %s produced no usable block (%s, %d chars, cut=%q, session failures %d/%d): %q",
 			attempt+1, path, framing, len(reply), ctx.LastStreamCut,
 			ctx.FencedFailures[fencedKey(ctx, path)], maxFencedFailuresPerPath,
-			truncateStr(reply, 400))
+			safeTextSummary(reply))
 		msgs = append(msgs, AgentMessage{Role: "assistant", Content: reply},
 			AgentMessage{Role: "user", Content: fmt.Sprintf(
 				"[system note]: That had no fenced block. Reply with ONE ```%s fenced block containing the complete file, nothing else.", tag)})

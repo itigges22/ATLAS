@@ -955,7 +955,7 @@ func writeFileTool() *ToolDef {
 						baselineCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, prior).aggregate()
 						if !baselineAllowsRepair(baselineCheck) {
 							log.Printf("[write_file] %s: refusing to regress valid content to invalid (%s)",
-								logPath(input.Path), truncateStr(synErr, 80))
+								logPath(input.Path), safeDiagnosticSummary(synErr))
 							// The check examined input.Content, which is exactly
 							// the content that would have been written, and the
 							// refusal happens before any byte reaches disk.
@@ -999,7 +999,7 @@ func writeFileTool() *ToolDef {
 					// the real traceback. See writeNewFileWithWarning.
 					if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
 						log.Printf("[write_file] new file %s does not parse — writing with a warning, skipping V3 (%s)",
-							logPath(input.Path), truncateStr(synErr, 80))
+							logPath(input.Path), safeDiagnosticSummary(synErr))
 						return preflightWarnedWrite(path, input.Path, input.Content, proposalCheck, ctx)
 					}
 					// The strictness on existing files protects WORKING code.
@@ -1019,12 +1019,12 @@ func writeFileTool() *ToolDef {
 						}
 						if baselineAllowsRepair(baselineCheck) {
 							log.Printf("[write_file] %s already broken on disk — landing the repair attempt with a warning (%s)",
-								logPath(input.Path), truncateStr(synErr, 80))
+								logPath(input.Path), safeDiagnosticSummary(synErr))
 							return preflightWarnedWrite(path, input.Path, input.Content, proposalCheck, ctx)
 						}
 					}
 					log.Printf("[write_file] %s does not parse — rejecting before V3 (%s)",
-						logPath(input.Path), truncateStr(synErr, 80))
+						logPath(input.Path), safeDiagnosticSummary(synErr))
 					// Refused before any byte reached disk, on exactly the
 					// content that would have been written. An unreadable
 					// baseline arrives here too: without a baseline there is
@@ -1898,7 +1898,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		fallbackCheck := fallbackSyntaxOutcomeFor(ctx, path, baselineContent).aggregate()
 		if fallbackCheck.Status == ValidationFailed {
 			synErr := fallbackCheck.Detail
-			log.Printf("[write_file] fallback content for %s failed syntax gate: %s", path, truncateStr(synErr, 120))
+			log.Printf("[write_file] fallback content for %s failed syntax gate: %s", logPath(path), safeDiagnosticSummary(synErr))
 			// Refused before any byte reached disk, on exactly the content
 			// that would have been written.
 			return &ToolResult{Success: false,
@@ -2003,7 +2003,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 			// The caller's own content, and it does not parse. Nothing here
 			// authored it and there is no alternative to fall back to.
 			log.Printf("[write_file] fallback content for %s does not parse: %s",
-				logPath(path), truncateStr(deliveredCheck.Detail, 120))
+				logPath(path), safeDiagnosticSummary(deliveredCheck.Detail))
 			return &ToolResult{Success: false,
 				Error:            fallbackSyntaxRejection(path, code, deliveredCheck.Detail),
 				MutationStatus:   MutationRefused,
@@ -2027,7 +2027,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 				ValidationDetail: baseCheck.Detail}, nil
 		}
 		log.Printf("[write_file] V3 winner for %s does not parse — writing your version instead (%s)",
-			logPath(path), truncateStr(deliveredCheck.Detail, 80))
+			logPath(path), safeDiagnosticSummary(deliveredCheck.Detail))
 		code, authorizedV3, fellBack = revokeV3(
 			baselineContent, "the winner does not parse", path)
 		deliveredCheck, checkedFor = baseCheck, code
