@@ -1725,17 +1725,83 @@ const maxTaskContractEntries = 64
 // distinct from present-and-empty, and stays distinct: a future commit will
 // default an absent contract fail-closed to work, and that must not begin by
 // accident here.
+// ObligationKnowledge is what the CLIENT says it knows about a class of
+// obligation. It is stated, never inferred.
+//
+// The distinction it carries is the one the type could not hold before.
+// encoding/json can tell `"expected_outputs": []` from an omitted key -- the
+// first decodes to a non-nil empty slice, the second to nil -- and
+// validateTaskContract threw that away by building its output through append,
+// so an explicit [] was STORED as nil, byte-identical to omitted.
+//
+// That is not a cosmetic loss. Every owned sender -- the TUI,
+// tests/e2e/conftest.py, scripts/e2e-reliability.py -- sends
+// `{"task_mode": ...}` and nothing else, so a rule of the form "a contract is
+// present, therefore its output list is authoritative" would read 100% of
+// owned traffic as "this caller requires no outputs" and drop the legacy
+// obligation for all of it.
+type ObligationKnowledge string
+
+const (
+	// KnowledgeUnspecified: the caller has no structured knowledge of this
+	// obligation class. It does NOT mean none are required -- it means the
+	// caller did not say, and the legacy inference still applies.
+	KnowledgeUnspecified ObligationKnowledge = "unspecified"
+	// KnowledgeDeclared: the caller is the authority here, including when the
+	// list it declares is empty.
+	KnowledgeDeclared ObligationKnowledge = "declared"
+)
+
 type TaskContract struct {
 	TaskMode TaskMode `json:"task_mode"`
+
+	// OutputKnowledge / VerificationKnowledge are independent: a caller may
+	// know its outputs and not its verification, or the reverse. Omitted
+	// means unspecified, so a client that predates these fields is unchanged.
+	OutputKnowledge       ObligationKnowledge `json:"output_knowledge,omitempty"`
+	VerificationKnowledge ObligationKnowledge `json:"verification_knowledge,omitempty"`
+
 	// ExpectedOutputs are exact paths the client knows the request must
 	// produce. Canonicalised and deduplicated through the workspace resolver
 	// the rest of the proxy uses -- there is no second path rule.
-	ExpectedOutputs []string `json:"expected_outputs,omitempty"`
+	//
+	// A POINTER, so absence survives: nil is "no list arrived", a non-nil
+	// empty slice is "the caller sent []". Read it through OutputPaths and
+	// OutputsPresent rather than testing nilness at each site, because that
+	// is the test the old code got wrong.
+	ExpectedOutputs *[]string `json:"expected_outputs,omitempty"`
 	// Verification are the exact commands the client requires be run. Kept as
 	// the client wrote them: the command/result contract already records
 	// commands verbatim, so binding a requirement to an execution later needs
 	// no parsing. Declaring one here does not run anything.
-	Verification []string `json:"verification,omitempty"`
+	Verification *[]string `json:"verification,omitempty"`
+}
+
+// OutputPaths is the declared output list, or nil when none arrived. Safe on a
+// nil contract.
+func (tc *TaskContract) OutputPaths() []string {
+	if tc == nil || tc.ExpectedOutputs == nil {
+		return nil
+	}
+	return *tc.ExpectedOutputs
+}
+
+// OutputsPresent reports whether a list ARRIVED, which an empty one did.
+func (tc *TaskContract) OutputsPresent() bool {
+	return tc != nil && tc.ExpectedOutputs != nil
+}
+
+// VerificationCommands is the declared command list, or nil when none arrived.
+func (tc *TaskContract) VerificationCommands() []string {
+	if tc == nil || tc.Verification == nil {
+		return nil
+	}
+	return *tc.Verification
+}
+
+// VerificationPresent reports whether a list ARRIVED, which an empty one did.
+func (tc *TaskContract) VerificationPresent() bool {
+	return tc != nil && tc.Verification != nil
 }
 
 type PermissionRequest struct {

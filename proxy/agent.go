@@ -3664,14 +3664,41 @@ func validateTaskContract(in *TaskContract, workingDir string) (*TaskContract, e
 		// this build does not implement.
 		return nil, fmt.Errorf("task_contract.task_mode %q is not supported", in.TaskMode)
 	}
-	if len(in.ExpectedOutputs) > maxTaskContractEntries ||
-		len(in.Verification) > maxTaskContractEntries {
+	if len(in.OutputPaths()) > maxTaskContractEntries ||
+		len(in.VerificationCommands()) > maxTaskContractEntries {
 		return nil, fmt.Errorf("task_contract exceeds %d entries", maxTaskContractEntries)
+	}
+	outKnow, err := normalizeKnowledge("output_knowledge", in.OutputKnowledge,
+		in.OutputsPresent(), len(in.OutputPaths()))
+	if err != nil {
+		return nil, err
+	}
+	verKnow, err := normalizeKnowledge("verification_knowledge", in.VerificationKnowledge,
+		in.VerificationPresent(), len(in.VerificationCommands()))
+	if err != nil {
+		return nil, err
+	}
+	// A question declares nothing to produce and nothing to run. Letting it
+	// would make question mode a way in for obligations -- and, later, for the
+	// authority attached to them -- through a door work mode does not have.
+	if in.TaskMode == TaskModeQuestion {
+		if outKnow == KnowledgeDeclared {
+			return nil, fmt.Errorf(
+				"task_contract: task_mode %q cannot declare output obligations",
+				TaskModeQuestion)
+		}
+		if verKnow == KnowledgeDeclared {
+			return nil, fmt.Errorf(
+				"task_contract: task_mode %q cannot declare verification obligations",
+				TaskModeQuestion)
+		}
 	}
 	probe := &AgentContext{WorkingDir: workingDir}
 	seen := map[string]bool{}
-	out := &TaskContract{TaskMode: in.TaskMode}
-	for _, p := range in.ExpectedOutputs {
+	out := &TaskContract{TaskMode: in.TaskMode,
+		OutputKnowledge: outKnow, VerificationKnowledge: verKnow}
+	var paths []string
+	for _, p := range in.OutputPaths() {
 		if strings.TrimSpace(p) == "" {
 			return nil, fmt.Errorf("task_contract.expected_outputs contains an empty path")
 		}
@@ -3683,10 +3710,11 @@ func validateTaskContract(in *TaskContract, workingDir string) (*TaskContract, e
 			continue // the same file spelled two ways is one obligation
 		}
 		seen[canon] = true
-		out.ExpectedOutputs = append(out.ExpectedOutputs, p)
+		paths = append(paths, p)
 	}
 	vseen := map[string]bool{}
-	for _, v := range in.Verification {
+	var cmds []string
+	for _, v := range in.VerificationCommands() {
 		if strings.TrimSpace(v) == "" {
 			return nil, fmt.Errorf("task_contract.verification contains an empty entry")
 		}
@@ -3694,12 +3722,65 @@ func validateTaskContract(in *TaskContract, workingDir string) (*TaskContract, e
 			continue // deduplicated by exact identity, not by resemblance
 		}
 		vseen[v] = true
-		out.Verification = append(out.Verification, v)
+		cmds = append(cmds, v)
 	}
 	// Stable order, so two equivalent requests never disagree downstream.
-	sort.Strings(out.ExpectedOutputs)
-	sort.Strings(out.Verification)
+	sort.Strings(paths)
+	sort.Strings(cmds)
+	// Presence is STORED, not re-derived. A declared-empty list must survive
+	// as a present, empty list; rebuilding by append is exactly how the old
+	// validator turned it back into "absent".
+	if outKnow == KnowledgeDeclared {
+		if paths == nil {
+			paths = []string{}
+		}
+		out.ExpectedOutputs = &paths
+	}
+	if verKnow == KnowledgeDeclared {
+		if cmds == nil {
+			cmds = []string{}
+		}
+		out.Verification = &cmds
+	}
 	return out, nil
+}
+
+// normalizeKnowledge turns what the caller sent into a stated knowledge value,
+// or refuses.
+//
+// The compatibility rules are asymmetric on purpose. A legacy NON-EMPTY list
+// always meant "these are the obligations", so it normalises to declared and
+// keeps its meaning. A legacy EMPTY or absent list cannot be promoted: the
+// storage those clients were written against could not tell [] from omitted,
+// so reading one as "authoritatively none" would invent an authority the
+// caller never expressed.
+func normalizeKnowledge(field string, stated ObligationKnowledge,
+	present bool, count int) (ObligationKnowledge, error) {
+	switch stated {
+	case "":
+		if present && count > 0 {
+			return KnowledgeDeclared, nil // legacy non-empty keeps its meaning
+		}
+		return KnowledgeUnspecified, nil
+	case KnowledgeUnspecified:
+		if count > 0 {
+			return "", fmt.Errorf(
+				"task_contract.%s is %q but %d entries were sent; a caller "+
+					"that knows its obligations must say so", field, stated, count)
+		}
+		return KnowledgeUnspecified, nil
+	case KnowledgeDeclared:
+		if !present {
+			return "", fmt.Errorf(
+				"task_contract.%s is %q but no list was sent; declaring "+
+					"authority over an absent list says nothing", field, stated)
+		}
+		return KnowledgeDeclared, nil
+	default:
+		// Never coerced: an unrecognised value is a client asking for
+		// something this build does not implement.
+		return "", fmt.Errorf("task_contract.%s %q is not supported", field, stated)
+	}
 }
 
 // --- Shadow comparison: what the client declared vs what ATLAS inferred ------
@@ -3828,12 +3909,12 @@ func emitShadowRequestSnapshot(ctx *AgentContext, userMessage string) {
 	rec["legacy_output_count"] = len(legacy)
 	rec["legacy_output_hashes"] = shadowHashes(legacyCanon)
 
-	declared := tc != nil && len(tc.ExpectedOutputs) > 0
+	declared := tc != nil && len(tc.OutputPaths()) > 0
 	contractCanon, contractFails := shadowCanonicalSet(ctx, contractOutputs(tc))
 	rec["canonicalization_failures"] = legacyFails + contractFails
 	if declared {
 		rec["output_declaration_state"] = shadowDeclared
-		rec["output_count"] = len(tc.ExpectedOutputs)
+		rec["output_count"] = len(tc.OutputPaths())
 		rec["output_hashes"] = shadowHashes(contractCanon)
 		rec["output_comparison"] = shadowCompareSets(contractCanon, legacyCanon,
 			contractFails+legacyFails > 0)
@@ -3845,10 +3926,10 @@ func emitShadowRequestSnapshot(ctx *AgentContext, userMessage string) {
 
 	// Verification: the legacy side is a boolean demand and never a command,
 	// so exact agreement is not a claim this can make.
-	if tc != nil && len(tc.Verification) > 0 {
+	if tc != nil && len(tc.VerificationCommands()) > 0 {
 		rec["verification_declaration_state"] = shadowDeclared
-		rec["verification_count"] = len(tc.Verification)
-		rec["verification_hashes"] = shadowHashes(tc.Verification)
+		rec["verification_count"] = len(tc.VerificationCommands())
+		rec["verification_hashes"] = shadowHashes(tc.VerificationCommands())
 		if isFixIntentMessage(userMessage) {
 			rec["verification_comparison"] = shadowVerifyLegacyRequires
 		} else {
@@ -3866,7 +3947,7 @@ func contractOutputs(tc *TaskContract) []string {
 	if tc == nil {
 		return nil
 	}
-	return tc.ExpectedOutputs
+	return tc.OutputPaths()
 }
 
 // shadowCanonicalSet resolves each path through resolveWorkspacePath -- the one

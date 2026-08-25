@@ -664,14 +664,21 @@ func TestTaskContractWireShape(t *testing.T) {
 			if got.TaskMode != c.mode {
 				t.Errorf("mode=%q want %q", got.TaskMode, c.mode)
 			}
-			if strings.Join(got.ExpectedOutputs, "|") != strings.Join(c.outputs, "|") {
-				t.Errorf("outputs=%v want %v", got.ExpectedOutputs, c.outputs)
+			if strings.Join(got.OutputPaths(), "|") != strings.Join(c.outputs, "|") {
+				t.Errorf("outputs=%v want %v", got.OutputPaths(), c.outputs)
 			}
-			if strings.Join(got.Verification, "|") != strings.Join(c.verify, "|") {
-				t.Errorf("verification=%v want %v", got.Verification, c.verify)
+			if strings.Join(got.VerificationCommands(), "|") != strings.Join(c.verify, "|") {
+				t.Errorf("verification=%v want %v", got.VerificationCommands(), c.verify)
 			}
 		})
 	}
+}
+
+// strsPtr builds the presence-preserving list a TaskContract now carries:
+// a non-nil pointer means the caller SENT a list, even an empty one.
+func strsPtr(v ...string) *[]string {
+	s := append([]string{}, v...)
+	return &s
 }
 
 // Bounds use the ceiling the rest of the session state already uses.
@@ -679,9 +686,11 @@ func TestTaskContractBounds(t *testing.T) {
 	dir := t.TempDir()
 	mk := func(n int) *TaskContract {
 		c := &TaskContract{TaskMode: TaskModeWork}
+		paths := []string{}
 		for i := 0; i < n; i++ {
-			c.ExpectedOutputs = append(c.ExpectedOutputs, fmt.Sprintf("f%d.py", i))
+			paths = append(paths, fmt.Sprintf("f%d.py", i))
 		}
+		c.ExpectedOutputs = &paths
 		return c
 	}
 	if _, err := validateTaskContract(mk(maxTaskContractEntries), dir); err != nil {
@@ -695,9 +704,11 @@ func TestTaskContractBounds(t *testing.T) {
 		t.Error("overflow produced a partial contract")
 	}
 	v := &TaskContract{TaskMode: TaskModeWork}
+	cmds := []string{}
 	for i := 0; i <= maxTaskContractEntries; i++ {
-		v.Verification = append(v.Verification, fmt.Sprintf("cmd %d", i))
+		cmds = append(cmds, fmt.Sprintf("cmd %d", i))
 	}
+	v.Verification = &cmds
 	if _, err := validateTaskContract(v, dir); err == nil {
 		t.Error("verification overflow was accepted")
 	}
@@ -706,21 +717,23 @@ func TestTaskContractBounds(t *testing.T) {
 // Round-trip: a valid contract serialises back to the same fields.
 func TestTaskContractRoundTrip(t *testing.T) {
 	dir := t.TempDir()
+	inPaths := []string{"b.py", "a.py"}
+	inCmds := []string{"pytest", "go vet ./..."}
 	in := &TaskContract{
 		TaskMode:        TaskModeWork,
-		ExpectedOutputs: []string{"b.py", "a.py"},
-		Verification:    []string{"pytest", "go vet ./..."},
+		ExpectedOutputs: &inPaths,
+		Verification:    &inCmds,
 	}
 	got, err := validateTaskContract(in, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Stable ordering, so two equivalent requests never disagree.
-	if strings.Join(got.ExpectedOutputs, "|") != "a.py|b.py" {
-		t.Errorf("outputs not stably ordered: %v", got.ExpectedOutputs)
+	if strings.Join(got.OutputPaths(), "|") != "a.py|b.py" {
+		t.Errorf("outputs not stably ordered: %v", got.OutputPaths())
 	}
-	if strings.Join(got.Verification, "|") != "go vet ./...|pytest" {
-		t.Errorf("verification not stably ordered: %v", got.Verification)
+	if strings.Join(got.VerificationCommands(), "|") != "go vet ./...|pytest" {
+		t.Errorf("verification not stably ordered: %v", got.VerificationCommands())
 	}
 	b, err := json.Marshal(got)
 	if err != nil {
@@ -731,8 +744,8 @@ func TestTaskContractRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	if back.TaskMode != got.TaskMode ||
-		strings.Join(back.ExpectedOutputs, "|") != strings.Join(got.ExpectedOutputs, "|") ||
-		strings.Join(back.Verification, "|") != strings.Join(got.Verification, "|") {
+		strings.Join(back.OutputPaths(), "|") != strings.Join(got.OutputPaths(), "|") ||
+		strings.Join(back.VerificationCommands(), "|") != strings.Join(got.VerificationCommands(), "|") {
 		t.Errorf("round trip lost fields: %+v vs %+v", back, got)
 	}
 }
@@ -966,8 +979,8 @@ func TestTaskContractChangesOnlyTheActionDemand(t *testing.T) {
 
 	contract := &TaskContract{
 		TaskMode:        TaskModeWork,
-		ExpectedOutputs: []string{"never_written.py"},
-		Verification:    []string{"go test ./..."},
+		ExpectedOutputs: strsPtr("never_written.py"),
+		Verification:    strsPtr("go test ./..."),
 	}
 	for _, c := range []struct {
 		name, prompt string
@@ -1950,7 +1963,7 @@ func TestShadowUndeclaredListsAreNonComparable(t *testing.T) {
 	}
 	// A declared verification never reports command equality with a boolean.
 	recs2, _, _, _, _ := shadowLoopRun(t, true,
-		&TaskContract{TaskMode: TaskModeWork, Verification: []string{"go test ./..."}},
+		&TaskContract{TaskMode: TaskModeWork, Verification: strsPtr("go test ./...")},
 		"Fix the failing test.", shadowWorkPlan)
 	for _, r := range recs2 {
 		if r["record_kind"] != "task_contract_shadow_request" {
@@ -1969,7 +1982,7 @@ func TestShadowUndeclaredListsAreNonComparable(t *testing.T) {
 // Aliases collapse to one canonical identity through the existing resolver.
 func TestShadowOutputAliasesShareIdentity(t *testing.T) {
 	recs, _, _, _, _ := shadowLoopRun(t, true,
-		&TaskContract{TaskMode: TaskModeWork, ExpectedOutputs: []string{"app.py", "./app.py"}},
+		&TaskContract{TaskMode: TaskModeWork, ExpectedOutputs: strsPtr("app.py", "./app.py")},
 		"Create app.py.", shadowWorkPlan)
 	for _, r := range recs {
 		if r["record_kind"] != "task_contract_shadow_request" {
@@ -1986,8 +1999,8 @@ func TestShadowOutputAliasesShareIdentity(t *testing.T) {
 func TestShadowRecordsCarryNoRawText(t *testing.T) {
 	const secret = "Create app.py with the SECRETMARKER inside."
 	recs, _, _, _, _ := shadowLoopRun(t, true,
-		&TaskContract{TaskMode: TaskModeWork, ExpectedOutputs: []string{"app.py"},
-			Verification: []string{"pytest --marker=SECRETCMD"}},
+		&TaskContract{TaskMode: TaskModeWork, ExpectedOutputs: strsPtr("app.py"),
+			Verification: strsPtr("pytest --marker=SECRETCMD")},
 		secret, shadowWorkPlan)
 	blob, _ := json.Marshal(recs)
 	for _, banned := range []string{"SECRETMARKER", "SECRETCMD", "pytest", "app.py",
@@ -2017,7 +2030,7 @@ func TestShadowRecordsCarryNoRawText(t *testing.T) {
 // Nothing else is removed to make the comparison pass.
 func TestShadowCaptureIsCausallyInert(t *testing.T) {
 	contract := &TaskContract{TaskMode: TaskModeWork,
-		ExpectedOutputs: []string{"app.py"}, Verification: []string{"pytest"}}
+		ExpectedOutputs: strsPtr("app.py"), Verification: strsPtr("pytest")}
 	_, evOff, diskOff, termOff, promptOff := shadowLoopRun(t, false, contract, "Create app.py.", shadowWorkPlan)
 	recs, evOn, diskOn, termOn, promptOn := shadowLoopRun(t, true, contract, "Create app.py.", shadowWorkPlan)
 	t.Logf("off=%s on=%s records=%d", termOff, termOn, len(recs))
@@ -2524,7 +2537,7 @@ func openShadowSink() (*shadowSink, error) {
 // keeps its stream, its prompts, its bytes on disk and its terminal; only the
 // capture is defective, and it says so in its own counters.
 func TestShadowWriterErrorLeavesTheRunUnchanged(t *testing.T) {
-	contract := &TaskContract{TaskMode: TaskModeWork, ExpectedOutputs: []string{"app.py"}}
+	contract := &TaskContract{TaskMode: TaskModeWork, ExpectedOutputs: strsPtr("app.py")}
 	activeShadowSink.Store(nil)
 	_, evOff, diskOff, termOff, promptOff := shadowLoopDrive(t, "req-writer-err",
 		contract, "Create app.py.", shadowWorkPlan)
@@ -3579,7 +3592,8 @@ func TestWorkContractVerificationDemandUsesBoundEvidence(t *testing.T) {
 		}
 	}
 	work := func(outputs []string, verify []string) *TaskContract {
-		return &TaskContract{TaskMode: TaskModeWork, ExpectedOutputs: outputs, Verification: verify}
+		return &TaskContract{TaskMode: TaskModeWork,
+			ExpectedOutputs: strsPtr(outputs...), Verification: strsPtr(verify...)}
 	}
 
 	for _, c := range []struct {
@@ -3805,7 +3819,8 @@ func TestExecutableDeliverablesDemandExecutionDeclarativeDoNot(t *testing.T) {
 		}
 	}
 	work := func(outputs, verify []string) *TaskContract {
-		return &TaskContract{TaskMode: TaskModeWork, ExpectedOutputs: outputs, Verification: verify}
+		return &TaskContract{TaskMode: TaskModeWork,
+			ExpectedOutputs: strsPtr(outputs...), Verification: strsPtr(verify...)}
 	}
 
 	for _, c := range []struct {

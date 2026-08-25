@@ -768,7 +768,7 @@ func contractRequiresCommand(ctx *AgentContext, command string) bool {
 	if ctx == nil || ctx.TaskContract == nil {
 		return false
 	}
-	for _, want := range ctx.TaskContract.Verification {
+	for _, want := range ctx.TaskContract.VerificationCommands() {
 		if want == command {
 			return true
 		}
@@ -792,7 +792,7 @@ func decideVerificationDemand(ctx *AgentContext, tc *TaskContract, expected []st
 	// the run produced nothing executable -- a client that asked for
 	// `htmlhint index.html` asked for it regardless of what the registry
 	// thinks can be run.
-	if len(paths) == 0 && len(tc.Verification) == 0 {
+	if len(paths) == 0 && len(tc.VerificationCommands()) == 0 {
 		return verificationDemand{}
 	}
 	type liveRecord struct {
@@ -823,7 +823,7 @@ func decideVerificationDemand(ctx *AgentContext, tc *TaskContract, expected []st
 	}
 	// Declared commands are matched by exact recorded identity. No shell
 	// parsing, no equivalence: "python3  solve.py" is not "python3 solve.py".
-	for _, want := range tc.Verification {
+	for _, want := range tc.VerificationCommands() {
 		ran := false
 		for _, rec := range current {
 			if rec.command == want {
