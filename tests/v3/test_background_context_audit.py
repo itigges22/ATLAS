@@ -54,10 +54,14 @@ CLASSIFIED = {
          "Captures rid on the request thread and passes it explicitly to "
          "_service_headers(rid). The reference pattern for this file."),
     "v3-service/main.py::_watch_parent_for::Thread":
-        ("no-request",
+        ("propagates",
          "Watches the parent socket for EOF and cancels a scope it was handed "
-         "directly. Sends no outbound request, so it has no identity to "
-         "carry; its own log line is labelled by `label` instead."),
+         "directly. It sends no outbound request, but it DOES log the "
+         "cancellation, so it captures the request and invocation ids on the "
+         "owning thread and binds them as its first action. Classified "
+         "no-request until 2026-08-24 on the grounds that `label` was enough: "
+         "the sealed Stage-A acquisition then produced 159,533 records of "
+         "which the only two unattributable ones came from here."),
 }
 
 

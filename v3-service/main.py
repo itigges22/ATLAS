@@ -76,6 +76,21 @@ PORT = int(os.environ.get("ATLAS_V3_PORT", "8070"))
 pipeline = V3PipelineService()
 
 
+def _service_log(msg):
+    """The one emitter for the watcher lifecycle.
+
+    This service's log path is print() through _PrivateValueStream, which
+    applies the private-value filter and stamps the current request and
+    invocation ids into each record. logging.getLogger() is NOT that path:
+    no handler is installed on the root logger, so an info record would be
+    dropped by lastResort and a cancellation would stop being visible at all.
+    Naming the emitter is what removes the bare print from the lifecycle; the
+    stream stays the one the rest of the service uses, so the record shape is
+    unchanged.
+    """
+    print(msg, flush=True)
+
+
 def _watch_parent_for(handler, label):
     """Request-scoped cancellation plus an EOF watcher on the parent socket.
 
@@ -90,11 +105,24 @@ def _watch_parent_for(handler, label):
     # Bind it for logging on the handler thread: every record this invocation
     # emits now names the invocation, so a log line joins to a relay call
     # without time-window inference.
+    from structured_log import bind_identity, current_identity
     from structured_log import set_invocation_id as _set_inv
     _set_inv(scope.invocation_id)
+    # Captured HERE, on the owning thread, and handed to the watcher.
+    #
+    # A threading.Thread inherits no ContextVar, so the watcher used to run
+    # with both ids empty: of 159,533 records the sealed Stage-A acquisition
+    # produced, the only two that could not be attributed were this watcher
+    # reporting the cancellations it had just performed.
+    #
+    # Explicitly, not through copy_context(): the watcher can outlive the
+    # context it was started from, and a copied context would keep answering
+    # with an identity whose request is already gone.
+    identity = current_identity()
     stop_watch = threading.Event()
 
     def _watch():
+        bind_identity(*identity)
         sock = handler.connection
         while not stop_watch.is_set():
             try:
@@ -106,8 +134,8 @@ def _watch_parent_for(handler, label):
             try:
                 if sock.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b"":
                     closed = scope.cancel()
-                    print(f"[{label}] parent disconnected; cancelled {closed} "
-                          f"in-flight generation(s)", flush=True)
+                    _service_log(f"[{label}] parent disconnected; cancelled "
+                                 f"{closed} in-flight generation(s)")
                     return
             except BlockingIOError:
                 continue
@@ -122,12 +150,18 @@ def _watch_parent_for(handler, label):
 
 def _release_scope(scope, stop_watch, watcher, label):
     """Idempotent teardown: stop the watcher, close anything still open."""
+    from structured_log import bind_identity
     stop_watch.set()
     leaked = scope.cancel()
     if leaked:
-        print(f"[{label}] closed {leaked} connection(s) still open at handler exit",
-              flush=True)
+        _service_log(f"[{label}] closed {leaked} connection(s) still open "
+                     f"at handler exit")
     watcher.join(timeout=2)
+    # Last statement of the request's lifecycle: drop the identity so it
+    # cannot be answered by whatever runs on this thread next. Absent has to
+    # stay absent -- a borrowed id is worse than none, because it reads as
+    # evidence.
+    bind_identity("", "")
 
 
 # Progress stages whose `detail` IS model output rather than a description of
