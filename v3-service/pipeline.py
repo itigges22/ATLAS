@@ -2923,9 +2923,20 @@ class V3PipelineService:
                             latency_ms=getattr(pr_result, "total_time_ms", 0.0),
                             parent_code=(failing[0].code if failing else None))
                         passed, stdout, stderr, repair_evidence = verified_sandbox(repair_code)
+                        # A repair is a candidate. It used to be captured with
+                        # record=None, so the sealed Stage-A run holds three
+                        # pool members with adapter None and an empty record --
+                        # a candidate nothing can say anything about. Same
+                        # canonical adapter->contract path as every other
+                        # candidate; no probe is dispatched, so this adds no
+                        # generation and no sandbox run of its own.
                         capture.note_candidate(
                             role="repair", index=None, code=repair_code,
-                            accepted=passed, record=None, phase="repair_pr_cot")
+                            accepted=passed,
+                            record=_evaluate_candidate(
+                                file_path, repair_code, passed, _has_oracle,
+                                emit, sandbox, task=_task),
+                            phase="repair_pr_cot")
                         if passed:
                             emit("pr_cot_pass", "PR-CoT repair succeeded!",
                                  strategy="pr_cot", tokens=pr_result.total_tokens)
@@ -2995,10 +3006,16 @@ class V3PipelineService:
                     result["total_tokens"] += ref_result.total_tokens
                     if ref_result.solved:
                         passed, stdout, stderr, refinement_evidence = verified_sandbox(ref_result.winning_code)
+                        # Same gap the repair path had: a refinement winner
+                        # is a candidate, and a candidate with no record is one
+                        # nothing can say anything about.
                         capture.note_candidate(
                             role="refinement", index=None,
                             code=ref_result.winning_code, accepted=passed,
-                            record=None, phase="refinement")
+                            record=_evaluate_candidate(
+                                file_path, ref_result.winning_code, passed,
+                                _has_oracle, emit, sandbox, task=_task),
+                            phase="refinement")
                         if passed:
                             emit("refinement_pass",
                                  f"Refinement solved in {ref_result.total_iterations} iterations!",

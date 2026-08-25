@@ -937,6 +937,184 @@ _CAPABILITIES = {
     ADAPTER_CSS_SYNTAX: [CRITERION_PARSES],
 }
 
+
+# --- registry: what an adapter may declare, and what must back it -----------
+#
+# Three declarations used to be derived instead of made, and each derivation
+# hid a different way of claiming more than the adapter could show:
+#
+#   supported     inferred from set membership, so an adapter became supported
+#                 for an artifact class by not appearing in a list;
+#   requirements  built FROM capabilities, so an adapter read its own reach and
+#                 called the result the TASK's obligation -- the one thing
+#                 contract.py's own docstring forbids it;
+#   evaluators    implicit in a branch of _observations, so "can measure X" and
+#                 "something computes X" were separate facts nothing compared.
+#
+# The sealed Stage-A acquisition is the bill: 100 of 103 candidate evaluations
+# ran under python_compile, which requires four BROWSER criteria it cannot
+# measure, and every record carried missing_required
+# ["temporal_progress","input_causality"] with capabilities []. No Python
+# candidate in that run could reach closure -- not for want of an oracle, but
+# because that route cannot reach closure at all.
+#
+# This registry makes all three explicit and checks them against each other at
+# import. It deliberately does NOT change what any adapter reports. Correcting
+# the CONTENT of python_compile's declaration moves its records into
+# contract.select's ineligible bucket, which changes selection; that belongs
+# with obligation sourcing, not here.
+
+SUPPORT_ALWAYS = "always"
+SUPPORT_NEVER = "never"
+SUPPORT_PROBE_CONDITIONAL = "probe_conditional"
+SUPPORT_KINDS = (SUPPORT_ALWAYS, SUPPORT_NEVER, SUPPORT_PROBE_CONDITIONAL)
+
+
+class AdapterRegistryError(RuntimeError):
+    """An adapter declares something nothing can back. Raised at import: a
+    registry that cannot be checked is a registry that is not enforced."""
+
+
+def _eval_on_acceptance(cid):
+    """The verifier either accepted the artifact or it did not."""
+    def ev(accepted, probe):
+        return contract.DEMONSTRATED if accepted else contract.UNOBSERVED
+    return ev
+
+
+def _eval_browser_required(cid):
+    def ev(accepted, probe):
+        behavior = probe or {}
+        return contract.DEMONSTRATED if behavior.get(cid) else contract.UNOBSERVED
+    return ev
+
+
+def _eval_browser_optional(cid):
+    """Absence is a real negative only on a run that produced a trace."""
+    def ev(accepted, probe):
+        behavior = probe or {}
+        if behavior.get(cid):
+            return contract.DEMONSTRATED
+        if behavior:
+            return contract.REFUTED
+        return contract.UNOBSERVED
+    return ev
+
+
+def _browser_entry(support):
+    return {
+        "support": support,
+        "capabilities": list(BROWSER_REQUIRED) + list(BROWSER_OPTIONAL),
+        "requirements": ([(c, True) for c in BROWSER_REQUIRED]
+                         + [(c, False) for c in BROWSER_OPTIONAL]),
+        "evaluators": dict(
+            [(c, _eval_browser_required(c)) for c in BROWSER_REQUIRED]
+            + [(c, _eval_browser_optional(c)) for c in BROWSER_OPTIONAL]),
+        "unmeasurable": [],
+    }
+
+
+def _blind_browser_entry(support):
+    """Answers the same question and can observe none of it.
+
+    The criteria stay declared so coverage reports them unmeasurable rather
+    than silently absent -- and they are QUARANTINED here, so the gap is a
+    registered defect a reader can find rather than an accident a new adapter
+    can repeat by copying this one.
+    """
+    return {
+        "support": support,
+        "capabilities": [],
+        "requirements": ([(c, True) for c in BROWSER_REQUIRED]
+                         + [(c, False) for c in BROWSER_OPTIONAL]),
+        "evaluators": {},
+        "unmeasurable": list(BROWSER_REQUIRED) + list(BROWSER_OPTIONAL),
+    }
+
+
+def _measurable_entry(support, criteria):
+    return {
+        "support": support,
+        "capabilities": list(criteria),
+        "requirements": [(c, True) for c in criteria],
+        "evaluators": {c: _eval_on_acceptance(c) for c in criteria},
+        "unmeasurable": [],
+    }
+
+
+REGISTRY = {
+    ADAPTER_ALGORITHMIC_IO: _measurable_entry(SUPPORT_ALWAYS, [CRITERION_ORACLE_CASES]),
+    ADAPTER_CSS_SYNTAX: _measurable_entry(SUPPORT_ALWAYS, [CRITERION_PARSES]),
+    ADAPTER_BROWSER_CANVAS_JS: _browser_entry(SUPPORT_PROBE_CONDITIONAL),
+    ADAPTER_BROWSER_INLINE_SCRIPT: _browser_entry(SUPPORT_PROBE_CONDITIONAL),
+    ADAPTER_PYTHON_COMPILE: _blind_browser_entry(SUPPORT_ALWAYS),
+    ADAPTER_JAVASCRIPT_COMPILE: _blind_browser_entry(SUPPORT_ALWAYS),
+    ADAPTER_INTERACTIVE_PYTHON_UNSUPPORTED: _blind_browser_entry(SUPPORT_NEVER),
+    ADAPTER_UNSUPPORTED: _blind_browser_entry(SUPPORT_NEVER),
+}
+
+ALL_ADAPTERS = tuple(REGISTRY)
+SUPPORT_DECLARATION = {a: e["support"] for a, e in REGISTRY.items()}
+REQUIREMENT_DECLARATION = {a: list(e["requirements"]) for a, e in REGISTRY.items()}
+
+
+def evaluators_for(adapter):
+    return dict(REGISTRY.get(adapter, {}).get("evaluators", {}))
+
+
+def unmeasurable_requirements(adapter):
+    return list(REGISTRY.get(adapter, {}).get("unmeasurable", []))
+
+
+def check_registry(registry):
+    """Every declaration must be backed by something that can produce it.
+
+    Raised, never warned: a registry whose violations are reported after
+    startup is one that ships with them.
+    """
+    for adapter, entry in sorted(registry.items()):
+        support = entry.get("support")
+        if support not in SUPPORT_KINDS:
+            raise AdapterRegistryError(
+                f"{adapter}: support {support!r} is not one of {SUPPORT_KINDS}")
+        caps = set(entry.get("capabilities") or [])
+        evals = set(entry.get("evaluators") or {})
+        unmeasurable = set(entry.get("unmeasurable") or [])
+        missing = sorted(caps - evals)
+        if missing:
+            raise AdapterRegistryError(
+                f"{adapter}: declares it can measure {missing} with no evaluator "
+                "to produce the observation")
+        orphan_eval = sorted(evals - caps)
+        if orphan_eval:
+            raise AdapterRegistryError(
+                f"{adapter}: evaluates {orphan_eval} without declaring it measurable")
+        both = sorted(caps & unmeasurable)
+        if both:
+            raise AdapterRegistryError(
+                f"{adapter}: {both} declared both measurable and unmeasurable")
+        required = set()
+        for item in entry.get("requirements") or []:
+            if isinstance(item, str):
+                required.add(item)
+                continue
+            try:
+                cid, _req = item
+            except (TypeError, ValueError) as exc:
+                raise AdapterRegistryError(
+                    f"{adapter}: malformed requirement {item!r}") from exc
+            required.add(cid)
+        unregistered = sorted(required - caps - unmeasurable)
+        if unregistered:
+            raise AdapterRegistryError(
+                f"{adapter}: requires {unregistered} with no evaluator and no "
+                "registered reason; an obligation an adapter cannot measure "
+                "must be declared unmeasurable, not implied")
+    return True
+
+
+check_registry(REGISTRY)
+
 # The strength a TASK on this artifact class must reach before it may close.
 # Declared per adapter, never a universal floor: a stylesheet has no runtime
 # behaviour to demand, an I/O task is not closed by anything weaker than its
@@ -954,18 +1132,27 @@ def closure_floor(adapter):
 
 def _capabilities(adapter):
     """What this adapter can observe. Everything else contract.build reports
-    not_applicable, so "we could not look" stays distinct from "absent"."""
-    if adapter in _BROWSER_ADAPTERS:
-        return list(BROWSER_REQUIRED) + list(BROWSER_OPTIONAL)
-    return list(_CAPABILITIES.get(adapter, []))
+    not_applicable, so "we could not look" stays distinct from "absent".
+
+    Declared in REGISTRY, and every entry is backed by an evaluator: the
+    registry check refuses a capability nothing computes.
+    """
+    return list(REGISTRY.get(adapter, {}).get("capabilities", []))
 
 
 def _requirements(adapter):
-    if adapter in _DECLARES_BROWSER_CRITERIA:
-        return ([contract.requirement(c) for c in BROWSER_REQUIRED]
-                + [contract.requirement(c, required=False)
-                   for c in BROWSER_OPTIONAL])
-    return [contract.requirement(c) for c in _CAPABILITIES.get(adapter, [])]
+    """The obligations this record is measured against.
+
+    Declared, never derived from _capabilities. Deriving them is how an
+    adapter read its own reach and called the answer the task's requirement;
+    an obligation an adapter cannot measure must appear in its `unmeasurable`
+    quarantine, which the registry check enforces.
+
+    Still adapter-owned for now. Moving ownership to the task is the next
+    slice: it changes which records are selectable, and this one may not.
+    """
+    return [contract.requirement(cid, required=req)
+            for cid, req in REGISTRY.get(adapter, {}).get("requirements", [])]
 
 
 def _observations(adapter, accepted, probe):
@@ -976,35 +1163,29 @@ def _observations(adapter, accepted, probe):
     absence is a real negative observation rather than a gap.
     """
     observations = {}
-    if adapter in _BROWSER_ADAPTERS:
-        behavior = probe or {}
-        for cid in BROWSER_REQUIRED:
-            observations[cid] = contract.observation(
-                contract.DEMONSTRATED if behavior.get(cid) else contract.UNOBSERVED)
-        for cid in BROWSER_OPTIONAL:
-            if behavior.get(cid):
-                status = contract.DEMONSTRATED
-            elif behavior:
-                status = contract.REFUTED
-            else:
-                status = contract.UNOBSERVED
-            observations[cid] = contract.observation(status)
-        return observations
-    for cid in _CAPABILITIES.get(adapter, []):
-        observations[cid] = contract.observation(
-            contract.DEMONSTRATED if accepted else contract.UNOBSERVED)
+    for cid, evaluate in REGISTRY.get(adapter, {}).get("evaluators", {}).items():
+        observations[cid] = contract.observation(evaluate(accepted, probe))
     return observations
 
 
 def _supported(adapter, probe):
     """Whether this adapter could measure this artifact at all. Unsupported is
-    unverified, never failed."""
-    if adapter in (ADAPTER_INTERACTIVE_PYTHON_UNSUPPORTED, ADAPTER_UNSUPPORTED):
+    unverified, never failed.
+
+    Read from the adapter's own declaration rather than inferred from set
+    membership: an adapter used to become supported for an artifact class by
+    not appearing in a list, which is support by omission.
+    """
+    support = SUPPORT_DECLARATION.get(adapter)
+    if support == SUPPORT_NEVER:
         return False
-    if adapter in _BROWSER_ADAPTERS:
+    if support == SUPPORT_PROBE_CONDITIONAL:
         # No probe trace means the behaviour question went unanswered.
         return bool(probe) and bool(probe.get("supported", True))
-    return True
+    if support == SUPPORT_ALWAYS:
+        return True
+    raise AdapterRegistryError(
+        f"{adapter!r} has no support declaration; refusing to assume one")
 
 
 def _strength_and_execution(adapter, accepted, supported, probe):
