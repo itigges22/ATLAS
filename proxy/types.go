@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -1475,6 +1476,171 @@ type V3EvidenceEnvelope struct {
 	Coverage            V3EvidenceCoverage   `json:"coverage"`
 	Selection           V3EvidenceSelection  `json:"selection"`
 	Delivery            V3EvidenceDelivery   `json:"delivery"`
+
+	// Provenance says WHO produced the evidence and WHAT it is about.
+	// Additive and omitted when absent: a producer that predates it emits an
+	// envelope byte-identical to the one it always did, and this build reads
+	// that envelope exactly as before. Nothing consults it yet -- see
+	// MayAuthorize.
+	Provenance *V3EvidenceProvenance `json:"provenance,omitempty"`
+}
+
+// --- evidence provenance ------------------------------------------------------
+//
+// The envelope already carries how STRONG a verifier was. It does not carry
+// who the verifier was, so a model-generated test that ran and a repository
+// test that ran arrive indistinguishable. Strength is not trust: the same
+// model wrote the code and the test, and on the captured pool 21 of 36 valid
+// generated keys disagreed with the task's own reference.
+//
+// Sources are a closed, source-SPECIFIC vocabulary rather than a
+// `trusted=true` boolean, because a boolean cannot say that the proxy's own
+// syntax gate may close a syntax obligation and may not close a behavioural
+// one -- and that distinction is what decides whether a candidate may land.
+//
+// The hidden benchmark evaluator has no representation here. Not unused:
+// absent, so production cannot name it even by mistake.
+const (
+	ProvenanceRepoOwnedCheck             = "repo_owned_check"
+	ProvenanceClientDeclaredExample      = "client_declared_example"
+	ProvenanceClientDeclaredVerification = "client_declared_verification"
+	ProvenanceProxyOwnedValidation       = "proxy_owned_validation"
+	ProvenanceModelGenerated             = "model_generated"
+	ProvenanceLegacy                     = "legacy"
+	ProvenanceUnknown                    = "unknown"
+)
+
+var provenanceSources = map[string]bool{
+	ProvenanceRepoOwnedCheck: true, ProvenanceClientDeclaredExample: true,
+	ProvenanceClientDeclaredVerification: true, ProvenanceProxyOwnedValidation: true,
+	ProvenanceModelGenerated: true, ProvenanceLegacy: true, ProvenanceUnknown: true,
+}
+
+// provenanceCeiling is the strongest obligation each source may ever close.
+// A source absent from this map may close nothing -- model_generated, legacy
+// and unknown are absent rather than mapped low, because "weak authority" and
+// "no authority" are different and only one of them can be raised later by a
+// stronger observation.
+var provenanceCeiling = map[string]string{
+	ProvenanceRepoOwnedCheck:             "oracle",
+	ProvenanceClientDeclaredExample:      "oracle",
+	ProvenanceClientDeclaredVerification: "oracle",
+	ProvenanceProxyOwnedValidation:       "syntax",
+}
+
+var evidenceStrengthOrder = []string{"syntax", "runtime", "behavioral", "oracle"}
+
+func strengthRank(s string) int {
+	for i, v := range evidenceStrengthOrder {
+		if v == s {
+			return i
+		}
+	}
+	return -1
+}
+
+// V3EvidenceProvenance is where a piece of evidence came from and what it is
+// about. It carries hashes and identities; candidate bytes stay where they
+// already are and never enter this structure or a log line.
+type V3EvidenceProvenance struct {
+	Source string `json:"source"`
+
+	// What the evidence is about. Every one must match before the evidence
+	// may be used for the thing being asked about.
+	RequestID           string `json:"request_id"`
+	InvocationID        string `json:"invocation_id"`
+	CandidateInstanceID string `json:"candidate_instance_id"`
+	CandidateHash       string `json:"candidate_hash"`
+	WorkspaceGeneration int    `json:"workspace_generation"`
+	WorkspaceStateHash  string `json:"workspace_state_hash"`
+	// Absent for an obligation that runs no command. Absence is a real
+	// answer, and two bindings must still agree on it.
+	CommandIdentity string `json:"command_identity,omitempty"`
+
+	ObligationID     string `json:"obligation_id"`
+	RequiredStrength string `json:"required_strength"`
+	ObservedStrength string `json:"observed_strength"`
+}
+
+// MayAuthorize reports whether this evidence COULD close its obligation, on
+// source and strength alone. It says nothing about which candidate the
+// evidence is about -- that is BindsTo, and both must hold.
+//
+// Not called from any delivery path in this build. Wiring it in changes what
+// lands on disk and is a separate change.
+func (p *V3EvidenceProvenance) MayAuthorize() (bool, string) {
+	if p == nil {
+		return false, "no provenance"
+	}
+	if !provenanceSources[p.Source] {
+		return false, "unknown evidence source " + p.Source
+	}
+	ceiling, ok := provenanceCeiling[p.Source]
+	if !ok {
+		return false, p.Source + " evidence never authorizes an obligation"
+	}
+	for _, f := range []struct{ name, value string }{
+		{"request_id", p.RequestID}, {"invocation_id", p.InvocationID},
+		{"candidate_instance_id", p.CandidateInstanceID},
+		{"candidate_hash", p.CandidateHash},
+		{"workspace_state_hash", p.WorkspaceStateHash},
+		{"obligation_id", p.ObligationID},
+	} {
+		if strings.TrimSpace(f.value) == "" {
+			return false, f.name + " is missing"
+		}
+	}
+	if p.WorkspaceGeneration < 0 {
+		return false, "workspace_generation is negative"
+	}
+	req, obs := strengthRank(p.RequiredStrength), strengthRank(p.ObservedStrength)
+	if req < 0 {
+		return false, "unknown required strength " + p.RequiredStrength
+	}
+	if obs < 0 {
+		return false, "unknown observed strength " + p.ObservedStrength
+	}
+	if strengthRank(ceiling) < req {
+		return false, p.Source + " may not establish " + p.RequiredStrength +
+			" strength (its ceiling is " + ceiling + ")"
+	}
+	if obs < req {
+		return false, "observed strength " + p.ObservedStrength +
+			" is below the required " + p.RequiredStrength
+	}
+	return true, ""
+}
+
+// BindsTo reports whether this evidence is about the thing `asked` describes.
+// One candidate may not borrow another's evidence, one invocation may not
+// borrow another's, and evidence observed against an earlier workspace
+// generation is about a workspace that no longer exists: a later mutation,
+// move or recreation bumps the generation and invalidates it.
+func (p *V3EvidenceProvenance) BindsTo(asked V3EvidenceProvenance) (bool, string) {
+	if p == nil {
+		return false, "no provenance"
+	}
+	for _, f := range []struct {
+		name       string
+		held, want string
+	}{
+		{"request_id", p.RequestID, asked.RequestID},
+		{"invocation_id", p.InvocationID, asked.InvocationID},
+		{"candidate_instance_id", p.CandidateInstanceID, asked.CandidateInstanceID},
+		{"candidate_hash", p.CandidateHash, asked.CandidateHash},
+		{"workspace_state_hash", p.WorkspaceStateHash, asked.WorkspaceStateHash},
+		{"command_identity", p.CommandIdentity, asked.CommandIdentity},
+		{"obligation_id", p.ObligationID, asked.ObligationID},
+	} {
+		if f.held != f.want {
+			return false, f.name + " differs: evidence is about " + f.held +
+				", not " + f.want
+		}
+	}
+	if p.WorkspaceGeneration != asked.WorkspaceGeneration {
+		return false, "workspace_generation differs: evidence is about an earlier workspace"
+	}
+	return true, ""
 }
 
 // V3PlanRequest is sent to the Python V3 service for plan generation.
