@@ -787,12 +787,22 @@ func decideVerificationDemand(ctx *AgentContext, tc *TaskContract, expected []st
 	if ctx == nil || tc == nil || tc.TaskMode != TaskModeWork {
 		return verificationDemand{}
 	}
+	// Which commands this run owes, and on whose authority. A caller that
+	// declared its verification is the authority on that list: the declared
+	// commands are the obligation, and the legacy reading of the same field
+	// applies only when nothing was declared.
+	obligation := resolveVerificationObligation(ctx)
+	// What the run actually wrote demands its own evidence. That demand is
+	// read off the workspace rather than off the request, so declaring
+	// verification knowledge -- of any shape, including none -- narrows the
+	// command list and never switches this off. Code the run wrote and never
+	// showed to run stays unverified whatever the caller declared.
 	paths := codeDeliverablesFor(ctx, expected)
 	// A declared command is a requirement in its own right. It survives when
 	// the run produced nothing executable -- a client that asked for
 	// `htmlhint index.html` asked for it regardless of what the registry
 	// thinks can be run.
-	if len(paths) == 0 && len(tc.VerificationCommands()) == 0 {
+	if len(paths) == 0 && len(obligation.Items) == 0 {
 		return verificationDemand{}
 	}
 	type liveRecord struct {
@@ -823,7 +833,7 @@ func decideVerificationDemand(ctx *AgentContext, tc *TaskContract, expected []st
 	}
 	// Declared commands are matched by exact recorded identity. No shell
 	// parsing, no equivalence: "python3  solve.py" is not "python3 solve.py".
-	for _, want := range tc.VerificationCommands() {
+	for _, want := range obligation.Items {
 		ran := false
 		for _, rec := range current {
 			if rec.command == want {

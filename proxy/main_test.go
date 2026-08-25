@@ -792,8 +792,23 @@ func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
 	if len(validators) != 1 {
 		t.Errorf("%d validators, want exactly one: %v", len(validators), validators)
 	}
+	// obligations.go joins the list because this slice moved the decision
+	// there: it is THE obligation-source owner, and it reads only the contract
+	// the request boundary already validated. Nothing else may read the
+	// contract to decide anything.
+	contractReaders := map[string]bool{
+		"agent.go:": true, "guardrails.go:": true, "obligations.go:": true,
+	}
+	readerAllowed := func(r string) bool {
+		for prefix := range contractReaders {
+			if strings.HasPrefix(r, prefix) {
+				return true
+			}
+		}
+		return false
+	}
 	for _, r := range readers {
-		if !strings.HasPrefix(r, "agent.go:") && !strings.HasPrefix(r, "guardrails.go:") {
+		if !readerAllowed(r) {
 			t.Errorf("%s reads the task contract outside the request boundary", r)
 		}
 	}
@@ -865,23 +880,62 @@ func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
 			t.Errorf("%s consults the task contract; the heuristic must stay contract-blind", fn)
 		}
 	}
-	// No owner outside agent.go/guardrails.go touches it at all.
+	// No owner outside the request boundary and the obligation owner touches
+	// it at all.
 	for _, r := range readers {
-		if !strings.HasPrefix(r, "agent.go:") && !strings.HasPrefix(r, "guardrails.go:") {
+		if !readerAllowed(r) {
 			t.Errorf("%s reads the task contract outside the request boundary and policy owner", r)
 		}
 	}
+	// And the obligation owner reads the contract ONLY through the validated
+	// request-bound context -- never a shadow copy, never a second decode.
+	obTree, err := parser.ParseFile(fset, "obligations.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	banned := map[string]bool{
+		"json.Unmarshal": true, "Unmarshal": true, "validateTaskContract": true,
+		"contractOutputs": true, "openShadowSink": true, "newShadowSink": true,
+		"emitShadowRequestSnapshot": true,
+	}
+	// Calls, not prose: the file names validateTaskContract in a comment
+	// precisely to say it does not call it.
+	ast.Inspect(obTree, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		name := ""
+		switch fn := call.Fun.(type) {
+		case *ast.Ident:
+			name = fn.Name
+		case *ast.SelectorExpr:
+			name = fn.Sel.Name
+		}
+		if banned[name] || shadowProductionSymbols[name] {
+			t.Errorf("the obligation owner calls %s instead of reading the "+
+				"validated request-bound contract", name)
+		}
+		return true
+	})
 }
 
-// The contract now changes exactly ONE thing and nothing else.
+// A contract changes only the classes it DECLARES.
 //
-// Step 1 pinned total inertness, because Step 1 added no decision. That premise
-// is superseded by the task-mode migration: a `work` contract may now demand
-// action where the wording alone would not have. What still has to hold, and is
-// what this pins, is the blast radius -- model request bytes, tool calls and
-// disk are untouched, and the terminal only moves where the action-demand
-// decision itself moved.
-func TestTaskContractChangesOnlyTheActionDemand(t *testing.T) {
+// The premise this replaces allowed exactly one move, to
+// action_demanded_unmet, because the contract decided exactly one thing. That
+// is superseded: a caller that states it knows its outputs, or its
+// verification, is now the authority on that class, and the corresponding gate
+// may legitimately move. What did not change is the direction -- every
+// permitted move is strictly toward incomplete, and no contract may move a
+// terminal toward completed -- or the blast radius: a class the caller said
+// nothing about behaves exactly as it did with no contract at all.
+//
+// Contracts here are built through validateTaskContract, not as struct
+// literals, because the knowledge normalisation is part of what is under test:
+// a struct built by hand carries no stated knowledge and must fall back to
+// legacy, which the unspecified rows below pin.
+func TestTaskContractChangesOnlyWhatItDeclares(t *testing.T) {
 	run := func(t *testing.T, contract *TaskContract, prompt string,
 		plan func(i int) map[string]interface{}) (string, string, []string) {
 		t.Helper()
@@ -977,95 +1031,184 @@ func TestTaskContractChangesOnlyTheActionDemand(t *testing.T) {
 			terminal["status"] + "/" + terminal["reason"], disk
 	}
 
-	contract := &TaskContract{
-		TaskMode:        TaskModeWork,
-		ExpectedOutputs: strsPtr("never_written.py"),
-		Verification:    strsPtr("go test ./..."),
+	// The case bodies below are contracts, so they are wrapped in the request
+	// envelope and taken through the same decoder a request uses. A contract
+	// that decodes to nil would make every row below compare a run against
+	// itself, so it is a failure here rather than a silent pass.
+	mustValidate := func(t *testing.T, contract string) *TaskContract {
+		t.Helper()
+		body := `{"task_contract":` + contract + `}`
+		var req struct {
+			TaskContract *TaskContract `json:"task_contract,omitempty"`
+		}
+		if err := json.Unmarshal([]byte(body), &req); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if req.TaskContract == nil {
+			t.Fatalf("%s decoded to no contract", body)
+		}
+		tc, err := validateTaskContract(req.TaskContract, t.TempDir())
+		if err != nil {
+			t.Fatalf("validate %s: %v", body, err)
+		}
+		if tc == nil {
+			t.Fatalf("%s validated to no contract", body)
+		}
+		return tc
 	}
+
+	writesApp := func(i int) map[string]interface{} {
+		if i == 0 {
+			return map[string]interface{}{"type": "tool_call", "name": "write_file",
+				"args": map[string]string{"path": "app.py", "content": "A = 1\n"}}
+		}
+		return map[string]interface{}{"type": "done", "summary": "wrote app.py"}
+	}
+	saysNothing := func(i int) map[string]interface{} {
+		return map[string]interface{}{"type": "text", "content": "here is what I would do"}
+	}
+
+	const (
+		actionUnmet       = "incomplete/action_demanded_unmet"
+		verificationUnmet = "incomplete/verification_demanded_unmet"
+		deliverablesUnmet = "incomplete/deliverables_not_demonstrated"
+	)
+
+	// Each row states a baseline request and the request under test. The
+	// baseline is how the same intent was expressed before this migration --
+	// usually the legacy contract with no knowledge stated -- so a row asks
+	// what stating knowledge changed, not what having a contract changed.
+	// An empty baseline means no contract at all.
 	for _, c := range []struct {
-		name, prompt string
-		plan         func(i int) map[string]interface{}
+		name     string
+		baseline string
+		body     string
+		// want: the exact terminal the request under test must produce.
+		// Empty means it must equal the baseline's terminal event for event.
+		want   string
+		prompt string
+		plan   func(i int) map[string]interface{}
 	}{
-		{"work request", "Create app.py.", func(i int) map[string]interface{} {
-			if i == 0 {
-				return map[string]interface{}{"type": "tool_call", "name": "write_file",
-					"args": map[string]string{"path": "app.py", "content": "A = 1\n"}}
-			}
-			return map[string]interface{}{"type": "done", "summary": "wrote app.py"}
-		}},
-		{"question", "What does this repository do?", func(i int) map[string]interface{} {
-			return map[string]interface{}{"type": "done", "summary": "it is empty"}
-		}},
-		{"prose only", "Create app.py.", func(i int) map[string]interface{} {
-			return map[string]interface{}{"type": "text", "content": "here is what I would do"}
-		}},
+		// --- stating "unspecified" is the same as not stating anything -----
+		{"explicit unspecified equals omitted", `{"task_mode":"work"}`,
+			`{"task_mode":"work","output_knowledge":"unspecified","verification_knowledge":"unspecified"}`,
+			"", "Create app.py.", writesApp},
+		{"explicit unspecified equals omitted, prose only", `{"task_mode":"work"}`,
+			`{"task_mode":"work","output_knowledge":"unspecified","verification_knowledge":"unspecified"}`,
+			"", "Create app.py.", saysNothing},
+		{"explicit unspecified equals omitted, question", `{"task_mode":"question"}`,
+			`{"task_mode":"question","output_knowledge":"unspecified","verification_knowledge":"unspecified"}`,
+			"", "What does this repository do?", saysNothing},
+
+		// --- a legacy list keeps the meaning it already had ----------------
+		{"legacy outputs equal declared outputs",
+			`{"task_mode":"work","expected_outputs":["app.py"]}`,
+			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["app.py"]}`,
+			"", "Create app.py.", writesApp},
+		{"legacy verification equals declared verification",
+			`{"task_mode":"work","verification":["go test ./..."]}`,
+			`{"task_mode":"work","verification_knowledge":"declared","verification":["go test ./..."]}`,
+			"", "Create app.py.", writesApp},
+
+		// --- an empty legacy list was never authoritative none -------------
+		{"legacy empty outputs equal unspecified",
+			`{"task_mode":"work"}`,
+			`{"task_mode":"work","expected_outputs":[]}`,
+			"", "Create app.py.", writesApp},
+		{"legacy empty verification equals unspecified",
+			`{"task_mode":"work"}`,
+			`{"task_mode":"work","verification":[]}`,
+			"", "Create app.py.", writesApp},
+
+		// --- a declared output the run never produced is named as missing --
+		{"declared output never written",
+			`{"task_mode":"work"}`,
+			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["never_written.py"]}`,
+			deliverablesUnmet, "Create app.py.", writesApp},
+
+		// --- a declared verification nothing satisfied is named as unmet ---
+		{"declared verification never run",
+			`{"task_mode":"work","verification":["go test ./..."]}`,
+			`{"task_mode":"work","verification_knowledge":"declared","verification":["go test ./..."]}`,
+			verificationUnmet, "Create app.py.", writesApp},
+
+		// --- authoritative none creates no obligation and no completion ----
+		// Declaring no outputs drops the output obligation. It cannot
+		// manufacture a completion: the verification demand this work request
+		// already carried is untouched, so the run still ends incomplete.
+		{"declared empty outputs create no output obligation",
+			`{"task_mode":"work","expected_outputs":["never_written.py"]}`,
+			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":[]}`,
+			verificationUnmet, "Create app.py.", writesApp},
+		{"declared empty verification creates no verification obligation",
+			`{"task_mode":"work","verification":["go test ./..."]}`,
+			`{"task_mode":"work","verification_knowledge":"declared","verification":[]}`,
+			verificationUnmet, "Create app.py.", writesApp},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			evA, termA, diskA := run(t, nil, c.prompt, c.plan)
-			evB, termB, diskB := run(t, contract, c.prompt, c.plan)
-			t.Logf("%s: terminal without=%q with=%q", c.name, termA, termB)
-			// The contract is work. Where the heuristic already agreed, the
-			// run must be identical; where it did not, the permitted
-			// differences are the two demands a declared work contract now
-			// owns.
-			//
-			// This assertion originally allowed exactly one move, to
-			// action_demanded_unmet, because the contract decided exactly one
-			// thing. That premise changed here on purpose: a declared work
-			// contract also demands verification bound to the exact current
-			// bytes of its code deliverables, because a fifty-task benchmark
-			// showed a run can satisfy every other condition and still have
-			// executed nothing. The contract's authority is what widened; the
-			// direction did not -- both moves are strictly toward incomplete,
-			// and no contract may move a terminal toward completed.
-			// Observational, not guessed: the contractless run IS the legacy
-			// behaviour, so its terminal says whether action was already
-			// demanded.
-			legacy := termA == "incomplete/action_demanded_unmet"
-			permitted := map[string]bool{
-				"incomplete/action_demanded_unmet":       true,
-				"incomplete/verification_demanded_unmet": true,
+			var baseline *TaskContract
+			if c.baseline != "" {
+				baseline = mustValidate(t, c.baseline)
 			}
-			if termA == termB {
-				if evA != evB {
-					t.Error("same terminal but the event stream differs")
-				}
-			} else if legacy {
-				t.Errorf("terminal moved even though the heuristic already demanded "+
-					"action: %q vs %q", termA, termB)
-			} else if !permitted[termB] {
-				t.Errorf("the only permitted moves are action_demanded_unmet and "+
-					"verification_demanded_unmet, got %q (was %q)", termB, termA)
-			}
-			if strings.HasPrefix(termB, "completed") && !strings.HasPrefix(termA, "completed") {
-				t.Errorf("a contract moved a terminal toward completed: %q -> %q", termA, termB)
-			}
+			evA, termA, diskA := run(t, baseline, c.prompt, c.plan)
+			evB, termB, diskB := run(t, mustValidate(t, c.body), c.prompt, c.plan)
+			t.Logf("%s: terminal baseline=%q under test=%q", c.name, termA, termB)
+
 			if strings.Join(diskA, ",") != strings.Join(diskB, ",") {
 				t.Errorf("disk differs:\n  %v\n  %v", diskA, diskB)
 			}
-			if evA != evB && termA == termB {
-				a, b := strings.Split(evA, "\n"), strings.Split(evB, "\n")
-				for i := 0; i < len(a) || i < len(b); i++ {
-					var x, y string
-					if i < len(a) {
-						x = a[i]
-					}
-					if i < len(b) {
-						y = b[i]
-					}
-					if x != y {
-						t.Errorf("first difference at event %d:\n  without: %.200s\n  with:    %.200s", i, x, y)
-						break
+			// Stating knowledge may narrow a claim. It may never widen one.
+			if strings.HasPrefix(termB, "completed") && !strings.HasPrefix(termA, "completed") {
+				t.Errorf("stating knowledge moved a terminal toward completed: %q -> %q",
+					termA, termB)
+			}
+			if c.want == "" {
+				if termA != termB {
+					t.Errorf("stating knowledge moved the terminal: %q -> %q", termA, termB)
+				}
+				if evA != evB {
+					a, b := strings.Split(evA, "\n"), strings.Split(evB, "\n")
+					for i := 0; i < len(a) || i < len(b); i++ {
+						var x, y string
+						if i < len(a) {
+							x = a[i]
+						}
+						if i < len(b) {
+							y = b[i]
+						}
+						if x != y {
+							t.Errorf("stating knowledge changed the stream at event %d:"+
+								"\n  baseline:   %.180s\n  under test: %.180s", i, x, y)
+							break
+						}
 					}
 				}
+				return
+			}
+			if termB != c.want {
+				t.Errorf("terminal %q, want %q (baseline was %q)", termB, c.want, termA)
 			}
 		})
 	}
 }
 
-// A caller that declares nothing keeps behaving exactly as before. This is the
-// external/legacy path, and it must stay open: the contract is additive, not a
-// new requirement.
+// Action demand stays pinned: a declared work contract may demand action where
+// the wording alone would not have, and nothing else about that decision moved.
+func TestActionDemandRemainsPinnedUnderDeclaredKnowledge(t *testing.T) {
+	base := &TaskContract{TaskMode: TaskModeWork}
+	paths := []string{"a.py"}
+	declared := &TaskContract{TaskMode: TaskModeWork,
+		OutputKnowledge: KnowledgeDeclared, ExpectedOutputs: &paths}
+	for _, msg := range []string{"Create app.py.", "What does this do?", ""} {
+		want := decideActionDemand(base, msg, Tier2Medium, false)
+		got := decideActionDemand(declared, msg, Tier2Medium, false)
+		if want.Required != got.Required {
+			t.Errorf("%q: declaring outputs changed the action demand %v -> %v",
+				msg, want.Required, got.Required)
+		}
+	}
+}
+
 func TestLegacyRequestWithoutContractIsAccepted(t *testing.T) {
 	var wire struct {
 		Message      string        `json:"message"`

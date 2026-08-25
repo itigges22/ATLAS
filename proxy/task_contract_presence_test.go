@@ -303,13 +303,20 @@ func TestCanonicalAliasesStillDedupe(t *testing.T) {
 
 // --- policy inertness --------------------------------------------------------
 
-func TestNoGateReadsTheKnowledgeFieldsYet(t *testing.T) {
-	for _, file := range []string{"guardrails.go", "tools.go", "gates.go"} {
+// A gate may consult the obligation DECISION. It may never read the raw
+// knowledge fields, because that is a second place deciding what the caller
+// meant -- and two places deciding is how the contract list and the prose
+// heuristic became a union the first time.
+func TestGatesReadTheDecisionNotTheRawKnowledgeFields(t *testing.T) {
+	for _, file := range []string{"guardrails.go", "tools.go", "gates.go", "agent.go"} {
 		src := readSourceForTest(t, file)
-		for _, sym := range []string{"OutputKnowledge", "VerificationKnowledge",
-			"OutputsPresent(", "VerificationPresent("} {
+		for _, sym := range []string{"OutputKnowledge", "VerificationKnowledge"} {
+			// validateTaskContract owns normalisation and lives in agent.go.
+			if file == "agent.go" {
+				continue
+			}
 			if strings.Contains(src, sym) {
-				t.Errorf("%s reads %s; this commit is policy-inert", file, sym)
+				t.Errorf("%s reads %s directly; go through the obligation owner", file, sym)
 			}
 		}
 	}

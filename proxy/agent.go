@@ -168,6 +168,10 @@ type runState struct {
 	// PARTIAL artifact or by exploring without ever committing the named
 	// output (observed 2026-07-19). Computed once from the prompt.
 	expectedOutputs []string
+	// The decision that named them, carried whole. A later change cannot
+	// merge the contract list with the prose heuristic again: the source and
+	// whether knowledge was stated travel with the paths.
+	outputObligation obligationDecision
 	// The expected-output gate fires at most ONCE per session: a named
 	// deliverable might be PRODUCED AT RUNTIME by the model's code (not
 	// authored), so repeatedly bouncing a correct done would steer the
@@ -806,8 +810,13 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	const runawayWriteThreshold = 20
 	// Exit-gate evidence + the shared bounce shape live on runState (see
 	// its field docs); the remaining counters are loop-local.
+	// THE output-obligation decision, made once, from the contract the
+	// request boundary already validated. Nothing the model emits later can
+	// change which source spoke.
+	outputObligation := resolveOutputObligation(ctx, userMessage)
 	st := &runState{
-		expectedOutputs:       expectedOutputPaths(userMessage),
+		expectedOutputs:       outputObligation.Items,
+		outputObligation:      outputObligation,
 		userWantsVerification: isFixIntentMessage(userMessage),
 	}
 	// One-shot: when a loop-stop is about to fire but the task's named
