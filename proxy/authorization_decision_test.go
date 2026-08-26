@@ -223,17 +223,16 @@ func TestAuthorizationMatrix(t *testing.T) {
 			t.Fatal("the wired producer saw nothing")
 		}
 		d := w.decide(evID, ev)
-		// A syntax baseline needs syntax, and the preservation obligation has
-		// no producer of its own, so it is owed.
-		expectReason(t, "syntax baseline", d, false, ReasonBaselineNotPreserved)
-		found := false
+		// A syntax baseline is preserved by current syntax evidence over the
+		// exact candidate bytes. That is the same claim the baseline holds, so
+		// nothing is owed: the alternative was refusing every replacement of a
+		// validated file forever.
+		expectReason(t, "syntax baseline", d, true, ReasonAuthorized)
 		for _, id := range d.Missing {
 			if strings.HasPrefix(id, ObligationBaselinePreserved+":") {
-				found = true
+				t.Errorf("missing %v: equal evidence did not preserve an equal baseline",
+					d.Missing)
 			}
-		}
-		if !found {
-			t.Errorf("missing %v, want the preservation obligation", d.Missing)
 		}
 	})
 
@@ -252,7 +251,102 @@ func TestAuthorizationMatrix(t *testing.T) {
 			t.Fatal("the wired producer saw nothing")
 		}
 		d := w.decide(evID, ev)
+		// Syntax is a weaker claim than the baseline holds. Promoting it here
+		// is how a working artifact gets replaced by one that merely parses.
 		expectReason(t, "behavioral baseline", d, false, ReasonBaselineNotPreserved)
+	})
+
+	t.Run("existing behavioral baseline re-established by its own command", func(t *testing.T) {
+		w := newAuthWorld(t,
+			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
+				`"verification_knowledge":"declared","verification":["python3 solve.py"]}`,
+			"solve.py", authPy, true)
+		w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, VerificationRecord{
+			Command: "python3 solve.py",
+			Covered: map[string]string{w.path: w.hash}, Turn: 1,
+		})
+		w.obs = requestObligations(w.ctx)
+		ev, evID, ok := w.observe(t)
+		if !ok {
+			t.Fatal("the wired producer saw nothing")
+		}
+		// The client declared the same command that established the baseline,
+		// and staging ran it against the candidate.
+		d := w.decide(evID, append([]proxyEvidence{ev}, w.stage(evID)...)...)
+		expectReason(t, "behavioral baseline re-run", d, true, ReasonAuthorized)
+	})
+
+	t.Run("existing behavioral baseline with a different command passing", func(t *testing.T) {
+		w := newAuthWorld(t,
+			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
+				`"verification_knowledge":"declared","verification":["ruff check ."]}`,
+			"solve.py", authPy, true)
+		w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, VerificationRecord{
+			Command: "python3 solve.py",
+			Covered: map[string]string{w.path: w.hash}, Turn: 1,
+		})
+		w.obs = requestObligations(w.ctx)
+		ev, evID, ok := w.observe(t)
+		if !ok {
+			t.Fatal("the wired producer saw nothing")
+		}
+		// A different command exiting zero is behavioural evidence about
+		// something, and it is not evidence that what the baseline showed
+		// still holds.
+		d := w.decide(evID, append([]proxyEvidence{ev}, w.stage(evID)...)...)
+		expectReason(t, "behavioral baseline, other command", d, false,
+			ReasonBaselineNotPreserved)
+	})
+
+	t.Run("a new file owes no preservation", func(t *testing.T) {
+		w := newAuthWorld(t, declaredPy, "solve.py", authPy, true)
+		// Nothing was ever validated at this path, so there is no baseline to
+		// preserve and no obligation to fabricate.
+		for _, o := range w.obs {
+			if o.Kind == ObligationBaselinePreserved {
+				t.Fatal("a path with no validated baseline owed preservation")
+			}
+		}
+		ev, evID, ok := w.observe(t)
+		if !ok {
+			t.Fatal("the wired producer saw nothing")
+		}
+		expectReason(t, "new file", w.decide(evID, ev), true, ReasonAuthorized)
+	})
+
+	t.Run("preservation never promotes the evidence it compares", func(t *testing.T) {
+		syntax, _ := newTaskObligation(ObligationBaselinePreserved, "/w/solve.py", "syntax", true)
+		behavioral, _ := newTaskObligation(ObligationBaselinePreserved, "/w/solve.py", "behavioral", true)
+		oracle, _ := newTaskObligation(ObligationBaselinePreserved, "/w/solve.py", "oracle", true)
+		syntaxEv := proxyEvidence{Outcome: ValidationPassed,
+			Provenance: V3EvidenceProvenance{ObservedStrength: "syntax"}}
+		behavioralEv := proxyEvidence{Outcome: ValidationPassed,
+			Provenance: V3EvidenceProvenance{ObservedStrength: "behavioral",
+				CommandIdentity: contentSHA256("python3 solve.py")}}
+		witness := contentSHA256("python3 solve.py")
+
+		for _, c := range []struct {
+			name    string
+			o       taskObligation
+			ev      []proxyEvidence
+			witness string
+			want    bool
+		}{
+			{"syntax by syntax", syntax, []proxyEvidence{syntaxEv}, "", true},
+			{"syntax by behavioral", syntax, []proxyEvidence{behavioralEv}, witness, true},
+			{"behavioral by syntax", behavioral, []proxyEvidence{syntaxEv}, witness, false},
+			{"behavioral by its own command", behavioral, []proxyEvidence{behavioralEv}, witness, true},
+			{"behavioral by another command", behavioral, []proxyEvidence{behavioralEv},
+				contentSHA256("ruff check ."), false},
+			{"behavioral with no witness", behavioral, []proxyEvidence{behavioralEv}, "", false},
+			{"oracle by behavioral", oracle, []proxyEvidence{behavioralEv}, witness, false},
+			{"nothing by nothing", behavioral, nil, witness, false},
+		} {
+			got, _ := baselinePreservedBy(c.o, c.witness, c.ev)
+			if got != c.want {
+				t.Errorf("%s: preserved=%v, want %v", c.name, got, c.want)
+			}
+		}
 	})
 
 	t.Run("stale workspace", func(t *testing.T) {

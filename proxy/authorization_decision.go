@@ -104,6 +104,59 @@ type authorizationInput struct {
 	// Envelope is the service's own record, consulted only for adapter
 	// support and legacy status.
 	Envelope *V3EvidenceEnvelope
+	// BaselineWitnessCommand identifies the command whose pass established the
+	// behavioural baseline the candidate would replace, when there is one. It
+	// is "" for a syntax baseline, which has no command behind it, and for a
+	// target with no baseline at all.
+	BaselineWitnessCommand string
+}
+
+// baselinePreservedBy answers whether the evidence that authorized this
+// candidate ALSO shows the baseline it replaces has survived.
+//
+// Preservation is derived, never produced: no producer owns it, and one that
+// did would be asserting a comparison rather than observing a fact. The
+// derivation is the comparison, and it has one rule it may not break --
+// evidence never gets stronger by being compared. A syntax pass over the
+// candidate says the candidate parses. Against a syntax baseline that is
+// exactly the same claim the baseline holds, so it preserves it. Against a
+// behavioural baseline it is a weaker claim about a stronger one, and calling
+// that "preserved" is how a working artifact gets replaced by one that merely
+// compiles.
+//
+// Every record here has already been matched against the asked-for identity,
+// so it is current, about these exact candidate bytes, and about this
+// invocation. What is left to decide is strength and witness.
+func baselinePreservedBy(o taskObligation, witnessCommand string,
+	authorizing []proxyEvidence) (bool, string) {
+	required := o.RequiredStrength
+	if strengthRank(required) < 0 {
+		return false, "unclassified baseline strength"
+	}
+	for _, ev := range authorizing {
+		p := ev.Provenance
+		if strengthRank(p.ObservedStrength) < strengthRank(required) {
+			// Weaker evidence never preserves a stronger baseline.
+			continue
+		}
+		if required == "syntax" {
+			// A syntax baseline is preserved by current syntax evidence over
+			// the exact candidate bytes. Anything at or above that strength,
+			// already bound to this candidate, is that.
+			return true, ""
+		}
+		// A behavioural or oracle baseline was established by something being
+		// RUN. Preserving it needs the same thing run again on the candidate,
+		// not a different command that also passed.
+		if witnessCommand == "" {
+			return false, "the baseline names no command to re-run"
+		}
+		if p.CommandIdentity != witnessCommand {
+			continue
+		}
+		return true, ""
+	}
+	return false, "no current evidence reaches the baseline's " + required
 }
 
 // decideAuthorization is THE observe-only authorization owner.
@@ -196,6 +249,7 @@ func decideAuthorization(ctx *AgentContext, in authorizationInput) Authorization
 	}
 
 	satisfied := map[string]bool{}
+	var authorizing []proxyEvidence
 	firstRefusal := ReasonUnknown
 	for _, ev := range in.Evidence {
 		want, owned := wantCommand[ev.Provenance.ObligationID]
@@ -208,6 +262,7 @@ func decideAuthorization(ctx *AgentContext, in authorizationInput) Authorization
 		reason := evidenceRefusalFor(ev, in.Identity, want)
 		if reason == ReasonAuthorized {
 			satisfied[ev.Provenance.ObligationID] = true
+			authorizing = append(authorizing, ev)
 			d.EvidenceConsumed = append(d.EvidenceConsumed,
 				ev.Provenance.CandidateInstanceID+"/"+ev.Provenance.ObligationID)
 			continue
@@ -217,6 +272,18 @@ func decideAuthorization(ctx *AgentContext, in authorizationInput) Authorization
 		}
 	}
 	sort.Strings(d.EvidenceConsumed)
+
+	// Baseline preservation is settled last, because it is derived from what
+	// the rest of the evidence already established rather than observed on its
+	// own.
+	for _, o := range prerequisites {
+		if o.Kind != ObligationBaselinePreserved || satisfied[o.ID] {
+			continue
+		}
+		if ok, _ := baselinePreservedBy(o, in.BaselineWitnessCommand, authorizing); ok {
+			satisfied[o.ID] = true
+		}
+	}
 
 	for _, o := range prerequisites {
 		if !o.Required {
@@ -370,13 +437,15 @@ func observeCandidateAuthorization(ctx *AgentContext, path, code string,
 		WorkspaceStateHash:  stateHash,
 		BaselineIdentity:    baselineIdentityFor(ctx, resolved),
 	}
+	_, witness := baselineWitness(ctx, resolved)
 	in := authorizationInput{
-		Obligations:   requestObligations(ctx),
-		TargetPath:    resolved,
-		CandidateHash: hash,
-		Identity:      asked,
-		Evidence:      evidence,
-		Envelope:      envelope,
+		Obligations:            requestObligations(ctx),
+		TargetPath:             resolved,
+		CandidateHash:          hash,
+		Identity:               asked,
+		Evidence:               evidence,
+		Envelope:               envelope,
+		BaselineWitnessCommand: witness,
 	}
 	d := decideAuthorization(ctx, in)
 	recordAuthorizationDecision(ctx, in, d)

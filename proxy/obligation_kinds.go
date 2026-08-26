@@ -480,26 +480,37 @@ func deriveTaskObligations(ctx *AgentContext, outputs, verification obligationDe
 // the ledger's verdict must be about the bytes that are there now, and a
 // green verification record must still cover those exact bytes. A verdict
 // about superseded bytes is history, not a baseline.
-func baselineEvidenceStrength(ctx *AgentContext, resolved string) string {
+// baselineWitness names what the artifact currently on disk has already been
+// shown to be, and -- when that showing was behavioural -- WHICH command
+// showed it.
+//
+// The command matters because preservation is not a strength comparison alone.
+// A baseline that exists because `pytest -q` passed is preserved by `pytest -q`
+// passing again, not by some other command that also exits zero. Returning the
+// witness alongside the strength keeps the two from drifting apart.
+func baselineWitness(ctx *AgentContext, resolved string) (string, string) {
 	if ctx == nil {
-		return ""
+		return "", ""
 	}
 	disk := fileSHA256(ctx, resolved)
 	if disk == "" {
-		return ""
+		// Nothing is there. A new file replaces nothing and owes no
+		// preservation.
+		return "", ""
 	}
-	// Behavioral: some green declared or recognised run still covers exactly
-	// these bytes for this path.
+	// Behavioral: some green run still covers exactly these bytes for this
+	// path. The command that covered them is the witness.
 	for _, rec := range ctx.VerificationEvidence {
 		covered, ok := evidenceIsCurrent(ctx, rec)
 		if !ok {
 			continue
 		}
 		if covered[resolveAgentPath(ctx, resolved)] == disk {
-			return "behavioral"
+			return "behavioral", contentSHA256(rec.Command)
 		}
 	}
-	// Syntax: the ledger holds a pass about exactly these bytes.
+	// Syntax: the ledger holds a pass about exactly these bytes. A structural
+	// pass has no command behind it, so there is no witness to name.
 	ctx.LedgerMu.Lock()
 	defer ctx.LedgerMu.Unlock()
 	for key, d := range ctx.Ledger {
@@ -510,8 +521,15 @@ func baselineEvidenceStrength(ctx *AgentContext, resolved string) string {
 			continue
 		}
 		if d.ValidationStatus == ValidationPassed && d.ValidatedHash == disk {
-			return "syntax"
+			return "syntax", ""
 		}
 	}
-	return ""
+	return "", ""
+}
+
+// baselineEvidenceStrength is what the artifact on disk has already been shown
+// to be, ignoring which command showed it.
+func baselineEvidenceStrength(ctx *AgentContext, resolved string) string {
+	strength, _ := baselineWitness(ctx, resolved)
+	return strength
 }
