@@ -76,6 +76,67 @@ func TestFeasibilityMatrix(t *testing.T) {
 		}
 	})
 
+	t.Run("several declared commands, all producible", func(t *testing.T) {
+		d := feasibilityFor(t,
+			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
+				`"verification_knowledge":"declared","verification":["pytest -q","ruff check ."]}`, nil)
+		expectFeasibility(t, "two commands", d, true, FeasibilityClosurePathAvailable)
+	})
+
+	t.Run("syntax baseline is reachable from what syntax evidence produces", func(t *testing.T) {
+		ctx, _ := rolesFixture(t, "", map[string]string{"solve.py": "print(7)\n"})
+		resolved := resolveAgentPath(ctx, "solve.py")
+		disk := fileSHA256(ctx, resolved)
+		ctx.LedgerMu.Lock()
+		if ctx.Ledger == nil {
+			ctx.Ledger = map[string]*DeliverableState{}
+		}
+		ctx.Ledger[resolved] = &DeliverableState{
+			Path: resolved, CurrentHash: disk, Generation: 1,
+			ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationPassed,
+			ValidatedHash: disk,
+		}
+		ctx.LedgerMu.Unlock()
+		ctx.TaskContract = mustContract(t, ctx.WorkingDir,
+			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`)
+		obs := requestObligations(ctx)
+		d := decideInvocationFeasibility(feasibilityInput{
+			Obligations:       obs,
+			AuthorizedTargets: authorizedTargets(obs),
+			Producible:        producibleStrengths(),
+		})
+		// Preservation has no producer and never will. It is reachable because
+		// the syntax evidence that speaks for the candidate reaches the same
+		// strength the baseline holds -- the same rule the authorization
+		// decision applies afterwards.
+		expectFeasibility(t, "syntax baseline", d, true, FeasibilityClosurePathAvailable)
+	})
+
+	t.Run("behavioural baseline is unreachable without behavioural evidence", func(t *testing.T) {
+		ctx, _ := rolesFixture(t, "", map[string]string{"solve.py": "print(7)\n"})
+		resolved := resolveAgentPath(ctx, "solve.py")
+		ctx.VerificationEvidence = append(ctx.VerificationEvidence, VerificationRecord{
+			Command: "python3 solve.py",
+			Covered: map[string]string{resolved: fileSHA256(ctx, resolved)}, Turn: 1,
+		})
+		ctx.TaskContract = mustContract(t, ctx.WorkingDir,
+			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`)
+		obs := requestObligations(ctx)
+		in := feasibilityInput{
+			Obligations:       obs,
+			AuthorizedTargets: authorizedTargets(obs),
+			Producible:        map[string]string{ObligationSyntacticValidity: "syntax"},
+		}
+		d := decideInvocationFeasibility(in)
+		expectFeasibility(t, "behavioural baseline, syntax only", d, false,
+			FeasibilityBaselineFloorUnreachable)
+
+		// With behavioural evidence producible, the same floor is reachable.
+		in.Producible = producibleStrengths()
+		expectFeasibility(t, "behavioural baseline, staging wired",
+			decideInvocationFeasibility(in), true, FeasibilityClosurePathAvailable)
+	})
+
 	t.Run("declared command on a build without staging", func(t *testing.T) {
 		_, obs := rolesFixture(t,
 			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
@@ -108,11 +169,14 @@ func TestFeasibilityMatrix(t *testing.T) {
 			AuthorizedTargets: authorizedTargets(obs),
 			Producible:        producibleStrengths(),
 		})
-		expectFeasibility(t, "behavioral baseline", d, false,
-			FeasibilityBaselineFloorUnreachable)
+		// The floor is the baseline's, and staging can reach it. Preservation
+		// itself is still derived rather than produced -- what changed is that
+		// something producible now gets that high.
 		if d.Floor != "behavioral" {
 			t.Errorf("floor %q, want the baseline's behavioral", d.Floor)
 		}
+		expectFeasibility(t, "behavioral baseline", d, true,
+			FeasibilityClosurePathAvailable)
 	})
 
 	t.Run("unsupported obligation", func(t *testing.T) {
@@ -347,6 +411,47 @@ func TestTheFeasibilityRecordCarriesNoContent(t *testing.T) {
 	for _, needle := range []string{"hunter2", "pytest", "solve.py"} {
 		if strings.Contains(string(blob), needle) {
 			t.Errorf("the feasibility answer carries %q", needle)
+		}
+	}
+}
+
+// TestTheTwoBaselineDerivationsAgree pins the pair that must not drift.
+//
+// Feasibility says before generation whether a baseline COULD be preserved;
+// authorization says afterwards whether it WAS. They apply the same strength
+// rule, in two files, and a build where one says unreachable and the other
+// preserves anyway is a build whose two answers are about different systems.
+func TestTheTwoBaselineDerivationsAgree(t *testing.T) {
+	const witness = "command-identity"
+	for _, required := range []string{"syntax", "behavioral", "oracle"} {
+		o, ok := newTaskObligation(ObligationBaselinePreserved, "/w/solve.py", required, true)
+		if !ok {
+			t.Fatalf("%s baseline obligation refused", required)
+		}
+		for _, producible := range []map[string]string{
+			{},
+			{ObligationSyntacticValidity: "syntax"},
+			{ObligationSyntacticValidity: "syntax", ObligationDeclaredCommand: "behavioral"},
+			{ObligationDeclaredExample: "oracle"},
+		} {
+			// The strongest thing this build could put in front of the
+			// authorization decision, named by the baseline's own witness so
+			// the command check cannot be what decides it.
+			var evidence []proxyEvidence
+			for _, strength := range producible {
+				evidence = append(evidence, proxyEvidence{
+					Outcome: ValidationPassed,
+					Provenance: V3EvidenceProvenance{
+						ObservedStrength: strength, CommandIdentity: witness,
+					},
+				})
+			}
+			before := baselineFloorReachable(required, producible)
+			after, _ := baselinePreservedBy(o, witness, evidence)
+			if before != after {
+				t.Errorf("%s baseline with %v: feasibility says %v, authorization says %v",
+					required, producible, before, after)
+			}
 		}
 	}
 }

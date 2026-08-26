@@ -51,6 +51,31 @@ func (w *authWorld) decide(id candidateEvidenceIdentity, evidence ...proxyEviden
 	return observeCandidateAuthorization(w.ctx, w.path, w.code, id, nil, evidence)
 }
 
+// stagedWorld is a world whose client declared commands, with an executor that
+// answers them.
+func stagedWorld(t *testing.T, commands ...string) *authWorld {
+	t.Helper()
+	quoted := make([]string, 0, len(commands))
+	for _, c := range commands {
+		b, _ := json.Marshal(c)
+		quoted = append(quoted, string(b))
+	}
+	return newAuthWorld(t,
+		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
+			`"verification_knowledge":"declared","verification":[`+
+			strings.Join(quoted, ",")+`]}`,
+		"solve.py", authPy, true)
+}
+
+func (w *authWorld) mustObserve(t *testing.T) (proxyEvidence, candidateEvidenceIdentity) {
+	t.Helper()
+	ev, id, ok := w.observe(t)
+	if !ok {
+		t.Fatal("the wired producer saw nothing")
+	}
+	return ev, id
+}
+
 func expectReason(t *testing.T, row string, d AuthorizationDecision,
 	authorized bool, want AuthorizationReason) {
 	t.Helper()
@@ -205,6 +230,179 @@ func TestAuthorizationMatrix(t *testing.T) {
 		forged.Provenance.Source = ProvenanceModelGenerated
 		d := w.decide(evID, forged)
 		expectReason(t, "model self-test", d, false, ReasonProvenanceUntrusted)
+	})
+
+	t.Run("declared command that changed an input", func(t *testing.T) {
+		w := stagedWorld(t, "pytest -q")
+		w.shellInput = true
+		ev, evID := w.mustObserve(t)
+		behavioral := w.stage(evID)
+		if len(behavioral) != 1 || w.shellRuns != 1 {
+			t.Fatalf("%d records from %d runs; the row did not reach staging",
+				len(behavioral), w.shellRuns)
+		}
+		if behavioral[0].Outcome == ValidationPassed {
+			t.Error("a command that changed its own inputs was recorded as a pass")
+		}
+		d := w.decide(evID, append([]proxyEvidence{ev}, behavioral...)...)
+		if d.Authorized {
+			t.Error("a command that changed its own inputs authorized the candidate")
+		}
+	})
+
+	t.Run("declared command that timed out in staging", func(t *testing.T) {
+		w := stagedWorld(t, "pytest -q")
+		w.shellTimeout, w.shellExit = true, -1
+		ev, evID := w.mustObserve(t)
+		behavioral := w.stage(evID)
+		if len(behavioral) != 1 || w.shellRuns != 1 {
+			t.Fatalf("%d records from %d runs; the row did not reach staging",
+				len(behavioral), w.shellRuns)
+		}
+		if behavioral[0].Outcome == ValidationPassed {
+			t.Error("a timeout was recorded as a pass")
+		}
+		d := w.decide(evID, append([]proxyEvidence{ev}, behavioral...)...)
+		expectReason(t, "timed out", d, false, ReasonEvidenceMissing)
+	})
+
+	t.Run("declared command refused by the safety gate", func(t *testing.T) {
+		// Client authority to ask for verification is not authority to do what
+		// the safety gate refuses the model.
+		w := stagedWorld(t, "rm -rf /")
+		ev, evID := w.mustObserve(t)
+		d := w.decide(evID, append([]proxyEvidence{ev}, w.stage(evID)...)...)
+		if d.Authorized {
+			t.Error("a refused command authorized the candidate")
+		}
+		if w.shellRuns != 0 {
+			t.Errorf("a refused command reached the executor %d times", w.shellRuns)
+		}
+	})
+
+	t.Run("declared command with staging unavailable", func(t *testing.T) {
+		w := stagedWorld(t, "pytest -q")
+		ev, evID := w.mustObserve(t)
+		// The executor is gone. Unavailable is not failed and is not passed:
+		// nothing observed the command, so nothing speaks for it.
+		w.ctx.SandboxURL = ""
+		behavioral := w.stage(evID)
+		for _, b := range behavioral {
+			if b.Outcome == ValidationPassed {
+				t.Error("an unavailable executor produced a pass")
+			}
+		}
+		if w.shellRuns != 0 {
+			t.Errorf("the executor ran %d times after being removed", w.shellRuns)
+		}
+		d := w.decide(evID, append([]proxyEvidence{ev}, behavioral...)...)
+		expectReason(t, "staging unavailable", d, false, ReasonEvidenceMissing)
+	})
+
+	t.Run("two declared commands where only one passes", func(t *testing.T) {
+		w := stagedWorld(t, "pytest -q", "ruff check .")
+		// `pytest -q` passes and `ruff check .` does not. One obligation met
+		// leaves the other owed: a passing command speaks for itself and for
+		// nothing else.
+		w.shellFail = map[string]bool{"ruff check .": true}
+		ev, evID := w.mustObserve(t)
+		behavioral := w.stage(evID)
+		if len(behavioral) != 2 || w.shellRuns != 2 {
+			t.Fatalf("%d records from %d runs; the row did not reach staging",
+				len(behavioral), w.shellRuns)
+		}
+		seen := map[string]bool{}
+		for _, b := range behavioral {
+			if seen[b.Provenance.ObligationID] {
+				t.Error("two records claim the same obligation")
+			}
+			seen[b.Provenance.ObligationID] = true
+		}
+		passed := 0
+		for _, b := range behavioral {
+			if b.Outcome == ValidationPassed {
+				passed++
+			}
+		}
+		if passed != 1 {
+			t.Fatalf("%d records passed, want exactly the one command that did", passed)
+		}
+		d := w.decide(evID, append([]proxyEvidence{ev}, behavioral...)...)
+		if d.Authorized {
+			t.Error("a half-met obligation set authorized")
+		}
+		if len(d.Satisfied) != 2 || len(d.Missing) != 1 {
+			t.Errorf("satisfied %v missing %v, want the syntax and one command "+
+				"met and the other owed", d.Satisfied, d.Missing)
+		}
+		if !strings.HasPrefix(d.Missing[0], ObligationDeclaredCommand+":") {
+			t.Errorf("missing %v, want the command that failed", d.Missing)
+		}
+	})
+
+	t.Run("two declared commands both passing", func(t *testing.T) {
+		w := stagedWorld(t, "pytest -q", "ruff check .")
+		ev, evID := w.mustObserve(t)
+		behavioral := w.stage(evID)
+		if len(behavioral) != 2 {
+			t.Fatalf("staging produced %d records, want one per command", len(behavioral))
+		}
+		if w.shellRuns != 2 {
+			t.Errorf("the executor ran %d times, want once per command", w.shellRuns)
+		}
+		d := w.decide(evID, append([]proxyEvidence{ev}, behavioral...)...)
+		expectReason(t, "both commands", d, true, ReasonAuthorized)
+		if len(d.Satisfied) != 3 {
+			t.Errorf("satisfied %v, want the syntax and both commands", d.Satisfied)
+		}
+	})
+
+	t.Run("a declared set larger than the staging budget", func(t *testing.T) {
+		var commands []string
+		for i := 0; i < defaultStagingBudget().MaxCommands+1; i++ {
+			commands = append(commands, "check-"+string(rune('a'+i)))
+		}
+		w := stagedWorld(t, commands...)
+		ev, evID := w.mustObserve(t)
+		behavioral := w.stage(evID)
+		if len(behavioral) != 0 {
+			t.Errorf("an over-budget set produced %d records", len(behavioral))
+		}
+		if w.shellRuns != 0 {
+			t.Errorf("an over-budget set ran %d commands; a partial set is not "+
+				"a smaller obligation", w.shellRuns)
+		}
+		d := w.decide(evID, append([]proxyEvidence{ev}, behavioral...)...)
+		if d.Authorized {
+			t.Error("an unstaged set authorized")
+		}
+	})
+
+	t.Run("behavioral evidence over a superseded workspace", func(t *testing.T) {
+		w := stagedWorld(t, "pytest -q")
+		ev, evID := w.mustObserve(t)
+		behavioral := w.stage(evID)
+		if len(behavioral) != 1 {
+			t.Fatalf("staging produced %d records", len(behavioral))
+		}
+		// The workspace moves after staging observed it.
+		bumpWorkspace(w.ctx, w.path, contentSHA256("moved on\n"))
+		d := w.decide(evID, append([]proxyEvidence{ev}, behavioral...)...)
+		expectReason(t, "superseded workspace", d, false, ReasonWorkspaceStale)
+	})
+
+	t.Run("behavioral evidence from another invocation", func(t *testing.T) {
+		w := stagedWorld(t, "pytest -q")
+		ev, evID := w.mustObserve(t)
+		behavioral := w.stage(evID)
+		if len(behavioral) != 1 {
+			t.Fatalf("staging produced %d records", len(behavioral))
+		}
+		// A second invocation of the same request. Its identity is different,
+		// and the earlier record may not stand in for it.
+		other := nextInvocationIdentity(w.ctx, w.hash)
+		d := w.decide(other, append([]proxyEvidence{ev}, behavioral...)...)
+		expectReason(t, "another invocation", d, false, ReasonRequestOrInvocationMismatch)
 	})
 
 	t.Run("existing syntax baseline with equal evidence", func(t *testing.T) {

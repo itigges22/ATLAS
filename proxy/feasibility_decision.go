@@ -152,15 +152,23 @@ func decideInvocationFeasibility(in feasibilityInput) FeasibilityDecision {
 			note(FeasibilityUnsupportedObligation, o.ID)
 			continue
 		}
+		if o.Kind == ObligationBaselinePreserved {
+			// Preservation has no producer of its own and never will: it is
+			// derived from whatever else spoke for the candidate. So it is
+			// reachable exactly when something this build CAN produce reaches
+			// the strength the existing artifact already has.
+			//
+			// This asks whether closure is possible, not whether it will
+			// happen. Whether the behavioural evidence turns out to name the
+			// command that established the baseline is a fact about the run,
+			// and the authorization decision is where that is settled.
+			if !baselineFloorReachable(o.RequiredStrength, in.Producible) {
+				note(FeasibilityBaselineFloorUnreachable, o.ID)
+			}
+			continue
+		}
 		available, ok := in.Producible[o.Kind]
 		if !ok {
-			// Baseline preservation is separated from a plain missing source:
-			// what is unreachable is the STRENGTH the existing artifact
-			// already has, which is a different thing to report.
-			if o.Kind == ObligationBaselinePreserved {
-				note(FeasibilityBaselineFloorUnreachable, o.ID)
-				continue
-			}
 			// A kind no adapter owns an evaluator for is a different failure
 			// from one whose evaluator exists but has no trusted source.
 			if !anyAdapterMeasures(o.Kind) {
@@ -171,10 +179,6 @@ func decideInvocationFeasibility(in feasibilityInput) FeasibilityDecision {
 			continue
 		}
 		if strengthRank(available) < strengthRank(o.RequiredStrength) {
-			if o.Kind == ObligationBaselinePreserved {
-				note(FeasibilityBaselineFloorUnreachable, o.ID)
-				continue
-			}
 			note(FeasibilityNoTrustedSource, o.ID)
 		}
 	}
@@ -273,4 +277,21 @@ func init() {
 			panic("feasibility forbidden-input list contains an empty name")
 		}
 	}
+}
+
+// baselineFloorReachable mirrors the derivation the authorization owner uses.
+//
+// The two must agree: a build that calls a baseline unreachable and then
+// preserves it anyway, or the reverse, is a build whose pre-generation answer
+// and post-generation answer are about different systems.
+func baselineFloorReachable(required string, producible map[string]string) bool {
+	for kind, strength := range producible {
+		if kind == ObligationBaselinePreserved {
+			continue
+		}
+		if strengthRank(strength) >= strengthRank(required) {
+			return true
+		}
+	}
+	return false
 }

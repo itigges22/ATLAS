@@ -32,9 +32,14 @@ type matrixWorld struct {
 	sandbox *httptest.Server
 	// shell scripts what a staged command does. The defaults are a clean
 	// pass; a row that needs a failure sets them before staging.
-	shellExit   int
-	shellMutate bool
-	shellRuns   int
+	shellExit    int
+	shellMutate  bool
+	shellInput   bool
+	shellTimeout bool
+	shellRuns    int
+	// shellFail names the commands this executor fails, when a row needs some
+	// to pass and others not.
+	shellFail map[string]bool
 }
 
 // newMatrixWorld builds a workspace with one candidate on disk, a sandbox
@@ -58,6 +63,7 @@ func newMatrixWorld(t *testing.T, contract, filename, code string, valid bool) *
 			// The executor's half of staging: overlay in, hashes either side
 			// out. It draws no conclusion, exactly as the real one does not.
 			var in struct {
+				Command      string            `json:"command"`
 				Files        map[string]string `json:"files"`
 				ObservePaths []string          `json:"observe_paths"`
 			}
@@ -67,6 +73,10 @@ func newMatrixWorld(t *testing.T, contract, filename, code string, valid bool) *
 				return
 			}
 			world.shellRuns++
+			exit := world.shellExit
+			if world.shellFail[in.Command] {
+				exit = 1
+			}
 			observed := in.ObservePaths[0]
 			before := contentSHA256(in.Files[observed])
 			after, ws := before, "ws-before"
@@ -74,9 +84,15 @@ func newMatrixWorld(t *testing.T, contract, filename, code string, valid bool) *
 				after = contentSHA256("rewritten\n")
 				ws = "ws-after"
 			}
+			if world.shellInput {
+				// The candidate is untouched; something else in the workspace
+				// is not.
+				ws = "ws-after"
+			}
 			json.NewEncoder(w).Encode(map[string]interface{}{
-				"success": world.shellExit == 0, "exit_code": world.shellExit,
-				"stdout": "", "stderr": "", "timed_out": false,
+				"success":   exit == 0 && !world.shellTimeout,
+				"exit_code": exit,
+				"stdout":    "", "stderr": "", "timed_out": world.shellTimeout,
 				"observation": map[string]interface{}{
 					"target_before":    map[string]string{observed: before},
 					"target_after":     map[string]string{observed: after},
