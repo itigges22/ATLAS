@@ -863,6 +863,13 @@ type AgentContext struct {
 	// audit finding).
 	VerificationEvidence []VerificationRecord
 
+	// v3InvocationSeq numbers the candidate generations this request has
+	// made. One V3 call is one invocation, and evidence about a candidate
+	// from one invocation must never bind to a candidate from another --
+	// the counter is what makes those two facts distinguishable.
+	v3InvocationMu  sync.Mutex
+	v3InvocationSeq int
+
 	// HumanTask is the CURRENT request's actual human instruction, captured
 	// once at the top of runAgentLoop before the loop appends anything.
 	// ATLAS represents internal correctives, manifests and re-injected file

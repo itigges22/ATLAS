@@ -796,8 +796,14 @@ func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
 	// there: it is THE obligation-source owner, and it reads only the contract
 	// the request boundary already validated. Nothing else may read the
 	// contract to decide anything.
+	// obligation_kinds.go joins as the single derivation reader: it asks the
+	// owners what a request obliges and turns their answers into typed
+	// obligations. evidence_wiring.go joins as the producer wiring, which
+	// reads the contract only to know whether a request HAS structured
+	// obligations at all -- it decides nothing and reaches no live path.
 	contractReaders := map[string]bool{
 		"agent.go:": true, "guardrails.go:": true, "obligations.go:": true,
+		"obligation_kinds.go:": true, "evidence_wiring.go:": true,
 	}
 	readerAllowed := func(r string) bool {
 		for prefix := range contractReaders {

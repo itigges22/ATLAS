@@ -394,6 +394,26 @@ func ledgerConfirms(ctx *AgentContext, resolved, hash string) bool {
 // prose heuristic may still govern proxy completion, and converting that into
 // structured authority is exactly the promotion this file must not make.
 
+// requestObligations is the one place a caller asks "what does THIS request
+// oblige". It reads the two owners once and derives from what they said.
+//
+// A reader, never a decider: it makes no policy call of its own, and the
+// obligation owners stay the single authority on whose list a run owes.
+// Everything downstream of derivation goes through here rather than reaching
+// for the owners itself, so there is one place to look for who asked.
+func requestObligations(ctx *AgentContext) []taskObligation {
+	if ctx == nil || ctx.TaskContract == nil {
+		return nil
+	}
+	message := ""
+	if ctx.HumanTask != "" {
+		message = ctx.HumanTask
+	}
+	return deriveTaskObligations(ctx,
+		resolveOutputObligation(ctx, message),
+		resolveVerificationObligation(ctx))
+}
+
 // deriveTaskObligations is THE derivation. It reads the two decisions the
 // request boundary already made and the ledger's own record of what is on
 // disk; it consults no shadow state and no model output.

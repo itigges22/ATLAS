@@ -2,6 +2,7 @@ package main
 
 import (
 	"go/ast"
+	"os"
 	"strings"
 	"testing"
 )
@@ -36,14 +37,17 @@ var provenanceReaders = []string{
 // TestEveryProductionConsumerOfProvenanceIsEnumerated fails when a call to a
 // provenance reader appears anywhere in production code.
 //
-// The producers are the exception, and only for their own construction: a
-// producer may build a binding, and Authorizes may be called by the coverage
-// helper that reports what is still owed. Neither result reaches a write.
+// A producer may build a binding, and the wiring may call a producer. What
+// none of them may do is turn the answer into a delivery, which the guards
+// below pin separately.
 func TestEveryProductionConsumerOfProvenanceIsEnumerated(t *testing.T) {
 	allowed := map[string]bool{
 		// The coverage helper reports which declared commands are still owed.
 		// Its answer is returned to its caller and, in this build, has none.
 		"verification_evidence.go:declaredVerificationCoverage": true,
+		// THE production call path for the syntax producer, and the one place
+		// a record reaches private telemetry.
+		"evidence_wiring.go:observeDeliveredCandidateSyntax": true,
 	}
 	for _, fn := range provenanceReaders {
 		for site := range callSites(proxyFiles(t), fn) {
@@ -131,17 +135,61 @@ func TestTheWritePathReadsNoObligationOrEvidence(t *testing.T) {
 	}
 }
 
-// TestTheProducersAreCalledByNothingInProduction is the strongest statement
-// this build can make: the two producers exist, are tested, and have no
-// production caller at all.
-func TestTheProducersAreCalledByNothingInProduction(t *testing.T) {
+// TestEachProducerHasExactlyOneEnumeratedCallPath is the wiring invariant.
+//
+// A producer with two callers has two places its rules can drift apart. A
+// producer with none is either a wiring bug or a mechanism that does not
+// exist, and those are not the same thing -- so the second case must be
+// declared unavailable rather than silently absent.
+func TestEachProducerHasExactlyOneEnumeratedCallPath(t *testing.T) {
 	files := proxyFiles(t)
-	for _, fn := range []string{"produceSyntaxEvidence", "produceDeclaredVerificationEvidence"} {
-		sites := callSites(files, fn)
-		if len(sites) != 0 {
-			t.Errorf("%s has production callers %v; activating a producer changes "+
-				"what lands and is a separate slice", fn, sites)
+	for _, c := range []struct {
+		fn, source, site string
+	}{
+		{"produceSyntaxEvidence", ProvenanceProxyOwnedValidation,
+			"evidence_wiring.go:observeDeliveredCandidateSyntax"},
+		{"produceDeclaredVerificationEvidence", ProvenanceClientDeclaredVerification, ""},
+	} {
+		sites := callSites(files, c.fn)
+		switch evidenceProducerStatus[c.source] {
+		case evidenceProducerWired:
+			if len(sites) != 1 {
+				t.Errorf("%s is declared wired but has %d call paths %v, want exactly one",
+					c.fn, len(sites), sites)
+				continue
+			}
+			if _, ok := sites[c.site]; !ok {
+				t.Errorf("%s is called from %v, want %s", c.fn, sites, c.site)
+			}
+		case evidenceProducerUnavailable:
+			if len(sites) != 0 {
+				t.Errorf("%s is declared unavailable but is called from %v", c.fn, sites)
+			}
+		default:
+			t.Errorf("%s has no availability declaration", c.source)
 		}
+	}
+}
+
+// TestTheUnavailableProducerIsDeclaredRatherThanForgotten pins the blocker so
+// it cannot decay into an oversight: no live path runs a client-declared
+// command against a staging workspace holding the candidate bytes, so
+// behavioral authorization has no source on this build.
+func TestTheUnavailableProducerIsDeclaredRatherThanForgotten(t *testing.T) {
+	if evidenceProducerStatus[ProvenanceClientDeclaredVerification] != evidenceProducerUnavailable {
+		t.Fatal("client-declared verification changed availability without a wiring")
+	}
+	// The two mechanisms that exist and are NOT that. The service never
+	// receives the task contract, so it cannot run what the client declared.
+	src, err := os.ReadFile("types.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(string(src), "type V3GenerateRequest struct")
+	end := strings.Index(string(src)[start:], "\n}")
+	if strings.Contains(string(src)[start:start+end], "TaskContract") {
+		t.Error("the V3 request now carries the task contract; the staging " +
+			"blocker may no longer hold and must be re-derived")
 	}
 }
 

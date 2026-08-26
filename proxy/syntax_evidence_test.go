@@ -57,13 +57,18 @@ func syntaxObligation(t *testing.T, subject string) taskObligation {
 	return o
 }
 
-func syntaxRequest(t *testing.T, subject, code string) syntaxEvidenceRequest {
+// syntaxRequest builds the request the way production does: the caller runs
+// the live gate and hands the producer the verdict it reached. The producer
+// runs nothing of its own, so a test that skipped this would be testing a
+// different function.
+func syntaxRequest(t *testing.T, ctx *AgentContext, subject, code string) syntaxEvidenceRequest {
 	t.Helper()
 	return syntaxEvidenceRequest{
 		Obligation:          syntaxObligation(t, subject),
 		Path:                subject,
 		CandidateBytes:      code,
 		CandidateHash:       contentSHA256(code),
+		Outcome:             fallbackSyntaxOutcomeFor(ctx, subject, code).aggregate(),
 		InvocationID:        "inv-1",
 		CandidateInstanceID: "cand-1",
 	}
@@ -75,7 +80,7 @@ func TestAnExactCandidateSyntaxPassProducesOneBoundRecord(t *testing.T) {
 	var seen []string
 	ctx := syntaxEvidenceCtx(t, syntaxSandbox(t, true, &seen))
 	const code = "A = 1\n"
-	req := syntaxRequest(t, "solve.py", code)
+	req := syntaxRequest(t, ctx, "solve.py", code)
 
 	ev, ok := produceSyntaxEvidence(ctx, req)
 	if !ok {
@@ -120,7 +125,7 @@ func TestTheProducerReusesTheLiveGate(t *testing.T) {
 	ctx := syntaxEvidenceCtx(t, syntaxSandbox(t, false, nil))
 	const code = "def(\n"
 	live := fallbackSyntaxOutcomeFor(ctx, "solve.py", code).aggregate()
-	ev, ok := produceSyntaxEvidence(ctx, syntaxRequest(t, "solve.py", code))
+	ev, ok := produceSyntaxEvidence(ctx, syntaxRequest(t, ctx, "solve.py", code))
 	if !ok {
 		t.Fatal("an attempted check produced no evidence")
 	}
@@ -133,7 +138,7 @@ func TestTheProducerReusesTheLiveGate(t *testing.T) {
 
 func TestASyntaxFailureIsBoundAndCarriesNoAuthority(t *testing.T) {
 	ctx := syntaxEvidenceCtx(t, syntaxSandbox(t, false, nil))
-	ev, ok := produceSyntaxEvidence(ctx, syntaxRequest(t, "solve.py", "def(\n"))
+	ev, ok := produceSyntaxEvidence(ctx, syntaxRequest(t, ctx, "solve.py", "def(\n"))
 	if !ok {
 		t.Fatal("a demonstrated failure produced no observation at all")
 	}
@@ -153,7 +158,7 @@ func TestASyntaxFailureIsBoundAndCarriesNoAuthority(t *testing.T) {
 func TestTheProducerDeclinesWhenTheGateDidNotEvaluateTheseBytes(t *testing.T) {
 	t.Run("not applicable", func(t *testing.T) {
 		ctx := syntaxEvidenceCtx(t, syntaxSandbox(t, true, nil))
-		req := syntaxRequest(t, "notes.txt", "hello\n")
+		req := syntaxRequest(t, ctx, "notes.txt", "hello\n")
 		if _, ok := produceSyntaxEvidence(ctx, req); ok {
 			t.Error("an artifact class the gate does not govern produced evidence")
 		}
@@ -161,7 +166,7 @@ func TestTheProducerDeclinesWhenTheGateDidNotEvaluateTheseBytes(t *testing.T) {
 	t.Run("not run", func(t *testing.T) {
 		ctx := syntaxEvidenceCtx(t, syntaxSandbox(t, true, nil))
 		ctx.SandboxURL = ""
-		if _, ok := produceSyntaxEvidence(ctx, syntaxRequest(t, "solve.py", "A = 1\n")); ok {
+		if _, ok := produceSyntaxEvidence(ctx, syntaxRequest(t, ctx, "solve.py", "A = 1\n")); ok {
 			t.Error("an unreachable validator produced evidence")
 		}
 	})
@@ -173,7 +178,7 @@ func TestTheProducerDeclinesWhenTheGateDidNotEvaluateTheseBytes(t *testing.T) {
 		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
 		ctx.SandboxURL = srv.URL
 		ctx.Ctx = context.WithValue(context.Background(), requestIDKey, "req-fixture")
-		if _, ok := produceSyntaxEvidence(ctx, syntaxRequest(t, "solve.py", "A = 1\n")); ok {
+		if _, ok := produceSyntaxEvidence(ctx, syntaxRequest(t, ctx, "solve.py", "A = 1\n")); ok {
 			t.Error("a refused check produced evidence")
 		}
 	})
@@ -185,7 +190,7 @@ func TestTheProducerDeclinesWhenTheGateDidNotEvaluateTheseBytes(t *testing.T) {
 		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
 		ctx.SandboxURL = srv.URL
 		ctx.Ctx = context.WithValue(context.Background(), requestIDKey, "req-fixture")
-		if _, ok := produceSyntaxEvidence(ctx, syntaxRequest(t, "solve.py", "A = 1\n")); ok {
+		if _, ok := produceSyntaxEvidence(ctx, syntaxRequest(t, ctx, "solve.py", "A = 1\n")); ok {
 			t.Error("an unparseable verdict produced evidence")
 		}
 	})
@@ -195,14 +200,14 @@ func TestTheProducerDeclinesWhenTheGateDidNotEvaluateTheseBytes(t *testing.T) {
 			context.WithValue(context.Background(), requestIDKey, "req-fixture"))
 		cancel()
 		ctx.Ctx = cancelled
-		if _, ok := produceSyntaxEvidence(ctx, syntaxRequest(t, "solve.py", "A = 1\n")); ok {
+		if _, ok := produceSyntaxEvidence(ctx, syntaxRequest(t, ctx, "solve.py", "A = 1\n")); ok {
 			t.Error("a cancelled run produced evidence")
 		}
 	})
 	t.Run("no request identity", func(t *testing.T) {
 		ctx := syntaxEvidenceCtx(t, syntaxSandbox(t, true, nil))
 		ctx.Ctx = context.Background()
-		if _, ok := produceSyntaxEvidence(ctx, syntaxRequest(t, "solve.py", "A = 1\n")); ok {
+		if _, ok := produceSyntaxEvidence(ctx, syntaxRequest(t, ctx, "solve.py", "A = 1\n")); ok {
 			t.Error("evidence was produced with no request to bind to")
 		}
 	})
@@ -212,7 +217,7 @@ func TestTheProducerDeclinesWhenTheGateDidNotEvaluateTheseBytes(t *testing.T) {
 			func(r *syntaxEvidenceRequest) { r.InvocationID = "" },
 			func(r *syntaxEvidenceRequest) { r.CandidateInstanceID = "" },
 		} {
-			req := syntaxRequest(t, "solve.py", "A = 1\n")
+			req := syntaxRequest(t, ctx, "solve.py", "A = 1\n")
 			mut(&req)
 			if _, ok := produceSyntaxEvidence(ctx, req); ok {
 				t.Error("evidence was produced with an incomplete identity")
@@ -223,7 +228,7 @@ func TestTheProducerDeclinesWhenTheGateDidNotEvaluateTheseBytes(t *testing.T) {
 
 func TestAMovedHashFailsClosed(t *testing.T) {
 	ctx := syntaxEvidenceCtx(t, syntaxSandbox(t, true, nil))
-	req := syntaxRequest(t, "solve.py", "A = 1\n")
+	req := syntaxRequest(t, ctx, "solve.py", "A = 1\n")
 	// The caller has moved on to different bytes and is asking about those.
 	req.CandidateHash = contentSHA256("A = 2\n")
 	if _, ok := produceSyntaxEvidence(ctx, req); ok {
@@ -247,7 +252,7 @@ func TestASyntaxPassMayDescribeOnlyASyntaxObligation(t *testing.T) {
 		if !ok {
 			continue
 		}
-		req := syntaxRequest(t, "solve.py", "A = 1\n")
+		req := syntaxRequest(t, ctx, "solve.py", "A = 1\n")
 		req.Obligation = o
 		if _, ok := produceSyntaxEvidence(ctx, req); ok {
 			t.Errorf("a syntax pass described a %s obligation", kind)
@@ -257,7 +262,7 @@ func TestASyntaxPassMayDescribeOnlyASyntaxObligation(t *testing.T) {
 
 func TestAPassingSyntaxRecordCannotSatisfyABehavioralObligation(t *testing.T) {
 	ctx := syntaxEvidenceCtx(t, syntaxSandbox(t, true, nil))
-	ev, ok := produceSyntaxEvidence(ctx, syntaxRequest(t, "solve.py", "A = 1\n"))
+	ev, ok := produceSyntaxEvidence(ctx, syntaxRequest(t, ctx, "solve.py", "A = 1\n"))
 	if !ok {
 		t.Fatal("no evidence to test")
 	}
@@ -280,7 +285,7 @@ func TestASyntaxPassCannotPreserveAStrongerBaseline(t *testing.T) {
 	if !ok {
 		t.Fatal("baseline obligation refused")
 	}
-	req := syntaxRequest(t, "solve.py", "A = 1\n")
+	req := syntaxRequest(t, ctx, "solve.py", "A = 1\n")
 	req.Obligation = base
 	if _, ok := produceSyntaxEvidence(ctx, req); ok {
 		t.Error("a compile claimed a behavioural baseline survived")
@@ -291,7 +296,7 @@ func TestASyntaxPassCannotPreserveAStrongerBaseline(t *testing.T) {
 
 func TestEveryIdentityMismatchFailsClosed(t *testing.T) {
 	ctx := syntaxEvidenceCtx(t, syntaxSandbox(t, true, nil))
-	req := syntaxRequest(t, "solve.py", "A = 1\n")
+	req := syntaxRequest(t, ctx, "solve.py", "A = 1\n")
 	req.BaselineIdentity = "syntax:baseline-a"
 	ev, ok := produceSyntaxEvidence(ctx, req)
 	if !ok {
@@ -359,7 +364,7 @@ func TestABaselineIdentityNamesNoBytes(t *testing.T) {
 func TestTheProducerHoldsNoCandidateBytes(t *testing.T) {
 	ctx := syntaxEvidenceCtx(t, syntaxSandbox(t, true, nil))
 	const secret = "SECRET_TOKEN = 'hunter2'\n"
-	ev, ok := produceSyntaxEvidence(ctx, syntaxRequest(t, "solve.py", secret))
+	ev, ok := produceSyntaxEvidence(ctx, syntaxRequest(t, ctx, "solve.py", secret))
 	if !ok {
 		t.Fatal("no evidence to test")
 	}
@@ -376,7 +381,7 @@ func TestTheProducerHoldsNoCandidateBytes(t *testing.T) {
 
 func TestLegacyEvidenceRemainsNonAuthorizing(t *testing.T) {
 	ctx := syntaxEvidenceCtx(t, syntaxSandbox(t, true, nil))
-	ev, ok := produceSyntaxEvidence(ctx, syntaxRequest(t, "solve.py", "A = 1\n"))
+	ev, ok := produceSyntaxEvidence(ctx, syntaxRequest(t, ctx, "solve.py", "A = 1\n"))
 	if !ok {
 		t.Fatal("no evidence to test")
 	}
@@ -397,7 +402,7 @@ func TestProxyValidationVerdictsAreUnchangedByTheProducer(t *testing.T) {
 		ctx := syntaxEvidenceCtx(t, syntaxSandbox(t, valid, nil))
 		const code = "A = 1\n"
 		before := fallbackSyntaxOutcomeFor(ctx, "solve.py", code)
-		produceSyntaxEvidence(ctx, syntaxRequest(t, "solve.py", code))
+		produceSyntaxEvidence(ctx, syntaxRequest(t, ctx, "solve.py", code))
 		after := fallbackSyntaxOutcomeFor(ctx, "solve.py", code)
 		if before != after {
 			t.Errorf("valid=%v: the gate's verdict moved from %+v to %+v",

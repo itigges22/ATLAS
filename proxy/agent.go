@@ -3817,6 +3817,8 @@ const (
 	shadowSchemaVersionRequest = 1
 	shadowSchemaVersionGate    = 2
 	shadowSchemaVersionFooter  = 1
+	// One candidate evidence observation, written by the wired producer.
+	shadowSchemaVersionEvidence = 1
 )
 
 // canonicalSource keeps an unknown decision source out of the record. The

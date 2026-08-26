@@ -127,7 +127,9 @@ func TestEvidenceMatrix(t *testing.T) {
 		}
 		ev, ok := produceSyntaxEvidence(w.ctx, syntaxEvidenceRequest{
 			Obligation: syn, Path: w.path, CandidateBytes: w.code,
-			CandidateHash: w.hash, InvocationID: "inv-1", CandidateInstanceID: "cand-1",
+			CandidateHash: w.hash,
+			Outcome:       fallbackSyntaxOutcomeFor(w.ctx, w.path, w.code).aggregate(),
+			InvocationID:  "inv-1", CandidateInstanceID: "cand-1",
 		})
 		if !ok {
 			t.Fatal("a structured syntax task produced no evidence")
@@ -155,7 +157,9 @@ func TestEvidenceMatrix(t *testing.T) {
 		// The structural gate cannot speak for it.
 		if _, ok := produceSyntaxEvidence(w.ctx, syntaxEvidenceRequest{
 			Obligation: cmd, Path: w.path, CandidateBytes: w.code,
-			CandidateHash: w.hash, InvocationID: "inv-1", CandidateInstanceID: "cand-1",
+			CandidateHash: w.hash,
+			Outcome:       fallbackSyntaxOutcomeFor(w.ctx, w.path, w.code).aggregate(),
+			InvocationID:  "inv-1", CandidateInstanceID: "cand-1",
 		}); ok {
 			t.Error("the syntax producer described a behavioural obligation")
 		}
@@ -286,7 +290,9 @@ func TestEvidenceMatrix(t *testing.T) {
 		// No producer here owns preservation, so nothing may speak for it.
 		if _, ok := produceSyntaxEvidence(w.ctx, syntaxEvidenceRequest{
 			Obligation: base, Path: w.path, CandidateBytes: w.code,
-			CandidateHash: w.hash, InvocationID: "inv-1", CandidateInstanceID: "cand-1",
+			CandidateHash: w.hash,
+			Outcome:       fallbackSyntaxOutcomeFor(w.ctx, w.path, w.code).aggregate(),
+			InvocationID:  "inv-1", CandidateInstanceID: "cand-1",
 		}); ok {
 			t.Error("the syntax producer claimed a baseline survived")
 		}
@@ -340,7 +346,9 @@ func TestEvidenceMatrix(t *testing.T) {
 		}
 		if _, ok := produceSyntaxEvidence(w.ctx, syntaxEvidenceRequest{
 			Obligation: unsup, Path: w.path, CandidateBytes: w.code,
-			CandidateHash: w.hash, InvocationID: "inv-1", CandidateInstanceID: "cand-1",
+			CandidateHash: w.hash,
+			Outcome:       fallbackSyntaxOutcomeFor(w.ctx, w.path, w.code).aggregate(),
+			InvocationID:  "inv-1", CandidateInstanceID: "cand-1",
 		}); ok {
 			t.Error("a producer spoke for an unsupported obligation")
 		}

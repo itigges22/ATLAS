@@ -69,6 +69,16 @@ type syntaxEvidenceRequest struct {
 	// on to different bytes is asking about a candidate this run never saw.
 	CandidateHash string
 
+	// Outcome is what the gate ALREADY said about these exact bytes.
+	//
+	// The producer does not run the gate. The write path observes the final
+	// bytes because it has to, and a producer that re-ran the checker to
+	// "produce evidence" would be a second verdict about one artifact -- two
+	// answers that can disagree, and a second sandbox round trip per
+	// delivery. What it does instead is refuse to speak unless the caller
+	// hands it an outcome the gate actually reached.
+	Outcome checkOutcome
+
 	InvocationID        string
 	CandidateInstanceID string
 	// BaselineIdentity names the validated baseline this candidate would
@@ -79,9 +89,9 @@ type syntaxEvidenceRequest struct {
 
 // produceSyntaxEvidence is THE proxy-owned syntax producer.
 //
-// It runs the gate that already exists and reports what that gate said. It
-// makes no judgement of its own, adds no extension table, and reaches no
-// verdict the gate did not reach.
+// It reports what the gate that already exists said. It runs nothing, makes
+// no judgement of its own, adds no extension table, and reaches no verdict
+// the gate did not reach.
 //
 // Absent -- nil, false -- on every case where the gate did not actually
 // evaluate these exact bytes: not run, not applicable, unknown, an unknown or
@@ -121,12 +131,11 @@ func produceSyntaxEvidence(ctx *AgentContext, req syntaxEvidenceRequest) (proxyE
 		return proxyEvidence{}, false
 	}
 
-	// The existing gate, unmodified. Two checks, aggregated by the rule that
-	// already governs every write.
-	outcome := fallbackSyntaxOutcomeFor(ctx, req.Path, req.CandidateBytes).aggregate()
-	if !outcome.attempted() {
-		// not_run, not_applicable and unknown are all "we did not evaluate
-		// these bytes". None of them is a negative observation.
+	// The verdict the gate reached about these exact bytes, handed over by
+	// the caller that made it. not_run, not_applicable and unknown are all
+	// "we did not evaluate these bytes"; none of them is a negative
+	// observation, and none produces a record.
+	if !req.Outcome.attempted() {
 		return proxyEvidence{}, false
 	}
 
@@ -144,7 +153,7 @@ func produceSyntaxEvidence(ctx *AgentContext, req syntaxEvidenceRequest) (proxyE
 		RequiredStrength:    req.Obligation.RequiredStrength,
 		ObservedStrength:    "syntax",
 	}
-	return proxyEvidence{Provenance: p, Outcome: outcome.Status}, true
+	return proxyEvidence{Provenance: p, Outcome: req.Outcome.Status}, true
 }
 
 // --- workspace identity -------------------------------------------------------

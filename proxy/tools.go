@@ -1998,6 +1998,13 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// rather than a discipline each branch below has to remember.
 	deliveredCheck := fallbackSyntaxOutcomeFor(ctx, path, code).aggregate()
 	checkedFor := code
+	// THE production call path for the proxy-owned syntax producer. It sits
+	// here because this is the one moment the bytes are fixed and the gate has
+	// just reported on exactly those bytes: the verdict is handed over, never
+	// recomputed, so no second sandbox call and no second opinion. What it
+	// produces goes to private telemetry and reaches no decision -- the
+	// authorization immediately below is the same one that ran at e8fefe8.
+	observeDeliveredCandidateSyntax(ctx, path, code, deliveredCheck)
 	if deliveredCheck.Status == ValidationFailed {
 		if !authorizedV3 {
 			// The caller's own content, and it does not parse. Nothing here

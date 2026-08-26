@@ -230,6 +230,9 @@ func TestEachObligationClassHasExactlyOneLiveDecision(t *testing.T) {
 	// evidence_inertness_test.go proves separately.
 	readers := map[string]bool{
 		"verification_evidence.go:requestDeclaredCommand": true,
+		// The one place a caller asks what a request obliges. It derives from
+		// what the owners said and decides nothing itself.
+		"obligation_kinds.go:requestObligations": true,
 	}
 	files := proxyFiles(t)
 	for _, fn := range []string{"resolveOutputObligation", "resolveVerificationObligation"} {
@@ -257,6 +260,7 @@ func TestOnlyNamedReadersReachTheObligationOwner(t *testing.T) {
 		"agent.go:runAgentLoop":                           true,
 		"guardrails.go:decideVerificationDemand":          true,
 		"verification_evidence.go:requestDeclaredCommand": true,
+		"obligation_kinds.go:requestObligations":          true,
 	}
 	files := proxyFiles(t)
 	for _, fn := range []string{"resolveOutputObligation", "resolveVerificationObligation"} {
