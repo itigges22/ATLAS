@@ -126,6 +126,81 @@ def test_every_kind_is_classified_exactly_once(taxonomy):
     assert not (fixed & dynamic) and not (fixed & never) and not (dynamic & never)
 
 
+def _go_role_symbols():
+    """ObligationRolePostDeliverySettlement -> "post_delivery_settlement"."""
+    text = _go_text()
+    return dict(re.findall(
+        r"\b(ObligationRole[A-Za-z]+)\s*=\s*\"([a-z_]+)\"", text))
+
+
+def _go_kind_roles():
+    """kind value -> role value, both resolved through their const blocks."""
+    text = _go_text()
+    start = text.index("var obligationKindRole = map[string]string{")
+    block = text[start:text.index("\n}", start)]
+    kinds = _go_symbol_to_value()
+    roles = _go_role_symbols()
+    out = {}
+    for kind_sym, role_sym in re.findall(
+            r"\b(Obligation[A-Za-z]+):\s*(ObligationRole[A-Za-z]+)", block):
+        out[kinds[kind_sym]] = roles[role_sym]
+    return out
+
+
+def test_the_role_of_every_kind_agrees(taxonomy):
+    """When a kind can be answered is the distinction that removed the
+    circular existence premise. Two sides disagreeing about it is one side
+    asking for evidence before the candidate exists."""
+    go_roles = _go_kind_roles()
+    py_roles = {k: taxonomy.role(k) for k in taxonomy.KINDS}
+    assert go_roles == py_roles, (
+        f"only in Go: {sorted(set(go_roles.items()) - set(py_roles.items()))}; "
+        f"only in Python: {sorted(set(py_roles.items()) - set(go_roles.items()))}")
+
+
+def test_the_role_vocabulary_itself_agrees(taxonomy):
+    go = set(_go_role_symbols().values())
+    py = {taxonomy.ROLE_TARGET_IDENTITY,
+          taxonomy.ROLE_AUTHORIZATION_PREREQUISITE,
+          taxonomy.ROLE_POST_DELIVERY_SETTLEMENT}
+    assert go == py, f"Go {sorted(go)} vs Python {sorted(py)}"
+
+
+def test_every_kind_has_exactly_one_role(taxonomy):
+    roles = {taxonomy.ROLE_TARGET_IDENTITY,
+             taxonomy.ROLE_AUTHORIZATION_PREREQUISITE,
+             taxonomy.ROLE_POST_DELIVERY_SETTLEMENT}
+    for kind in taxonomy.KINDS:
+        assert taxonomy.role(kind) in roles, kind
+
+
+def test_existence_is_settled_after_delivery_and_is_never_a_prerequisite(taxonomy):
+    """The circular premise, stated as a rule both sides must hold.
+
+    artifact_exists cannot be evidenced before the candidate lands, so it is
+    never a thing that must be met before the candidate lands.
+    """
+    assert taxonomy.role(taxonomy.KIND_ARTIFACT_EXISTS) == \
+        taxonomy.ROLE_POST_DELIVERY_SETTLEMENT
+    assert taxonomy.names_target(taxonomy.KIND_ARTIFACT_EXISTS)
+    go = _go_text()
+    assert "ObligationArtifactExists:    ObligationRolePostDeliverySettlement" in go
+    assert "ObligationArtifactExists: true" in go
+
+
+def test_only_the_declared_output_names_a_target(taxonomy):
+    """"The client asked for this path" identifies WHAT may be replaced. No
+    other kind may be read as naming a delivery target."""
+    for kind in taxonomy.KINDS:
+        expected = kind == taxonomy.KIND_ARTIFACT_EXISTS
+        assert taxonomy.names_target(kind) is expected, kind
+    go = _go_text()
+    start = go.index("var obligationKindNamesTarget = map[string]bool{")
+    block = go[start:go.index("\n}", start)]
+    named = set(re.findall(r"\bObligation([A-Za-z]+):\s*true", block))
+    assert named == {"ArtifactExists"}, sorted(named)
+
+
 def test_the_id_derivation_agrees_with_the_pinned_go_vectors(taxonomy):
     """The Go test pins exact id strings. They are recomputed here from the
     Python derivation, so a change to either side breaks this."""

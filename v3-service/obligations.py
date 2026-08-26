@@ -78,6 +78,44 @@ _KIND_REQUIRED_STRENGTH = {
     KIND_DECLARED_EXAMPLE: contract.ORACLE,
 }
 
+# --- when an obligation can be answered -------------------------------------
+#
+# The first structured task could never close, and the reason was circular.
+# artifact_exists was a required obligation with a syntax floor; nothing can
+# evidence a file's existence before the candidate lands; delivery needs
+# authorization; authorization needed the obligation met.
+#
+# Three roles, and every kind has exactly one:
+#
+#   target_identity              names WHICH artifact a delivery may replace.
+#                                Never evidence about bytes.
+#   authorization_prerequisite   must be met by evidence bound to the exact
+#                                candidate BEFORE those bytes may land.
+#   post_delivery_settlement     answerable only once the bytes are on disk
+#                                and the ledger agrees they are there.
+#
+# artifact_exists carries the first and the third and none of the second.
+ROLE_TARGET_IDENTITY = "target_identity"
+ROLE_AUTHORIZATION_PREREQUISITE = "authorization_prerequisite"
+ROLE_POST_DELIVERY_SETTLEMENT = "post_delivery_settlement"
+
+# Total over KINDS. A kind with no role is one nothing knows when to ask
+# about, so the lookup fails closed.
+_KIND_ROLE = {
+    KIND_ARTIFACT_EXISTS: ROLE_POST_DELIVERY_SETTLEMENT,
+    KIND_SYNTACTIC_VALIDITY: ROLE_AUTHORIZATION_PREREQUISITE,
+    KIND_DECLARED_COMMAND: ROLE_AUTHORIZATION_PREREQUISITE,
+    KIND_DECLARED_EXAMPLE: ROLE_AUTHORIZATION_PREREQUISITE,
+    KIND_BASELINE_PRESERVED: ROLE_AUTHORIZATION_PREREQUISITE,
+    # Owed and unnameable: a prerequisite, so it blocks authorization, and
+    # unsatisfiable, so it blocks it forever.
+    KIND_UNSUPPORTED: ROLE_AUTHORIZATION_PREREQUISITE,
+}
+
+# The separate question: does this kind identify an artifact a delivery may
+# replace? Only the declared output does, and it says nothing about quality.
+_KIND_NAMES_TARGET = {KIND_ARTIFACT_EXISTS}
+
 # Kinds whose floor is supplied per obligation rather than by the kind.
 _DYNAMIC_STRENGTH_KINDS = (KIND_BASELINE_PRESERVED,)
 
@@ -211,6 +249,56 @@ def closure_floor(obs: Sequence[Dict[str, Any]]) -> str:
         if o["kind"] in _UNSATISFIABLE_KINDS:
             return order[-1]
         if order.index(o["required_strength"]) > order.index(floor):
+            floor = o["required_strength"]
+    return floor
+
+
+def role(kind: str) -> str:
+    """When this kind can be answered. Raises on a kind with no role."""
+    if kind not in _KIND_ROLE:
+        raise ObligationError(f"{kind!r} has no role; nothing knows when to ask it")
+    return _KIND_ROLE[kind]
+
+
+def authorization_prerequisites(obs: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """What must be met by candidate-bound evidence before bytes may land.
+
+    artifact_exists is deliberately absent: it cannot be evidenced before the
+    candidate is on disk, and treating it as a prerequisite is the circle this
+    split removes.
+    """
+    validate(obs)
+    return [o for o in obs if role(o["kind"]) == ROLE_AUTHORIZATION_PREREQUISITE]
+
+
+def post_delivery_settlement(obs: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    validate(obs)
+    return [o for o in obs if role(o["kind"]) == ROLE_POST_DELIVERY_SETTLEMENT]
+
+
+def names_target(kind: str) -> bool:
+    """Whether this kind identifies an artifact a delivery may replace."""
+    if kind not in KINDS:
+        raise ObligationError(f"unknown obligation kind {kind!r}")
+    return kind in _KIND_NAMES_TARGET
+
+
+def authorization_floor(obs: Sequence[Dict[str, Any]]) -> str:
+    """The strongest floor the PREREQUISITES demand, or "" when there is none.
+
+    "" is a real answer and not a permissive one: a declared document with no
+    declared verification owes nothing measurable here, which means there is
+    nothing to satisfy rather than nothing to do.
+    """
+    validate(obs)
+    order = contract.STRENGTH_ORDER
+    floor = ""
+    for o in authorization_prerequisites(obs):
+        if not o.get("required"):
+            continue
+        if o["kind"] in _UNSATISFIABLE_KINDS:
+            return order[-1]
+        if not floor or order.index(o["required_strength"]) > order.index(floor):
             floor = o["required_strength"]
     return floor
 

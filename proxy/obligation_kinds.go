@@ -80,6 +80,60 @@ var obligationKindRequiredStrength = map[string]string{
 	ObligationDeclaredExample:   "oracle",
 }
 
+// --- when an obligation can be answered ------------------------------------
+//
+// The first structured task could never close, and the reason was circular.
+// artifact_exists was a required obligation with a syntax floor; nothing can
+// evidence a file's existence before the candidate lands; delivery needs
+// authorization; authorization needed the obligation met. The task was
+// unsatisfiable by construction, and the loop was invisible because every
+// piece of it looked reasonable on its own.
+//
+// The fix is a typed distinction rather than a special case at the one site
+// that noticed. Three roles, and every kind has exactly one:
+//
+//	target_identity              names WHICH artifact a delivery may replace.
+//	                             It is the client saying "this path is mine to
+//	                             hand you". It is never evidence about bytes.
+//	authorization_prerequisite   must be satisfied, by evidence bound to the
+//	                             exact candidate, BEFORE those bytes may land.
+//	post_delivery_settlement     can only be answered after the bytes are on
+//	                             disk and the ledger agrees they are there.
+//
+// artifact_exists carries the first and the third and neither of the second:
+// a declared path authorizes a target and settles afterwards, and at no point
+// does "the client asked for this path" say the bytes are any good.
+const (
+	ObligationRoleTargetIdentity            = "target_identity"
+	ObligationRoleAuthorizationPrerequisite = "authorization_prerequisite"
+	ObligationRolePostDeliverySettlement    = "post_delivery_settlement"
+)
+
+// obligationKindRole is total over obligationKinds. A kind with no role is a
+// kind nothing knows when to ask about, so the lookup fails closed.
+var obligationKindRole = map[string]string{
+	ObligationArtifactExists:    ObligationRolePostDeliverySettlement,
+	ObligationSyntacticValidity: ObligationRoleAuthorizationPrerequisite,
+	ObligationDeclaredCommand:   ObligationRoleAuthorizationPrerequisite,
+	ObligationDeclaredExample:   ObligationRoleAuthorizationPrerequisite,
+	ObligationBaselinePreserved: ObligationRoleAuthorizationPrerequisite,
+	// Something is owed that nothing here can name. It is a prerequisite so
+	// it blocks authorization; it is unsatisfiable so it blocks it forever.
+	ObligationUnsupported: ObligationRoleAuthorizationPrerequisite,
+}
+
+// obligationKindNamesTarget is the separate question: does this kind identify
+// an artifact a delivery may replace? Only the declared output does, and it
+// does so WITHOUT thereby saying anything about candidate quality.
+var obligationKindNamesTarget = map[string]bool{
+	ObligationArtifactExists: true,
+}
+
+func obligationRole(kind string) (string, bool) {
+	role, ok := obligationKindRole[kind]
+	return role, ok
+}
+
 // obligationDynamicStrengthKinds take their floor from the obligation rather
 // than from the kind.
 var obligationDynamicStrengthKinds = map[string]bool{
@@ -189,6 +243,147 @@ func obligationClosureFloor(obs []taskObligation) string {
 		}
 	}
 	return floor
+}
+
+// --- the three roles, read off a derived obligation set ----------------------
+
+// authorizationPrerequisites are the obligations that must be met by evidence
+// bound to the exact candidate before those bytes may land.
+//
+// artifact_exists is deliberately absent: it cannot be evidenced before the
+// candidate is on disk, and treating it as a prerequisite is the circle this
+// split removes.
+func authorizationPrerequisites(obs []taskObligation) []taskObligation {
+	var out []taskObligation
+	for _, o := range obs {
+		if role, ok := obligationRole(o.Kind); ok &&
+			role == ObligationRoleAuthorizationPrerequisite {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// postDeliverySettlement are the obligations answerable only once the bytes
+// are on disk and the ledger confirms them.
+func postDeliverySettlement(obs []taskObligation) []taskObligation {
+	var out []taskObligation
+	for _, o := range obs {
+		if role, ok := obligationRole(o.Kind); ok &&
+			role == ObligationRolePostDeliverySettlement {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// authorizedTargets are the canonical paths a delivery may replace, in
+// canonical order.
+//
+// This is identity, not quality. A path appearing here says the client owns
+// the request to produce it; it says nothing whatever about whether any given
+// bytes belong in it, and no caller may read it as if it did.
+func authorizedTargets(obs []taskObligation) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, o := range obs {
+		if !obligationKindNamesTarget[o.Kind] || o.Subject == "" || seen[o.Subject] {
+			continue
+		}
+		seen[o.Subject] = true
+		out = append(out, o.Subject)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// targetIsAuthorized reports whether a delivery to this canonical path was
+// asked for. A path the client never declared cannot borrow another output's
+// authority, so this is an exact-membership test and never a prefix or
+// directory rule.
+func targetIsAuthorized(obs []taskObligation, resolved string) bool {
+	if strings.TrimSpace(resolved) == "" {
+		return false
+	}
+	for _, t := range authorizedTargets(obs) {
+		if t == resolved {
+			return true
+		}
+	}
+	return false
+}
+
+// authorizationFloor is the strongest floor the PREREQUISITES demand, and ""
+// when the task states no prerequisite at all.
+//
+// "" is a real answer and not a permissive one. A declared document with no
+// declared verification owes nothing this build can measure -- syntax is not
+// applicable to it and inventing one would be fabricating a requirement -- so
+// there is no floor. That does not authorize it: authorization additionally
+// requires at least one satisfied prerequisite bound to the exact candidate,
+// and a task with none has nothing to satisfy. The task is not impossible
+// either; a client that declares a command gives it a path.
+func authorizationFloor(obs []taskObligation) string {
+	floor := ""
+	for _, o := range authorizationPrerequisites(obs) {
+		if !o.Required {
+			continue
+		}
+		if obligationUnsatisfiableKinds[o.Kind] {
+			return evidenceStrengthOrder[len(evidenceStrengthOrder)-1]
+		}
+		if floor == "" || strengthRank(o.RequiredStrength) > strengthRank(floor) {
+			floor = o.RequiredStrength
+		}
+	}
+	return floor
+}
+
+// settlementIsComplete reports whether every post-delivery obligation is now
+// answerable in the affirmative: the exact bytes are on disk AND the ledger
+// records them at that hash.
+//
+// Both halves are required. Disk without a ledger entry is a file nothing in
+// this session owns; a ledger entry without matching bytes is a record about
+// something that is no longer there.
+func settlementIsComplete(ctx *AgentContext, obs []taskObligation,
+	deliveredHash string) (bool, string) {
+	for _, o := range postDeliverySettlement(obs) {
+		if !o.Required {
+			continue
+		}
+		disk := fileSHA256(ctx, o.Subject)
+		if disk == "" {
+			return false, "artifact is not on disk"
+		}
+		if deliveredHash != "" && disk != deliveredHash {
+			return false, "bytes on disk are not the delivered bytes"
+		}
+		if !ledgerConfirms(ctx, o.Subject, disk) {
+			return false, "the ledger does not confirm the bytes on disk"
+		}
+	}
+	return true, ""
+}
+
+// ledgerConfirms reports whether the session's own record agrees that these
+// exact bytes are what is at this path now.
+func ledgerConfirms(ctx *AgentContext, resolved, hash string) bool {
+	if ctx == nil || hash == "" {
+		return false
+	}
+	ctx.LedgerMu.Lock()
+	defer ctx.LedgerMu.Unlock()
+	for key, d := range ctx.Ledger {
+		if d == nil || d.Tombstoned {
+			continue
+		}
+		if resolveAgentPath(ctx, key) != resolveAgentPath(ctx, resolved) {
+			continue
+		}
+		return d.CurrentHash == hash && d.Generation > 0
+	}
+	return false
 }
 
 // --- derivation from the validated request ----------------------------------
