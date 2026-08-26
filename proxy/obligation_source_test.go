@@ -219,16 +219,52 @@ func callSites(files map[string]*ast.File, fn string) map[string]int {
 }
 
 func TestEachObligationClassHasExactlyOneLiveDecision(t *testing.T) {
+	// Exactly one LIVE POLICY caller per class. The rule is about deciding, not
+	// about reading: two gates each deriving the obligation is how they start
+	// to disagree, which is what this pins.
+	//
+	// A reader is admitted by name and only where reading the owner is the
+	// alternative to duplicating it. The evidence producer asks the owner
+	// whether the client declared a command precisely so it does not re-derive
+	// that answer from the raw contract -- and it reaches no live policy, which
+	// evidence_inertness_test.go proves separately.
+	readers := map[string]bool{
+		"verification_evidence.go:requestDeclaredCommand": true,
+	}
 	files := proxyFiles(t)
 	for _, fn := range []string{"resolveOutputObligation", "resolveVerificationObligation"} {
 		sites := callSites(files, fn)
+		deciders := map[string]int{}
 		total := 0
-		for _, n := range sites {
+		for site, n := range sites {
+			if readers[site] {
+				continue
+			}
+			deciders[site] = n
 			total += n
 		}
 		if total != 1 {
-			t.Errorf("%s is called %d times from %v, want exactly one live decision",
-				fn, total, sites)
+			t.Errorf("%s is decided %d times from %v, want exactly one live decision",
+				fn, total, deciders)
+		}
+	}
+}
+
+// TestOnlyNamedReadersReachTheObligationOwner keeps the exemption above
+// honest: a reader may exist, and it must be one this file knows about.
+func TestOnlyNamedReadersReachTheObligationOwner(t *testing.T) {
+	known := map[string]bool{
+		"agent.go:runAgentLoop":                           true,
+		"guardrails.go:decideVerificationDemand":          true,
+		"verification_evidence.go:requestDeclaredCommand": true,
+	}
+	files := proxyFiles(t)
+	for _, fn := range []string{"resolveOutputObligation", "resolveVerificationObligation"} {
+		for site := range callSites(files, fn) {
+			if !known[site] {
+				t.Errorf("%s reaches %s and is not a named reader of the "+
+					"obligation owner", site, fn)
+			}
 		}
 	}
 }
