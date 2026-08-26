@@ -42,6 +42,7 @@ Security / trust model (load-bearing — read before "fixing" CodeQL alerts):
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import shutil
@@ -269,6 +270,31 @@ class ShellRequest(BaseModel):
     # deletes the snapshot. This lets V3 test a candidate without
     # writing it into the real bind-mounted project.
     files: Optional[Dict[str, str]] = None
+    # Optional bounded observation, used by candidate staging. When present,
+    # /shell hashes these relative paths and the snapshot as a whole BEFORE
+    # and AFTER the command, and returns both. It reports facts and draws no
+    # conclusion: whether a change is permitted is the caller's judgement, and
+    # this endpoint has no way to know what the caller declared.
+    observe_paths: Optional[List[str]] = None
+
+
+class ShellObservation(BaseModel):
+    """What the workspace looked like either side of one command.
+
+    Hashes and counts only. No path contents, no command text, no output --
+    a staging observation that carried any of those would put candidate bytes
+    into the caller's telemetry, which is the one thing staging exists to
+    avoid.
+    """
+    target_before: Dict[str, str] = {}
+    target_after: Dict[str, str] = {}
+    workspace_before: str = ""
+    workspace_after: str = ""
+    workspace_files: int = 0
+    # True when the digest hit its own cap and therefore describes only part
+    # of the workspace. A caller that needs an exact answer must treat this as
+    # unobservable rather than as "unchanged".
+    digest_truncated: bool = False
 
 
 class ShellResponse(BaseModel):
@@ -277,6 +303,9 @@ class ShellResponse(BaseModel):
     stderr: str
     exit_code: int
     elapsed_ms: int
+    # Present only when the request asked for it.
+    timed_out: bool = False
+    observation: Optional[ShellObservation] = None
 
 
 # The bind-mounted project root. /workspace in every container
@@ -470,6 +499,71 @@ def _write_overlay_files(root: Path, files: Dict[str, str]):
         finally:
             os.close(parent_fd)
             os.close(root_fd)
+
+
+# The observation digest has its own cap, separate from the snapshot's. A
+# workspace big enough to blow it is one this endpoint cannot describe
+# exactly, and saying so is the only honest answer.
+SHELL_OBSERVE_MAX_FILES = int(os.getenv("ATLAS_SHELL_OBSERVE_MAX_FILES", "5000"))
+
+
+def _hash_file(path: Path) -> str:
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+    except OSError:
+        return ""
+    return h.hexdigest()
+
+
+def _observe_paths(root: Path, names: List[str]) -> Dict[str, str]:
+    """sha256 of each named relative path, or "" where it is absent.
+
+    Absence is a real answer and is reported as the empty string rather than
+    omitted, so a caller can tell "the file is not there" from "we did not
+    look".
+    """
+    out: Dict[str, str] = {}
+    for name in names or []:
+        try:
+            rel = _safe_overlay_path(name)
+        except HTTPException:
+            out[name] = ""
+            continue
+        out[name] = _hash_file(root / rel)
+    return out
+
+
+def _workspace_digest(root: Path) -> Dict[str, object]:
+    """One digest over every file in the snapshot, plus the count.
+
+    Names and hashes, never contents. Sorted so the same tree always digests
+    the same way, and capped so an unbounded workspace reports truncation
+    instead of a number that describes some of it.
+    """
+    entries: List[str] = []
+    truncated = False
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if not _skip_shell_snapshot_path(Path(d))]
+        for name in sorted(filenames):
+            src = Path(dirpath) / name
+            if _skip_shell_snapshot_path(src):
+                continue
+            if len(entries) >= SHELL_OBSERVE_MAX_FILES:
+                truncated = True
+                break
+            try:
+                rel = src.relative_to(root).as_posix()
+            except ValueError:
+                continue
+            entries.append(rel + "\x00" + _hash_file(src))
+        if truncated:
+            break
+    entries.sort()
+    digest = hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()
+    return {"digest": digest, "files": len(entries), "truncated": truncated}
 
 
 def _snapshot_workspace_with_overlay(files: Dict[str, str]) -> Path:
@@ -815,10 +909,29 @@ def run_shell(request: ShellRequest):
         cwd = _resolve_shell_cwd(request.cwd, root)
         command = _translate_workspace_command(request.command, root)
 
+        observation = None
+        before_paths = {}
+        before_digest = {}
+        if request.observe_paths is not None:
+            before_paths = _observe_paths(root, request.observe_paths)
+            before_digest = _workspace_digest(root)
+
         start = time.time()
         result = _run_cmd(["bash", "-c", command],
                           timeout=timeout, cwd=cwd, env=request.env)
         elapsed_ms = int((time.time() - start) * 1000)
+
+        if request.observe_paths is not None:
+            after_digest = _workspace_digest(root)
+            observation = ShellObservation(
+                target_before=before_paths,
+                target_after=_observe_paths(root, request.observe_paths),
+                workspace_before=str(before_digest.get("digest", "")),
+                workspace_after=str(after_digest.get("digest", "")),
+                workspace_files=int(after_digest.get("files", 0)),
+                digest_truncated=bool(before_digest.get("truncated"))
+                or bool(after_digest.get("truncated")),
+            )
 
         return ShellResponse(
             success=result["success"],
@@ -826,6 +939,8 @@ def run_shell(request: ShellRequest):
             stderr=result["stderr"],
             exit_code=result["returncode"],
             elapsed_ms=elapsed_ms,
+            timed_out=bool(result.get("timed_out")),
+            observation=observation,
         )
     finally:
         if snapshot is not None:
@@ -1267,6 +1382,10 @@ def _run_cmd(cmd: List[str], timeout: int, cwd: Path = None, env: dict = None,
             "stdout": "",
             "stderr": f"Execution timed out after {timeout}s",
             "returncode": -1,
+            # Structural, not inferred from the message: a caller that had to
+            # parse "timed out" out of stderr would be parsing prose to reach
+            # a decision.
+            "timed_out": True,
         }
     except Exception as e:
         try:
