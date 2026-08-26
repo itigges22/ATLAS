@@ -183,10 +183,29 @@ func decideAuthorization(ctx *AgentContext, in authorizationInput) Authorization
 	// Match evidence to obligations. The first refusal encountered is the one
 	// reported, and it is specific: a caller learns that the workspace moved
 	// rather than that "evidence was missing".
+	// What each prerequisite's evidence must name, derived from the client's
+	// own declaration. An obligation absent from this map is one the validated
+	// request does not own, and evidence for it satisfies nothing.
+	wantCommand := map[string]string{}
+	for _, o := range prerequisites {
+		if o.Kind == ObligationDeclaredCommand {
+			wantCommand[o.ID] = contentSHA256(o.Subject)
+			continue
+		}
+		wantCommand[o.ID] = ""
+	}
+
 	satisfied := map[string]bool{}
 	firstRefusal := ReasonUnknown
 	for _, ev := range in.Evidence {
-		reason := evidenceRefusalFor(ev, in.Identity)
+		want, owned := wantCommand[ev.Provenance.ObligationID]
+		if !owned {
+			if firstRefusal == ReasonUnknown {
+				firstRefusal = ReasonObligationUnknown
+			}
+			continue
+		}
+		reason := evidenceRefusalFor(ev, in.Identity, want)
 		if reason == ReasonAuthorized {
 			satisfied[ev.Provenance.ObligationID] = true
 			d.EvidenceConsumed = append(d.EvidenceConsumed,
@@ -247,7 +266,8 @@ func decideAuthorization(ctx *AgentContext, in authorizationInput) Authorization
 //
 // Ordered so the most specific mismatch wins: a record about a different
 // candidate is a candidate mismatch even though its workspace also differs.
-func evidenceRefusalFor(ev proxyEvidence, asked V3EvidenceProvenance) AuthorizationReason {
+func evidenceRefusalFor(ev proxyEvidence, asked V3EvidenceProvenance,
+	wantCommand string) AuthorizationReason {
 	p := ev.Provenance
 	if _, ok := provenanceCeiling[p.Source]; !ok {
 		return ReasonProvenanceUntrusted
@@ -259,7 +279,11 @@ func evidenceRefusalFor(ev proxyEvidence, asked V3EvidenceProvenance) Authorizat
 		p.CandidateInstanceID != asked.CandidateInstanceID {
 		return ReasonCandidateMismatch
 	}
-	if p.CommandIdentity != asked.CommandIdentity {
+	// The command identity is per-obligation, not per-candidate: a syntax
+	// record names no command, and a behavioral one must name the exact
+	// command ITS obligation declared. The expected value is derived by the
+	// caller from the validated request, never read off the record.
+	if p.CommandIdentity != wantCommand {
 		return ReasonCommandMismatch
 	}
 	if p.BaselineIdentity != asked.BaselineIdentity {

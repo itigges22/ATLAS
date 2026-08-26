@@ -2012,13 +2012,22 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// produces goes to private telemetry and reaches no decision -- the
 	// authorization immediately below is the same one that ran at e8fefe8.
 	if ev, evID, seen := observeDeliveredCandidateSyntax(ctx, path, code, deliveredCheck); seen {
+		observed := []proxyEvidence{ev}
+		// THE production call path for the client-declared verification
+		// producer. It stages these exact bytes in a workspace that is not the
+		// caller's and runs the commands the client declared there, so the
+		// behavioral question has an answer rather than a blocker. It runs at
+		// all only for a request that declared commands, and the staging
+		// budget bounds what it may spend on one.
+		if behavioral, ran := observeCandidateVerification(ctx, path, code, evID); ran {
+			observed = append(observed, behavioral...)
+		}
 		// The typed answer to "may these bytes land", computed beside the live
 		// one and consulted by nothing. `authorizedV3` above already decided;
 		// this records what the obligation-and-evidence machinery WOULD have
 		// concluded, which is the only way to learn whether the two agree
 		// before either is allowed to depend on the other.
-		observeCandidateAuthorization(ctx, path, code, evID, v3Result.Evidence,
-			[]proxyEvidence{ev})
+		observeCandidateAuthorization(ctx, path, code, evID, v3Result.Evidence, observed)
 	}
 	if deliveredCheck.Status == ValidationFailed {
 		if !authorizedV3 {

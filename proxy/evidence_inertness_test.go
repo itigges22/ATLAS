@@ -31,7 +31,7 @@ var deliveryDecisions = []string{
 var provenanceReaders = []string{
 	"MayAuthorize", "BindsTo", "Authorizes",
 	"produceSyntaxEvidence", "produceDeclaredVerificationEvidence",
-	"declaredVerificationCoverage",
+	"declaredVerificationCoverage", "observeCandidateVerification",
 	"decideAuthorization", "observeCandidateAuthorization",
 	"evidenceRefusalFor",
 }
@@ -47,9 +47,10 @@ func TestEveryProductionConsumerOfProvenanceIsEnumerated(t *testing.T) {
 		// The coverage helper reports which declared commands are still owed.
 		// Its answer is returned to its caller and, in this build, has none.
 		"verification_evidence.go:declaredVerificationCoverage": true,
-		// THE production call path for the syntax producer, and the one place
+		// THE production call paths for the two producers, and the only places
 		// a record reaches private telemetry.
 		"evidence_wiring.go:observeDeliveredCandidateSyntax": true,
+		"evidence_wiring.go:observeCandidateVerification":    true,
 		// The observe-only authorization owner reads evidence to reach a
 		// verdict nothing consults. Its own inertness is pinned separately.
 		"authorization_decision.go:decideAuthorization":           true,
@@ -226,7 +227,8 @@ func TestEachProducerHasExactlyOneEnumeratedCallPath(t *testing.T) {
 	}{
 		{"produceSyntaxEvidence", ProvenanceProxyOwnedValidation,
 			"evidence_wiring.go:observeDeliveredCandidateSyntax"},
-		{"produceDeclaredVerificationEvidence", ProvenanceClientDeclaredVerification, ""},
+		{"produceDeclaredVerificationEvidence", ProvenanceClientDeclaredVerification,
+			"evidence_wiring.go:observeCandidateVerification"},
 	} {
 		sites := callSites(files, c.fn)
 		switch evidenceProducerStatus[c.source] {
@@ -249,25 +251,30 @@ func TestEachProducerHasExactlyOneEnumeratedCallPath(t *testing.T) {
 	}
 }
 
-// TestTheUnavailableProducerIsDeclaredRatherThanForgotten pins the blocker so
-// it cannot decay into an oversight: no live path runs a client-declared
-// command against a staging workspace holding the candidate bytes, so
-// behavioral authorization has no source on this build.
-func TestTheUnavailableProducerIsDeclaredRatherThanForgotten(t *testing.T) {
-	if evidenceProducerStatus[ProvenanceClientDeclaredVerification] != evidenceProducerUnavailable {
-		t.Fatal("client-declared verification changed availability without a wiring")
+// TestBothProducersAreWiredAndNeitherGainedASecondPath is what stood here as a
+// declared blocker. Both producers now have a live path; what has to stay true
+// is that each has exactly one, and that no third source of provenance
+// appeared alongside them.
+func TestBothProducersAreWiredAndNeitherGainedASecondPath(t *testing.T) {
+	for _, source := range []string{
+		ProvenanceProxyOwnedValidation, ProvenanceClientDeclaredVerification,
+	} {
+		if got := evidenceProducerStatus[source]; got != evidenceProducerWired {
+			t.Errorf("%s is declared %q, want wired", source, got)
+		}
 	}
-	// The two mechanisms that exist and are NOT that. The service never
-	// receives the task contract, so it cannot run what the client declared.
-	src, err := os.ReadFile("types.go")
-	if err != nil {
-		t.Fatal(err)
+	if len(evidenceProducerStatus) != 2 {
+		t.Errorf("%d declared producers; a new source needs its own wiring "+
+			"invariant here", len(evidenceProducerStatus))
 	}
-	start := strings.Index(string(src), "type V3GenerateRequest struct")
-	end := strings.Index(string(src)[start:], "\n}")
-	if strings.Contains(string(src)[start:start+end], "TaskContract") {
-		t.Error("the V3 request now carries the task contract; the staging " +
-			"blocker may no longer hold and must be re-derived")
+	// Staging executes, so its own reachability is pinned too: one caller, and
+	// that caller is the trust owner.
+	sites := callSites(proxyFiles(t), "stageCandidate")
+	if len(sites) != 1 {
+		t.Fatalf("staging is reached from %v, want exactly one path", sites)
+	}
+	if _, ok := sites["evidence_wiring.go:observeCandidateVerification"]; !ok {
+		t.Errorf("staging is reached from %v, not from the trust owner", sites)
 	}
 }
 

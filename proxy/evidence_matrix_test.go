@@ -30,6 +30,11 @@ type matrixWorld struct {
 	hash    string
 	code    string
 	sandbox *httptest.Server
+	// shell scripts what a staged command does. The defaults are a clean
+	// pass; a row that needs a failure sets them before staging.
+	shellExit   int
+	shellMutate bool
+	shellRuns   int
 }
 
 // newMatrixWorld builds a workspace with one candidate on disk, a sandbox
@@ -40,16 +45,48 @@ func newMatrixWorld(t *testing.T, contract, filename, code string, valid bool) *
 	if err := os.WriteFile(filepath.Join(dir, filename), []byte(code), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	world := &matrixWorld{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/syntax-check") {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			out := map[string]interface{}{"valid": valid}
+			if !valid {
+				out["errors"] = []string{"SyntaxError: invalid syntax"}
+			}
+			json.NewEncoder(w).Encode(out)
+		case strings.HasSuffix(r.URL.Path, "/shell"):
+			// The executor's half of staging: overlay in, hashes either side
+			// out. It draws no conclusion, exactly as the real one does not.
+			var in struct {
+				Files        map[string]string `json:"files"`
+				ObservePaths []string          `json:"observe_paths"`
+			}
+			if json.NewDecoder(r.Body).Decode(&in) != nil || len(in.ObservePaths) == 0 {
+				http.Error(w, "staging requires an overlay and an observation",
+					http.StatusBadRequest)
+				return
+			}
+			world.shellRuns++
+			observed := in.ObservePaths[0]
+			before := contentSHA256(in.Files[observed])
+			after, ws := before, "ws-before"
+			if world.shellMutate {
+				after = contentSHA256("rewritten\n")
+				ws = "ws-after"
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": world.shellExit == 0, "exit_code": world.shellExit,
+				"stdout": "", "stderr": "", "timed_out": false,
+				"observation": map[string]interface{}{
+					"target_before":    map[string]string{observed: before},
+					"target_after":     map[string]string{observed: after},
+					"workspace_before": "ws-before", "workspace_after": ws,
+					"workspace_files": 2, "digest_truncated": false,
+				},
+			})
+		default:
 			http.NotFound(w, r)
-			return
 		}
-		out := map[string]interface{}{"valid": valid}
-		if !valid {
-			out["errors"] = []string{"SyntaxError: invalid syntax"}
-		}
-		json.NewEncoder(w).Encode(out)
 	}))
 	t.Cleanup(srv.Close)
 
@@ -60,8 +97,9 @@ func newMatrixWorld(t *testing.T, contract, filename, code string, valid bool) *
 		ctx.TaskContract = mustContract(t, dir, contract)
 	}
 	resolved := resolveAgentPath(ctx, filename)
-	return &matrixWorld{ctx: ctx, path: resolved, hash: fileSHA256(ctx, resolved),
-		code: code, sandbox: srv}
+	world.ctx, world.path, world.code, world.sandbox = ctx, resolved, code, srv
+	world.hash = fileSHA256(ctx, resolved)
+	return world
 }
 
 func (w *matrixWorld) obligations() []taskObligation {
@@ -105,6 +143,30 @@ func assertDirectJoin(t *testing.T, row string, ev proxyEvidence,
 	}
 	if p.ObligationID == "" || p.WorkspaceStateHash == "" {
 		t.Errorf("%s: incomplete join %+v", row, p)
+	}
+}
+
+// stagedRun builds the request the wiring builds: one declared command, one
+// staged observation of it, bound to this world's candidate. The shape is the
+// point -- the producer is handed an OBSERVATION, never a conclusion.
+func (w *matrixWorld) stagedRun(obl taskObligation, outcome stagingCommandOutcome,
+	mutatedTarget, mutatedWorkspace bool) verificationEvidenceRequest {
+	generation, stateHash := workspaceIdentity(w.ctx)
+	return verificationEvidenceRequest{
+		Obligation: obl,
+		Result: stagingCommandResult{
+			CommandIdentity: contentSHA256(obl.Subject), ObligationID: obl.ID,
+			Index: 0, Count: 1, Outcome: outcome,
+			TargetHashBefore: w.hash, TargetHashAfter: w.hash,
+			WorkspaceHashBefore: "ws-before", WorkspaceHashAfter: "ws-before",
+			MutatedTarget: mutatedTarget, MutatedWorkspace: mutatedWorkspace,
+		},
+		Identity: stagingIdentity{
+			RequestID: "req-matrix", InvocationID: "inv-1",
+			CandidateInstanceID: "cand-1", CandidateHash: w.hash,
+			TargetPath: w.path, BaselineIdentity: baselineIdentityFor(w.ctx, w.path),
+			WorkspaceGeneration: generation, WorkspaceStateHash: stateHash,
+		},
 	}
 }
 
@@ -180,13 +242,8 @@ func TestEvidenceMatrix(t *testing.T) {
 				cmd = o
 			}
 		}
-		ev, ok := produceDeclaredVerificationEvidence(w.ctx, verificationEvidenceRequest{
-			Obligation: cmd,
-			Record: VerificationRecord{Command: "python3 solve.py",
-				Covered: map[string]string{w.path: w.hash}, Turn: 1},
-			Outcome: commandExitedZero, CandidatePath: w.path, CandidateHash: w.hash,
-			InvocationID: "inv-1", CandidateInstanceID: "cand-1",
-		})
+		ev, ok := produceDeclaredVerificationEvidence(w.ctx,
+			w.stagedRun(cmd, stagingExitedZero, false, false))
 		if !ok {
 			t.Fatal("an exact declared command produced no evidence")
 		}
@@ -216,13 +273,8 @@ func TestEvidenceMatrix(t *testing.T) {
 			t.Fatalf("derived %d command obligations, want 2", len(cmds))
 		}
 		var evidence []proxyEvidence
-		ev, ok := produceDeclaredVerificationEvidence(w.ctx, verificationEvidenceRequest{
-			Obligation: cmds[0],
-			Record: VerificationRecord{Command: cmds[0].Subject,
-				Covered: map[string]string{w.path: w.hash}, Turn: 1},
-			Outcome: commandExitedZero, CandidatePath: w.path, CandidateHash: w.hash,
-			InvocationID: "inv-1", CandidateInstanceID: "cand-1",
-		})
+		ev, ok := produceDeclaredVerificationEvidence(w.ctx,
+			w.stagedRun(cmds[0], stagingExitedZero, false, false))
 		if !ok {
 			t.Fatal("the first command produced no evidence")
 		}
@@ -245,21 +297,31 @@ func TestEvidenceMatrix(t *testing.T) {
 				cmd = o
 			}
 		}
-		req := verificationEvidenceRequest{
-			Obligation: cmd,
-			Record: VerificationRecord{Command: "python3 solve.py",
-				Covered: map[string]string{w.path: w.hash}, Turn: 1},
-			Outcome: commandExitedZero, CandidatePath: w.path, CandidateHash: w.hash,
-			InvocationID: "inv-1", CandidateInstanceID: "cand-1",
-		}
-		if _, ok := produceDeclaredVerificationEvidence(w.ctx, req); !ok {
-			t.Fatal("the fresh workspace produced nothing to make stale")
-		}
+		req := w.stagedRun(cmd, stagingExitedZero, false, false)
+		// The workspace moves while the staged command is running.
 		if err := os.WriteFile(w.path, []byte("print(8)\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := produceDeclaredVerificationEvidence(w.ctx, req); ok {
-			t.Error("a stale workspace still produced evidence")
+		bumpWorkspace(w.ctx, w.path, contentSHA256("print(8)\n"))
+		liveGen, liveHash := workspaceIdentity(w.ctx)
+		if liveHash == req.Identity.WorkspaceStateHash {
+			t.Fatal("the workspace did not actually move")
+		}
+
+		ev, ok := produceDeclaredVerificationEvidence(w.ctx, req)
+		if !ok {
+			t.Fatal("the row produced no evidence")
+		}
+		// The record is stamped with the workspace the staging run was bound
+		// to, not with whatever the workspace becomes afterwards. That is what
+		// makes staleness DETECTABLE.
+		if ev.Provenance.WorkspaceStateHash != req.Identity.WorkspaceStateHash {
+			t.Error("the record followed the workspace instead of recording it")
+		}
+		asked := ev.Provenance
+		asked.WorkspaceGeneration, asked.WorkspaceStateHash = liveGen, liveHash
+		if ok, _ := ev.Provenance.BindsTo(asked); ok {
+			t.Error("evidence from a superseded workspace still binds to the live one")
 		}
 	})
 
@@ -314,13 +376,8 @@ func TestEvidenceMatrix(t *testing.T) {
 		if !ok {
 			t.Fatal("obligation refused")
 		}
-		if _, ok := produceDeclaredVerificationEvidence(w.ctx, verificationEvidenceRequest{
-			Obligation: obl,
-			Record: VerificationRecord{Command: "python3 test_solve.py",
-				Covered: map[string]string{w.path: w.hash}, Turn: 1},
-			Outcome: commandExitedZero, CandidatePath: w.path, CandidateHash: w.hash,
-			InvocationID: "inv-1", CandidateInstanceID: "cand-1",
-		}); ok {
+		if _, ok := produceDeclaredVerificationEvidence(w.ctx,
+			w.stagedRun(obl, stagingExitedZero, false, false)); ok {
 			t.Error("a model-generated self-test produced trusted evidence")
 		}
 		if len(w.obligations()) != 0 {

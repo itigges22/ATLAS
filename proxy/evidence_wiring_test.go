@@ -217,22 +217,31 @@ func TestTwoCandidatesInOneRequestDoNotShareAnIdentity(t *testing.T) {
 	}
 }
 
-// --- the declared absence ----------------------------------------------------
+// --- the staging path, stated as a fact about this build ---------------------
 
-// TestNoLivePathStagesADeclaredCommandAgainstACandidate is the blocker, stated
-// as a fact about this build rather than a comment.
+// TestTheStagingPathExistsAndIsTheOnlyRouteToBehavioralEvidence replaces the
+// blocker that stood here.
 //
 // Behavioral authorization needs the client's exact command run against a
-// workspace holding the candidate bytes BEFORE delivery. Two mechanisms come
-// close and neither is it: the V3 service runs its own checks but never
-// receives the task contract, and the model's run_command executes against the
-// production workspace after bytes have landed.
-func TestNoLivePathStagesADeclaredCommandAgainstACandidate(t *testing.T) {
-	if got := evidenceProducerStatus[ProvenanceClientDeclaredVerification]; got != evidenceProducerUnavailable {
-		t.Fatalf("client-declared verification is declared %q; if a staging path "+
-			"now exists it must be wired and this blocker retired", got)
+// workspace holding the candidate bytes, before delivery. That path now
+// exists, and this pins the two things that make it the ONLY one: the trust
+// owner builds the staging request itself, and the two mechanisms that come
+// close are still not it.
+func TestTheStagingPathExistsAndIsTheOnlyRouteToBehavioralEvidence(t *testing.T) {
+	if got := evidenceProducerStatus[ProvenanceClientDeclaredVerification]; got != evidenceProducerWired {
+		t.Fatalf("client-declared verification is declared %q, want wired", got)
 	}
-	// The service cannot run what it was never told about.
+	files := proxyFiles(t)
+	sites := callSites(files, "stageCandidate")
+	if len(sites) != 1 {
+		t.Fatalf("staging is reached from %v, want exactly the one trust owner", sites)
+	}
+	if _, ok := sites["evidence_wiring.go:observeCandidateVerification"]; !ok {
+		t.Errorf("staging is reached from %v, not from the trust owner", sites)
+	}
+
+	// The service still cannot run what it was never told about, so a caller
+	// of a V3 endpoint cannot manufacture this authority.
 	types, err := os.ReadFile("types.go")
 	if err != nil {
 		t.Fatal(err)
@@ -241,17 +250,95 @@ func TestNoLivePathStagesADeclaredCommandAgainstACandidate(t *testing.T) {
 	body := string(types)[start : start+strings.Index(string(types)[start:], "\n}")]
 	for _, field := range []string{"TaskContract", "Verification", "DeclaredCommand"} {
 		if strings.Contains(body, field) {
-			t.Errorf("the V3 request now carries %s — re-derive the staging blocker", field)
+			t.Errorf("the V3 request now carries %s: generic contract authority "+
+				"must not travel into the service", field)
 		}
 	}
-	// The model's run is the only executor of a declared command, and it runs
-	// against the production workspace.
+	// And the model running the same command through run_command remains a
+	// different, untrusted event: it writes its own record, and no producer
+	// reads it.
 	agent, err := os.ReadFile("agent.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(agent), "ctx.VerificationEvidence = append") {
-		t.Error("the only declared-command executor moved; re-derive the blocker")
+		t.Error("the model's own command record moved; re-derive the boundary")
+	}
+	producer, err := os.ReadFile("verification_evidence.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(producer), "VerificationRecord") {
+		t.Error("the producer reads the model's own command record")
+	}
+}
+
+// TestStagingRunsOnlyForARequestThatDeclaredCommands pins the cost boundary: a
+// request that declared nothing stages nothing, so no command executes on its
+// behalf.
+func TestStagingRunsOnlyForARequestThatDeclaredCommands(t *testing.T) {
+	for _, contract := range []string{
+		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
+		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],` +
+			`"verification_knowledge":"unspecified"}`,
+	} {
+		w := wiringWorld(t, contract, "solve.py", "print(7)\n", true)
+		id := nextInvocationIdentity(w.ctx, contentSHA256("print(7)\n"))
+		if _, ran := observeCandidateVerification(w.ctx, w.path, "print(7)\n", id); ran {
+			t.Errorf("a request declaring no commands staged one: %s", contract)
+		}
+	}
+}
+
+// TestAResultNamingAnUndeclaredObligationProducesNothing is the trust boundary
+// at the producer: the proxy matches results against ITS OWN obligations, so a
+// result that names something else matches nothing.
+func TestAResultNamingAnUndeclaredObligationProducesNothing(t *testing.T) {
+	w := wiringWorld(t,
+		`{"task_mode":"work","verification_knowledge":"declared","verification":["python3 solve.py"]}`,
+		"solve.py", "print(7)\n", true)
+	obl, ok := newTaskObligation(ObligationDeclaredCommand, "python3 solve.py", "", true)
+	if !ok {
+		t.Fatal("obligation refused")
+	}
+	generation, stateHash := workspaceIdentity(w.ctx)
+	base := verificationEvidenceRequest{
+		Obligation: obl,
+		Result: stagingCommandResult{
+			CommandIdentity: contentSHA256("python3 solve.py"), ObligationID: obl.ID,
+			Count: 1, Outcome: stagingExitedZero,
+			TargetHashBefore: w.hash, TargetHashAfter: w.hash,
+			WorkspaceHashBefore: "ws", WorkspaceHashAfter: "ws",
+		},
+		Identity: stagingIdentity{
+			RequestID: "req-matrix", InvocationID: "inv-1",
+			CandidateInstanceID: "cand-1", CandidateHash: w.hash,
+			TargetPath: w.path, BaselineIdentity: baselineIdentityFor(w.ctx, w.path),
+			WorkspaceGeneration: generation, WorkspaceStateHash: stateHash,
+		},
+	}
+	if _, ok := produceDeclaredVerificationEvidence(w.ctx, base); !ok {
+		t.Fatal("the honest shape produced nothing to contrast with")
+	}
+	for name, mut := range map[string]func(*verificationEvidenceRequest){
+		"another obligation": func(r *verificationEvidenceRequest) {
+			r.Result.ObligationID = "declared_command:not-ours"
+		},
+		"another command": func(r *verificationEvidenceRequest) {
+			r.Result.CommandIdentity = contentSHA256("rm -rf /")
+		},
+		"another request": func(r *verificationEvidenceRequest) {
+			r.Identity.RequestID = "req-somebody-else"
+		},
+		"other bytes": func(r *verificationEvidenceRequest) {
+			r.Result.TargetHashBefore = contentSHA256("something else")
+		},
+	} {
+		req := base
+		mut(&req)
+		if _, ok := produceDeclaredVerificationEvidence(w.ctx, req); ok {
+			t.Errorf("a staged result naming %s produced evidence", name)
+		}
 	}
 }
 
@@ -291,7 +378,13 @@ func TestTheTelemetryRecordIsShapedAndFlaggedInert(t *testing.T) {
 	if start < 0 {
 		t.Fatal("the record builder is gone")
 	}
+	// The builder's own body, and no further: the file continues past it, and
+	// a scan that ran to the end would report the wiring above as if the
+	// record carried what the wiring reads.
 	fn := body[start:]
+	if next := strings.Index(fn[1:], "\nfunc "); next >= 0 {
+		fn = fn[:next+1]
+	}
 	if !strings.Contains(fn, `"influences_live_decision": false`) {
 		t.Error("the record does not declare itself inert")
 	}

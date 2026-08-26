@@ -37,6 +37,13 @@ func (w *authWorld) observe(t *testing.T) (proxyEvidence, candidateEvidenceIdent
 	return observeDeliveredCandidateSyntax(w.ctx, w.path, w.code, outcome)
 }
 
+// stage runs the client-declared producer through the real staging wiring
+// against the world's executor, exactly as production does.
+func (w *authWorld) stage(id candidateEvidenceIdentity) []proxyEvidence {
+	behavioral, _ := observeCandidateVerification(w.ctx, w.path, w.code, id)
+	return behavioral
+}
+
 // decide asks the decision about the candidate the producer just observed,
 // exactly as production does: the asked-for identity is the one the producer
 // minted, and the evidence has to match it.
@@ -101,7 +108,7 @@ func TestAuthorizationMatrix(t *testing.T) {
 		}
 	})
 
-	t.Run("declared command with no candidate staging", func(t *testing.T) {
+	t.Run("declared command left unstaged", func(t *testing.T) {
 		w := newAuthWorld(t,
 			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
 				`"verification_knowledge":"declared","verification":["pytest -q"]}`,
@@ -111,8 +118,10 @@ func TestAuthorizationMatrix(t *testing.T) {
 			t.Fatal("the wired producer saw nothing")
 		}
 		d := w.decide(evID, ev)
-		// The syntax obligation is met; the command has no producer on this
-		// build, so it is simply owed.
+		// The syntax obligation is met. Staging was never run for this
+		// candidate, so the command has no observation and is simply owed --
+		// which is what a missing behavioral record looks like now that one
+		// is producible.
 		expectReason(t, "declared command", d, false, ReasonEvidenceMissing)
 		if len(d.Satisfied) != 1 || len(d.Missing) != 1 {
 			t.Errorf("satisfied %v missing %v, want one of each", d.Satisfied, d.Missing)
@@ -123,11 +132,64 @@ func TestAuthorizationMatrix(t *testing.T) {
 	})
 
 	t.Run("exact declared command in a genuine candidate workspace", func(t *testing.T) {
-		if evidenceProducerStatus[ProvenanceClientDeclaredVerification] != evidenceProducerUnavailable {
-			t.Fatal("a staging path now exists; this row must exercise it")
+		w := newAuthWorld(t,
+			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
+				`"verification_knowledge":"declared","verification":["pytest -q"]}`,
+			"solve.py", authPy, true)
+		ev, evID, ok := w.observe(t)
+		if !ok {
+			t.Fatal("the wired producer saw nothing")
 		}
-		t.Skip("no live path stages a declared command against a candidate; " +
-			"behavioral authorization has no source on this build")
+		behavioral := w.stage(evID)
+		if len(behavioral) != 1 {
+			t.Fatalf("staging produced %d records, want the one declared command",
+				len(behavioral))
+		}
+		if w.shellRuns != 1 {
+			t.Errorf("the executor ran %d times, want once per declared command",
+				w.shellRuns)
+		}
+		if got := behavioral[0].Provenance.ObservedStrength; got != "behavioral" {
+			t.Errorf("strength %q, want behavioral", got)
+		}
+		d := w.decide(evID, append([]proxyEvidence{ev}, behavioral...)...)
+		expectReason(t, "staged declared command", d, true, ReasonAuthorized)
+		if len(d.Missing) != 0 {
+			t.Errorf("missing %v, want nothing owed", d.Missing)
+		}
+		if len(d.Satisfied) != 2 {
+			t.Errorf("satisfied %v, want the syntax and the command", d.Satisfied)
+		}
+	})
+
+	t.Run("declared command that failed in staging", func(t *testing.T) {
+		w := newAuthWorld(t,
+			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
+				`"verification_knowledge":"declared","verification":["pytest -q"]}`,
+			"solve.py", authPy, true)
+		w.shellExit = 1
+		ev, evID, ok := w.observe(t)
+		if !ok {
+			t.Fatal("the wired producer saw nothing")
+		}
+		d := w.decide(evID, append([]proxyEvidence{ev}, w.stage(evID)...)...)
+		expectReason(t, "failed declared command", d, false, ReasonEvidenceMissing)
+	})
+
+	t.Run("declared command that rewrote the candidate", func(t *testing.T) {
+		w := newAuthWorld(t,
+			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
+				`"verification_knowledge":"declared","verification":["pytest -q"]}`,
+			"solve.py", authPy, true)
+		w.shellMutate = true
+		ev, evID, ok := w.observe(t)
+		if !ok {
+			t.Fatal("the wired producer saw nothing")
+		}
+		d := w.decide(evID, append([]proxyEvidence{ev}, w.stage(evID)...)...)
+		if d.Authorized {
+			t.Error("a command that rewrote its own subject authorized the candidate")
+		}
 	})
 
 	t.Run("model-generated self-test passing", func(t *testing.T) {

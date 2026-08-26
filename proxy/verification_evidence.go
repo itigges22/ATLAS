@@ -9,16 +9,16 @@ import (
 //
 // This is the second producer and the first that can reach behavioral
 // strength. Its whole claim is narrow: a command the validated request named,
-// executed exactly as the client wrote it through the path that already runs
-// commands, exiting successfully against a workspace that held these exact
-// candidate bytes.
+// executed exactly as the client wrote it, exiting successfully against an
+// isolated workspace that held these exact candidate bytes and was left
+// unchanged by the run.
 //
-// It executes nothing. Running a command is the existing tool path's job --
-// with its own safety checks, its own permission endpoint and its own sandbox
-// -- and a producer that ran commands of its own would be a second execution
-// route with a second set of rules. What it consumes is the record that path
-// already writes: one entry per GREEN run, naming the command and the sha256
-// of every session-written file that run actually named.
+// It executes nothing. Staging runs the command, through the sandbox the rest
+// of the system already uses and the safety check the model's own commands go
+// through; a producer that ran commands of its own would be a second execution
+// route with a second set of rules. What it consumes is the observation
+// staging brings back: hashes either side, an exit status and a closed
+// outcome, with no command text and no output attached.
 //
 // Three things it deliberately cannot do:
 //
@@ -30,59 +30,24 @@ import (
 //   - close anything but the one command it is about. Two declared commands
 //     are two obligations; one passing leaves the other owed.
 //
-// Nothing consumes what this produces.
+// Nothing consumes what this produces: the record goes to private telemetry,
+// and no delivery, completion or generation decision reads it.
 
-// declaredCommandOutcome is how the run ended, in a closed vocabulary. Only
-// one value may support an authorizing observation, and every other way a
-// command can end has its own name rather than collapsing into "not ok" --
-// a refusal and a timeout are different facts about different failures.
-type declaredCommandOutcome string
-
-const (
-	// commandExitedZero: ran in the foreground and exited successfully under
-	// the semantics the tool path already applies.
-	commandExitedZero declaredCommandOutcome = "exited_zero"
-	// commandExitedNonZero: ran and failed.
-	commandExitedNonZero declaredCommandOutcome = "exited_nonzero"
-	// commandRefused: a safety check or the permission endpoint declined it.
-	commandRefused declaredCommandOutcome = "refused"
-	// commandAltered: what ran was not what the client wrote.
-	commandAltered   declaredCommandOutcome = "altered"
-	commandTimedOut  declaredCommandOutcome = "timed_out"
-	commandCancelled declaredCommandOutcome = "cancelled"
-	// commandBackgrounded: still running, so it has not exited at all.
-	commandBackgrounded declaredCommandOutcome = "backgrounded"
-	// commandOutcomeUnknown: nothing recorded how it ended. Never a default
-	// that grants anything.
-	commandOutcomeUnknown declaredCommandOutcome = "unknown"
-)
-
-var declaredCommandOutcomes = map[declaredCommandOutcome]bool{
-	commandExitedZero: true, commandExitedNonZero: true, commandRefused: true,
-	commandAltered: true, commandTimedOut: true, commandCancelled: true,
-	commandBackgrounded: true, commandOutcomeUnknown: true,
-}
-
-// verificationEvidenceRequest is one declared command, one run of it, and the
-// candidate it is claimed to be about.
+// verificationEvidenceRequest is one declared command, one staged run of it,
+// and the candidate it is claimed to be about.
 type verificationEvidenceRequest struct {
 	// Obligation must be a declared-command obligation whose subject is the
 	// exact command string the client wrote.
 	Obligation taskObligation
-	// Record is what the existing tool path wrote when the command ran. It is
-	// consumed, never synthesised here.
-	Record VerificationRecord
-	// Outcome is how that run ended.
-	Outcome declaredCommandOutcome
-
-	// CandidatePath and CandidateHash name the artifact under evaluation. The
-	// run must have covered that path at exactly those bytes.
-	CandidatePath string
-	CandidateHash string
-
-	InvocationID        string
-	CandidateInstanceID string
-	BaselineIdentity    string
+	// Result is what the staging run observed for that command. It is
+	// consumed, never synthesised here, and it carries no conclusion: the
+	// executor reports hashes and an exit status, and what those mean is
+	// decided below.
+	Result stagingCommandResult
+	// Identity is what the proxy bound the staging run to. Evidence is
+	// stamped with the workspace this run actually saw, not with whatever the
+	// workspace happens to be by the time anyone reads the record.
+	Identity stagingIdentity
 }
 
 // produceDeclaredVerificationEvidence is THE client-declared verification
@@ -106,7 +71,7 @@ func produceDeclaredVerificationEvidence(ctx *AgentContext, req verificationEvid
 	if req.Obligation.RequiredStrength != "behavioral" {
 		return proxyEvidence{}, false
 	}
-	if !declaredCommandOutcomes[req.Outcome] {
+	if !stagingCommandOutcomes[req.Result.Outcome] {
 		return proxyEvidence{}, false
 	}
 
@@ -117,46 +82,49 @@ func produceDeclaredVerificationEvidence(ctx *AgentContext, req verificationEvid
 	if !requestDeclaredCommand(ctx, command) {
 		return proxyEvidence{}, false
 	}
-	// What ran must be what the client wrote, byte for byte. A command that
-	// differs by a flag, a path or a space is a different command.
-	if req.Record.Command != command {
+	// What ran must be what the client wrote, byte for byte. The staging side
+	// never sends the text back, so the binding is by identity -- and the
+	// identity is recomputed here from the obligation rather than trusted from
+	// the result, so a result naming someone else's command matches nothing.
+	if req.Result.CommandIdentity != contentSHA256(command) {
+		return proxyEvidence{}, false
+	}
+	// And the result must be about THIS obligation. A staging run that
+	// reported an obligation the validated request does not own is refused
+	// rather than re-labelled.
+	if req.Result.ObligationID != req.Obligation.ID {
 		return proxyEvidence{}, false
 	}
 
 	requestID := requestIDOf(ctx)
-	if strings.TrimSpace(requestID) == "" ||
-		strings.TrimSpace(req.InvocationID) == "" ||
-		strings.TrimSpace(req.CandidateInstanceID) == "" ||
-		strings.TrimSpace(req.CandidatePath) == "" ||
-		strings.TrimSpace(req.CandidateHash) == "" {
+	if strings.TrimSpace(requestID) == "" || req.Identity.RequestID != requestID {
+		return proxyEvidence{}, false
+	}
+	if ok, _ := req.Identity.complete(); !ok {
+		return proxyEvidence{}, false
+	}
+	// The staged bytes must have been the candidate. The executor reported
+	// what it saw before the command ran; if that is not the candidate hash,
+	// the run happened against something else and covers nothing here.
+	if req.Result.TargetHashBefore != req.Identity.CandidateHash {
 		return proxyEvidence{}, false
 	}
 
-	// The run must still describe the bytes on disk, and among them it must
-	// have covered the candidate at exactly the hash being asked about. A
-	// command that passed before the candidate was inserted covered the older
-	// bytes and fails here rather than transferring.
-	covered, current := evidenceIsCurrent(ctx, req.Record)
-	if !current {
-		return proxyEvidence{}, false
-	}
-	if covered[resolveAgentPath(ctx, req.CandidatePath)] != req.CandidateHash {
-		return proxyEvidence{}, false
-	}
-
-	generation, stateHash := workspaceIdentity(ctx)
 	p := V3EvidenceProvenance{
 		Source:              ProvenanceClientDeclaredVerification,
 		RequestID:           requestID,
-		InvocationID:        req.InvocationID,
-		CandidateInstanceID: req.CandidateInstanceID,
-		CandidateHash:       req.CandidateHash,
-		WorkspaceGeneration: generation,
-		WorkspaceStateHash:  stateHash,
+		InvocationID:        req.Identity.InvocationID,
+		CandidateInstanceID: req.Identity.CandidateInstanceID,
+		CandidateHash:       req.Identity.CandidateHash,
+		// The workspace the staging run was bound to. Recording the CURRENT
+		// one would make every record self-consistent and staleness
+		// undetectable -- the reader's job is to notice the two have diverged.
+		WorkspaceGeneration: req.Identity.WorkspaceGeneration,
+		WorkspaceStateHash:  req.Identity.WorkspaceStateHash,
 		// The command is named by hash, like every other subject: a command
 		// string in an operator log is a content leak.
-		CommandIdentity:  contentSHA256(command),
-		BaselineIdentity: req.BaselineIdentity,
+		CommandIdentity:  req.Result.CommandIdentity,
+		BaselineIdentity: req.Identity.BaselineIdentity,
 		ObligationID:     req.Obligation.ID,
 		RequiredStrength: req.Obligation.RequiredStrength,
 		// A successful declared command demonstrates that the thing the client
@@ -167,7 +135,12 @@ func produceDeclaredVerificationEvidence(ctx *AgentContext, req verificationEvid
 		ObservedStrength: "behavioral",
 	}
 	outcome := ValidationFailed
-	if req.Outcome == commandExitedZero {
+	// Passing means the exact command exited zero having changed neither the
+	// candidate it was testing nor anything else it could see. A command that
+	// rewrote its own subject proved something about bytes that no longer
+	// exist.
+	if req.Result.Outcome == stagingExitedZero &&
+		!req.Result.MutatedTarget && !req.Result.MutatedWorkspace {
 		outcome = ValidationPassed
 	}
 	return proxyEvidence{Provenance: p, Outcome: outcome}, true

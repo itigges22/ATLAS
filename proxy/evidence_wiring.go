@@ -38,21 +38,17 @@ const (
 var evidenceProducerStatus = map[string]evidenceProducerAvailability{
 	ProvenanceProxyOwnedValidation: evidenceProducerWired,
 
-	// No live path executes a client-declared command against a staging
-	// workspace holding the candidate bytes BEFORE delivery.
+	// Staging supplies what this producer needs and nothing else could: the
+	// exact declared command, run against an isolated workspace holding the
+	// exact candidate bytes, observed either side.
 	//
-	// What exists: the V3 service runs its own smoke checks and self-tests
-	// inside the sandbox, and the proxy records a VerificationRecord when the
-	// MODEL runs a command through run_command. Neither is the thing this
-	// producer needs. The service never receives the task contract, so it
-	// cannot run what the client declared; the model's run happens against the
-	// production workspace AFTER bytes have landed, so it speaks for what is
-	// already there rather than for a candidate.
-	//
-	// Manufacturing evidence from either would be exactly the fabrication the
-	// producer exists to prevent, so behavioral authorization has no source on
-	// this build and says so.
-	ProvenanceClientDeclaredVerification: evidenceProducerUnavailable,
+	// The two mechanisms it is NOT remain what they were. The V3 service runs
+	// its own smoke checks and never receives the task contract, so it cannot
+	// run what the client declared and cannot manufacture this authority by
+	// calling its own endpoint. The MODEL running the same command through
+	// run_command is a different, untrusted event against the production
+	// workspace after bytes have landed. Neither reaches this producer.
+	ProvenanceClientDeclaredVerification: evidenceProducerWired,
 }
 
 // candidateEvidenceIdentity is the identity a candidate carries through one
@@ -148,6 +144,118 @@ func observeDeliveredCandidateSyntax(ctx *AgentContext, path, code string,
 	}
 	recordEvidenceObservation(ctx, ev)
 	return ev, id, true
+}
+
+// observeCandidateVerification is THE production call path for the
+// client-declared verification producer.
+//
+// The trust boundary is the whole point of the shape below. The proxy -- not
+// the service, not the executor, not the model -- reads the client's declared
+// commands out of the validated request, builds the staging request itself,
+// and afterwards matches every returned result back against the obligations it
+// derived. A result naming a command the request never declared, or an
+// obligation the proxy does not own, or bytes other than the candidate,
+// matches nothing and produces nothing. Staging reports observations; it does
+// not declare its own provenance trusted.
+//
+// Runs only when a client actually declared commands. A request that declared
+// none stages nothing, so no command executes on its behalf.
+//
+// Returns the evidence for the caller's own inspection in tests. Production
+// ignores the return value: records go to private telemetry and no delivery,
+// completion or generation decision reads them.
+func observeCandidateVerification(ctx *AgentContext, path, code string,
+	id candidateEvidenceIdentity) ([]proxyEvidence, bool) {
+	if ctx == nil || ctx.TaskContract == nil {
+		return nil, false
+	}
+	if strings.TrimSpace(id.InvocationID) == "" ||
+		strings.TrimSpace(id.CandidateInstanceID) == "" {
+		return nil, false
+	}
+	obs := requestObligations(ctx)
+	if len(obs) == 0 {
+		return nil, false
+	}
+	resolved := resolveAgentPath(ctx, path)
+	if !targetIsAuthorized(obs, resolved) {
+		return nil, false
+	}
+
+	// The declared commands, from the proxy's own derivation of the validated
+	// request. This list is the authority; nothing downstream may add to it.
+	var declared []taskObligation
+	for _, o := range authorizationPrerequisites(obs) {
+		if o.Kind == ObligationDeclaredCommand && o.Required {
+			declared = append(declared, o)
+		}
+	}
+	if len(declared) == 0 {
+		return nil, false
+	}
+
+	hash := contentSHA256(code)
+	generation, stateHash := workspaceIdentity(ctx)
+	req := stagingRequest{
+		WireVersion:    stagingWireVersion,
+		CandidateBytes: code,
+		Budget:         defaultStagingBudget(),
+		Identity: stagingIdentity{
+			RequestID:           requestIDOf(ctx),
+			InvocationID:        id.InvocationID,
+			CandidateInstanceID: id.CandidateInstanceID,
+			CandidateHash:       hash,
+			TargetPath:          resolved,
+			BaselineIdentity:    baselineIdentityFor(ctx, resolved),
+			WorkspaceGeneration: generation,
+			WorkspaceStateHash:  stateHash,
+		},
+	}
+	for i, o := range declared {
+		req.Commands = append(req.Commands, stagingCommand{
+			Text:         o.Subject,
+			Identity:     contentSHA256(o.Subject),
+			ObligationID: o.ID,
+			Index:        i,
+			Count:        len(declared),
+		})
+	}
+	if ok, _ := req.validate(); !ok {
+		// A declared set the staging budget cannot hold whole. Nothing runs:
+		// a partial set is not a smaller obligation.
+		return nil, false
+	}
+
+	result, ok := stageCandidate(ctx, req)
+	if !ok {
+		return nil, false
+	}
+	if valid, _ := result.validateAgainst(req); !valid {
+		// The result contradicted the request it answers. Refusing here is
+		// what makes a malformed or forged result worth nothing.
+		return nil, false
+	}
+
+	byID := map[string]taskObligation{}
+	for _, o := range declared {
+		byID[o.ID] = o
+	}
+	var out []proxyEvidence
+	for _, r := range result.Commands {
+		o, known := byID[r.ObligationID]
+		if !known {
+			continue
+		}
+		ev, ok := produceDeclaredVerificationEvidence(ctx, verificationEvidenceRequest{
+			Obligation: o, Result: r, Identity: result.Identity,
+		})
+		if !ok {
+			continue
+		}
+		recordEvidenceObservation(ctx, ev)
+		out = append(out, ev)
+	}
+	return out, len(out) > 0
 }
 
 // recordEvidenceObservation writes one observation to the private shadow sink.

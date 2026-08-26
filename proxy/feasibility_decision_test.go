@@ -66,10 +66,25 @@ func TestFeasibilityMatrix(t *testing.T) {
 		}
 	})
 
-	t.Run("declared command with no producer", func(t *testing.T) {
+	t.Run("declared command with a staging producer", func(t *testing.T) {
 		d := feasibilityFor(t,
 			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
 				`"verification_knowledge":"declared","verification":["pytest -q"]}`, nil)
+		expectFeasibility(t, "declared command", d, true, FeasibilityClosurePathAvailable)
+		if len(d.Unreachable) != 0 {
+			t.Errorf("unreachable %v, want nothing owed with no path", d.Unreachable)
+		}
+	})
+
+	t.Run("declared command on a build without staging", func(t *testing.T) {
+		_, obs := rolesFixture(t,
+			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
+				`"verification_knowledge":"declared","verification":["pytest -q"]}`, nil)
+		d := decideInvocationFeasibility(feasibilityInput{
+			Obligations:       obs,
+			AuthorizedTargets: authorizedTargets(obs),
+			Producible:        map[string]string{ObligationSyntacticValidity: "syntax"},
+		})
 		expectFeasibility(t, "declared command", d, false, FeasibilityAdapterCannotMeasure)
 		if len(d.Unreachable) != 1 ||
 			!strings.HasPrefix(d.Unreachable[0], ObligationDeclaredCommand+":") {
@@ -165,21 +180,20 @@ func TestALaterInvocationRecomputesFromWhatIsAvailableThen(t *testing.T) {
 		Producible:        producibleStrengths(),
 	}
 	now := decideInvocationFeasibility(in)
-	if now.Feasible {
-		t.Fatal("the declared command has no producer and was called feasible")
-	}
-	// A future build wires the verification producer. The SAME obligations
-	// then have a path -- and this is a new computation, not a retroactive
-	// upgrade of the one above.
-	later := in
-	later.Producible = map[string]string{
-		ObligationSyntacticValidity: "syntax",
-		ObligationDeclaredCommand:   "behavioral",
-	}
-	future := decideInvocationFeasibility(later)
-	expectFeasibility(t, "with a wired producer", future, true,
+	expectFeasibility(t, "with the staging producer wired", now, true,
 		FeasibilityClosurePathAvailable)
-	if now.Feasible {
+
+	// The same obligations on a build where the producer is not available. The
+	// answer is different, and that is the point: feasibility is a statement
+	// about what THIS invocation could produce, recomputed from what exists
+	// then, never a property carried forward.
+	without := in
+	without.Producible = map[string]string{ObligationSyntacticValidity: "syntax"}
+	other := decideInvocationFeasibility(without)
+	if other.Feasible {
+		t.Error("a declared command with no producer was called feasible")
+	}
+	if !now.Feasible {
 		t.Error("the earlier invocation's answer changed")
 	}
 }
@@ -198,17 +212,24 @@ func TestTheStageARequestShapeHasNoClosurePath(t *testing.T) {
 	d := feasibilityFor(t, `{"task_mode":"work"}`, nil)
 	expectFeasibility(t, "stage-a shape", d, false, FeasibilityUnspecifiedContract)
 
-	// And the counterfactual the run would have needed: a structured Python
-	// task whose closure floor its route could never reach. The behavioural
-	// floor comes from a declared command, which has no producer here.
+	// The counterfactual the run would have needed: a structured Python task
+	// whose closure floor is behavioural. At acquisition time its route could
+	// not reach that floor at all. On this build it can, because staging runs
+	// the declared command against the candidate -- so the same shape that was
+	// unreachable then is feasible now.
 	structured := feasibilityFor(t,
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
 			`"verification_knowledge":"declared","verification":["python3 solve.py"]}`, nil)
-	if structured.Feasible {
-		t.Error("a behavioural floor with no producer was called feasible")
-	}
 	if structured.Floor != "behavioral" {
 		t.Errorf("floor %q, want behavioral", structured.Floor)
+	}
+	expectFeasibility(t, "structured behavioural task", structured, true,
+		FeasibilityClosurePathAvailable)
+	// What has NOT changed is the shape Stage A actually sent. A contract that
+	// declared nothing has nothing to close, and staging cannot fix that: the
+	// missing thing is the declaration, not the executor.
+	if d.Feasible {
+		t.Error("the acquisition's own shape gained a closure path")
 	}
 
 	// Quantify what would have been avoided, without changing anything: the
@@ -221,8 +242,9 @@ func TestTheStageARequestShapeHasNoClosurePath(t *testing.T) {
 		t.Fatal("the pinned counts are inconsistent")
 	}
 	t.Logf("observe-only: %d of %d Stage-A candidate evaluations ran under a "+
-		"route with no closure path; consulted, this decision would have "+
-		"avoided them. Nothing was skipped.",
+		"route that, as sent, had no closure path; consulted, this decision "+
+		"would have avoided them. Nothing was skipped, and the historical "+
+		"record is unchanged.",
 		underTheUnclosableRoute, stageACandidateEvaluations)
 }
 

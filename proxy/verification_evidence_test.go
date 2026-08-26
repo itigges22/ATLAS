@@ -62,20 +62,51 @@ func newVerificationFixture(t *testing.T, commands ...string) *verificationFixtu
 	return &verificationFixture{ctx: ctx, obl: obl, path: resolved, hash: hash}
 }
 
+// request is the shape the wiring hands the producer: the client's obligation,
+// one staged observation of that command, and the identity the staging run was
+// bound to. Nothing in it is a conclusion.
 func (f *verificationFixture) request() verificationEvidenceRequest {
+	generation, stateHash := workspaceIdentity(f.ctx)
 	return verificationEvidenceRequest{
 		Obligation: f.obl,
-		Record: VerificationRecord{
-			Command: f.obl.Subject,
-			Covered: map[string]string{f.path: f.hash},
-			Turn:    1,
+		Result: stagingCommandResult{
+			CommandIdentity:  contentSHA256(f.obl.Subject),
+			ObligationID:     f.obl.ID,
+			Index:            0,
+			Count:            1,
+			Outcome:          stagingExitedZero,
+			TargetHashBefore: f.hash, TargetHashAfter: f.hash,
+			WorkspaceHashBefore: "ws-before", WorkspaceHashAfter: "ws-before",
 		},
-		Outcome:             commandExitedZero,
-		CandidatePath:       f.path,
-		CandidateHash:       f.hash,
-		InvocationID:        "inv-1",
-		CandidateInstanceID: "cand-1",
+		Identity: stagingIdentity{
+			RequestID:           "req-fixture",
+			InvocationID:        "inv-1",
+			CandidateInstanceID: "cand-1",
+			CandidateHash:       f.hash,
+			TargetPath:          f.path,
+			BaselineIdentity:    baselineIdentityFor(f.ctx, f.path),
+			WorkspaceGeneration: generation,
+			WorkspaceStateHash:  stateHash,
+		},
 	}
+}
+
+// bumpWorkspace records a change to a path the way the write path does, so
+// workspaceIdentity moves. Editing the file alone does not: the identity is
+// what the proxy has recorded about the workspace, not a walk of the disk.
+func bumpWorkspace(ctx *AgentContext, path, hash string) {
+	ctx.LedgerMu.Lock()
+	defer ctx.LedgerMu.Unlock()
+	if ctx.Ledger == nil {
+		ctx.Ledger = map[string]*DeliverableState{}
+	}
+	d := ctx.Ledger[path]
+	if d == nil {
+		d = &DeliverableState{Path: path}
+		ctx.Ledger[path] = d
+	}
+	d.CurrentHash = hash
+	d.Generation++
 }
 
 // --- the positive case -------------------------------------------------------
@@ -148,12 +179,21 @@ func TestTheSameTextFromTheModelRemainsUntrusted(t *testing.T) {
 	resolved := resolveAgentPath(ctx, "solve.py")
 	hash := fileSHA256(ctx, resolved)
 	obl, _ := newTaskObligation(ObligationDeclaredCommand, declaredCmd, "", true)
+	generation, stateHash := workspaceIdentity(ctx)
 	req := verificationEvidenceRequest{
 		Obligation: obl,
-		Record: VerificationRecord{Command: declaredCmd,
-			Covered: map[string]string{resolved: hash}, Turn: 1},
-		Outcome: commandExitedZero, CandidatePath: resolved, CandidateHash: hash,
-		InvocationID: "inv-1", CandidateInstanceID: "cand-1",
+		Result: stagingCommandResult{
+			CommandIdentity: contentSHA256(declaredCmd), ObligationID: obl.ID,
+			Count: 1, Outcome: stagingExitedZero,
+			TargetHashBefore: hash, TargetHashAfter: hash,
+			WorkspaceHashBefore: "ws", WorkspaceHashAfter: "ws",
+		},
+		Identity: stagingIdentity{
+			RequestID: "req-fixture", InvocationID: "inv-1",
+			CandidateInstanceID: "cand-1", CandidateHash: hash,
+			TargetPath: resolved, BaselineIdentity: baselineIdentityFor(ctx, resolved),
+			WorkspaceGeneration: generation, WorkspaceStateHash: stateHash,
+		},
 	}
 	if _, ok := produceDeclaredVerificationEvidence(ctx, req); ok {
 		t.Error("a command the client never declared produced trusted evidence")
@@ -184,7 +224,7 @@ func TestASimilarButNotIdenticalCommandFailsBinding(t *testing.T) {
 	} {
 		f := newVerificationFixture(t)
 		req := f.request()
-		req.Record.Command = ran
+		req.Result.CommandIdentity = contentSHA256(ran)
 		if _, ok := produceDeclaredVerificationEvidence(f.ctx, req); ok {
 			t.Errorf("%q was accepted for the declared %q", ran, declaredCmd)
 		}
@@ -195,23 +235,18 @@ func TestASimilarButNotIdenticalCommandFailsBinding(t *testing.T) {
 
 func TestASuccessfulUnrelatedCommandProvesNothing(t *testing.T) {
 	f := newVerificationFixture(t)
-	t.Run("named nothing", func(t *testing.T) {
+	t.Run("saw no bytes at the target", func(t *testing.T) {
 		req := f.request()
-		req.Record.Covered = map[string]string{}
+		req.Result.TargetHashBefore = ""
 		if _, ok := produceDeclaredVerificationEvidence(f.ctx, req); ok {
-			t.Error("a run that covered nothing authorized a candidate")
+			t.Error("a run that observed nothing at the target authorized a candidate")
 		}
 	})
-	t.Run("named another file", func(t *testing.T) {
-		other := filepath.Join(f.ctx.WorkingDir, "other.py")
-		if err := os.WriteFile(other, []byte("print(1)\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		resolved := resolveAgentPath(f.ctx, other)
+	t.Run("saw other bytes at the target", func(t *testing.T) {
 		req := f.request()
-		req.Record.Covered = map[string]string{resolved: fileSHA256(f.ctx, resolved)}
+		req.Result.TargetHashBefore = contentSHA256("print(1)\n")
 		if _, ok := produceDeclaredVerificationEvidence(f.ctx, req); ok {
-			t.Error("a run about another artifact authorized this candidate")
+			t.Error("a run against other bytes authorized this candidate")
 		}
 	})
 }
@@ -229,8 +264,10 @@ func TestACommandThatPassedBeforeInsertionCannotAuthorizeTheCandidate(t *testing
 		t.Fatal("the candidate did not change")
 	}
 	req := f.request()
-	req.Record.Covered = map[string]string{f.path: oldHash}
-	req.CandidateHash = newHash
+	// The staged run observed the OLD bytes; the candidate is the new ones.
+	req.Result.TargetHashBefore = oldHash
+	req.Result.TargetHashAfter = oldHash
+	req.Identity.CandidateHash = newHash
 	if _, ok := produceDeclaredVerificationEvidence(f.ctx, req); ok {
 		t.Error("a run from before the candidate landed authorized it")
 	}
@@ -238,23 +275,42 @@ func TestACommandThatPassedBeforeInsertionCannotAuthorizeTheCandidate(t *testing
 
 func TestAWorkspaceMutationAfterExecutionInvalidatesEvidence(t *testing.T) {
 	f := newVerificationFixture(t)
+	// The staging run was bound to the workspace as it stood when it started.
 	req := f.request()
-	if _, ok := produceDeclaredVerificationEvidence(f.ctx, req); !ok {
-		t.Fatal("the fixture does not produce evidence to invalidate")
-	}
-	// Someone edits the file after the command passed.
+	// It moved while the command was running.
 	if err := os.WriteFile(f.path, []byte("print(9)\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := produceDeclaredVerificationEvidence(f.ctx, req); ok {
-		t.Error("evidence survived a mutation of the bytes it vouched for")
+	bumpWorkspace(f.ctx, f.path, contentSHA256("print(9)\n"))
+	liveGen, liveHash := workspaceIdentity(f.ctx)
+	if liveHash == req.Identity.WorkspaceStateHash {
+		t.Fatal("the workspace did not actually move")
+	}
+
+	ev, ok := produceDeclaredVerificationEvidence(f.ctx, req)
+	if !ok {
+		t.Fatal("no evidence to test")
+	}
+	// The record names the workspace the run SAW, not the one it was written
+	// in. A producer that re-read the live state here would leave every record
+	// self-consistent and make staleness invisible to every reader.
+	if ev.Provenance.WorkspaceStateHash != req.Identity.WorkspaceStateHash {
+		t.Error("the record followed the workspace instead of recording it")
+	}
+	if ev.Provenance.WorkspaceGeneration != req.Identity.WorkspaceGeneration {
+		t.Error("the record's generation followed the workspace")
+	}
+	asked := ev.Provenance
+	asked.WorkspaceGeneration, asked.WorkspaceStateHash = liveGen, liveHash
+	if bound, _ := ev.Provenance.BindsTo(asked); bound {
+		t.Error("evidence survived a mutation of the workspace it vouched for")
 	}
 }
 
 func TestACandidateHashMismatchInvalidatesEvidence(t *testing.T) {
 	f := newVerificationFixture(t)
 	req := f.request()
-	req.CandidateHash = contentSHA256("some other candidate")
+	req.Identity.CandidateHash = contentSHA256("some other candidate")
 	if _, ok := produceDeclaredVerificationEvidence(f.ctx, req); ok {
 		t.Error("evidence was produced about a candidate the run never covered")
 	}
@@ -263,7 +319,7 @@ func TestACandidateHashMismatchInvalidatesEvidence(t *testing.T) {
 func TestABaselineMismatchInvalidatesEvidence(t *testing.T) {
 	f := newVerificationFixture(t)
 	req := f.request()
-	req.BaselineIdentity = "behavioral:baseline-a"
+	req.Identity.BaselineIdentity = "behavioral:baseline-a"
 	ev, ok := produceDeclaredVerificationEvidence(f.ctx, req)
 	if !ok {
 		t.Fatal("no evidence to test")
@@ -278,14 +334,14 @@ func TestABaselineMismatchInvalidatesEvidence(t *testing.T) {
 // --- every way a command can end without authorizing -------------------------
 
 func TestOnlyACleanForegroundSuccessAuthorizes(t *testing.T) {
-	for _, outcome := range []declaredCommandOutcome{
-		commandExitedNonZero, commandRefused, commandAltered,
-		commandTimedOut, commandCancelled, commandBackgrounded,
-		commandOutcomeUnknown,
+	for _, outcome := range []stagingCommandOutcome{
+		stagingExitedNonZero, stagingTimedOut, stagingCancelled, stagingRefused,
+		stagingMutatedTarget, stagingMutatedWorkspace, stagingUnobservable,
+		stagingBudgetExceeded, stagingUnavailable,
 	} {
 		f := newVerificationFixture(t)
 		req := f.request()
-		req.Outcome = outcome
+		req.Result.Outcome = outcome
 		ev, ok := produceDeclaredVerificationEvidence(f.ctx, req)
 		if !ok {
 			continue // declining outright is also a correct answer
@@ -299,10 +355,42 @@ func TestOnlyACleanForegroundSuccessAuthorizes(t *testing.T) {
 	}
 }
 
+// TestAnExitZeroThatChangedSomethingIsNotAPass is the case only staging can
+// see: the command succeeded, and it succeeded by rewriting the thing it was
+// meant to be testing, or something else it could reach.
+func TestAnExitZeroThatChangedSomethingIsNotAPass(t *testing.T) {
+	for _, c := range []struct {
+		name                     string
+		target, workspaceChanged bool
+	}{
+		{"rewrote the candidate", true, true},
+		{"changed an input", false, true},
+	} {
+		f := newVerificationFixture(t)
+		req := f.request()
+		req.Result.Outcome = stagingExitedZero
+		req.Result.MutatedTarget = c.target
+		req.Result.MutatedWorkspace = c.workspaceChanged
+		if c.target {
+			req.Result.TargetHashAfter = contentSHA256("rewritten\n")
+		}
+		ev, ok := produceDeclaredVerificationEvidence(f.ctx, req)
+		if !ok {
+			continue
+		}
+		if ev.Outcome == ValidationPassed {
+			t.Errorf("a command that %s was recorded as a pass", c.name)
+		}
+		if authorized, _ := ev.Authorizes(); authorized {
+			t.Errorf("a command that %s authorized its obligation", c.name)
+		}
+	}
+}
+
 func TestAnUnknownOutcomeValueFailsClosed(t *testing.T) {
 	f := newVerificationFixture(t)
 	req := f.request()
-	req.Outcome = declaredCommandOutcome("something_new")
+	req.Result.Outcome = stagingCommandOutcome("something_new")
 	if _, ok := produceDeclaredVerificationEvidence(f.ctx, req); ok {
 		t.Error("an unrecognised outcome produced evidence")
 	}
@@ -321,10 +409,13 @@ func TestACancelledRunProducesNothing(t *testing.T) {
 
 func TestAMissingIdentityProducesNothing(t *testing.T) {
 	for _, mut := range []func(*verificationEvidenceRequest){
-		func(r *verificationEvidenceRequest) { r.InvocationID = "" },
-		func(r *verificationEvidenceRequest) { r.CandidateInstanceID = "" },
-		func(r *verificationEvidenceRequest) { r.CandidatePath = "" },
-		func(r *verificationEvidenceRequest) { r.CandidateHash = "" },
+		func(r *verificationEvidenceRequest) { r.Identity.InvocationID = "" },
+		func(r *verificationEvidenceRequest) { r.Identity.CandidateInstanceID = "" },
+		func(r *verificationEvidenceRequest) { r.Identity.TargetPath = "" },
+		func(r *verificationEvidenceRequest) { r.Identity.CandidateHash = "" },
+		func(r *verificationEvidenceRequest) { r.Identity.RequestID = "" },
+		func(r *verificationEvidenceRequest) { r.Identity.WorkspaceStateHash = "" },
+		func(r *verificationEvidenceRequest) { r.Result.ObligationID = "other" },
 	} {
 		f := newVerificationFixture(t)
 		req := f.request()
@@ -352,6 +443,7 @@ func TestTheProducerRefusesAnyOtherObligationKind(t *testing.T) {
 		}
 		req := f.request()
 		req.Obligation = o
+		req.Result.ObligationID = o.ID
 		if _, ok := produceDeclaredVerificationEvidence(f.ctx, req); ok {
 			t.Errorf("a declared command described a %s obligation", kind)
 		}
@@ -386,7 +478,8 @@ func TestAllRequiredCommandsMustBeRepresented(t *testing.T) {
 
 	secondReq := f.request()
 	secondReq.Obligation = second
-	secondReq.Record.Command = "ruff check ."
+	secondReq.Result.ObligationID = second.ID
+	secondReq.Result.CommandIdentity = contentSHA256("ruff check .")
 	secondEv, ok := produceDeclaredVerificationEvidence(f.ctx, secondReq)
 	if !ok {
 		t.Fatal("the second command produced no evidence")
@@ -403,7 +496,7 @@ func TestAllRequiredCommandsMustBeRepresented(t *testing.T) {
 func TestAFailedObservationDoesNotCoverItsObligation(t *testing.T) {
 	f := newVerificationFixture(t)
 	req := f.request()
-	req.Outcome = commandExitedNonZero
+	req.Result.Outcome = stagingExitedNonZero
 	ev, ok := produceDeclaredVerificationEvidence(f.ctx, req)
 	if !ok {
 		t.Skip("the producer declined outright, which is also correct")
@@ -426,8 +519,9 @@ func TestConcurrentRequestsAndInvocationsCannotExchangeEvidence(t *testing.T) {
 		t.Fatal("fixture A produced no evidence")
 	}
 	reqB := b.request()
-	reqB.InvocationID = "inv-2"
-	reqB.CandidateInstanceID = "cand-2"
+	reqB.Identity.RequestID = "req-other"
+	reqB.Identity.InvocationID = "inv-2"
+	reqB.Identity.CandidateInstanceID = "cand-2"
 	evB, ok := produceDeclaredVerificationEvidence(b.ctx, reqB)
 	if !ok {
 		t.Fatal("fixture B produced no evidence")
@@ -445,9 +539,7 @@ func TestConcurrentRequestsAndInvocationsCannotExchangeEvidence(t *testing.T) {
 func TestNeitherCommandStringsNorSourceBytesTravel(t *testing.T) {
 	const secret = "pytest --token=hunter2 -q"
 	f := newVerificationFixture(t, secret)
-	req := f.request()
-	req.Record.Command = secret
-	ev, ok := produceDeclaredVerificationEvidence(f.ctx, req)
+	ev, ok := produceDeclaredVerificationEvidence(f.ctx, f.request())
 	if !ok {
 		t.Fatal("no evidence to test")
 	}
