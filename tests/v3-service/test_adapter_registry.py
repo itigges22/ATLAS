@@ -34,7 +34,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
-import adapters as A  # noqa: E402
+import adapters as A
+import obligations as O  # noqa: E402
 import contract as C  # noqa: E402
 
 ALL_EIGHT = [
@@ -102,32 +103,76 @@ def test_a_criterion_is_never_both_measurable_and_unmeasurable(adapter):
     assert not both, f"{adapter} declares {both} as both measurable and not"
 
 
-# --- the known defect is registered, not silent -----------------------------
+# --- the quarantine is lifted, and what replaced it --------------------------
 
-def test_the_syntax_only_adapters_register_their_unmeasurable_obligations():
-    """python_compile and javascript_compile demand four browser criteria they
-    cannot measure. That is the defect the sealed run paid for. It stays
-    quarantined and visible here until obligation sourcing moves to the task."""
-    for adapter in (A.ADAPTER_PYTHON_COMPILE, A.ADAPTER_JAVASCRIPT_COMPILE,
-                    A.ADAPTER_INTERACTIVE_PYTHON_UNSUPPORTED, A.ADAPTER_UNSUPPORTED):
-        quarantined = set(A.unmeasurable_requirements(adapter))
-        assert quarantined == set(A.BROWSER_REQUIRED) | set(A.BROWSER_OPTIONAL), (
-            f"{adapter}: {sorted(quarantined)}")
-        assert not A._capabilities(adapter), (
-            f"{adapter} measures nothing, and must not claim otherwise")
+def test_no_adapter_demands_a_criterion_it_cannot_measure():
+    """The defect the sealed run paid for is gone at the source.
+
+    python_compile required four browser criteria it cannot observe, so 100 of
+    103 candidate evaluations carried missing_required
+    ["temporal_progress","input_causality"] and no Python candidate could reach
+    closure by any route. It required them because an adapter used to declare
+    the TASK's obligations; obligations.py owns that now, so an adapter has
+    nothing to over-declare.
+    """
+    for adapter in A.ALL_ADAPTERS:
+        assert not A.unmeasurable_requirements(adapter), (
+            f"{adapter} still quarantines "
+            f"{sorted(A.unmeasurable_requirements(adapter))}")
+        declared = {cid for cid, _ in A.REQUIREMENT_DECLARATION[adapter]}
+        assert declared <= set(A._capabilities(adapter)), (
+            f"{adapter} requires {sorted(declared - set(A._capabilities(adapter)))} "
+            "with nothing to measure it")
+
+
+def test_the_corrected_obligation_capability_matrix():
+    """What each verifier may now speak for, stated once.
+
+    A compile owns structural validity and nothing above it. The browser probe
+    runs the artifact, so it owns the same and no more: behavioural reach is
+    not permission to answer an unrelated command obligation. algorithmic_io
+    owns declared examples, and select_adapter reaches it only under a trusted
+    declared case source. The two unsupported adapters own nothing.
+    """
+    assert A.obligation_capabilities(A.ADAPTER_PYTHON_COMPILE) == [O.KIND_SYNTACTIC_VALIDITY]
+    assert A.obligation_capabilities(A.ADAPTER_JAVASCRIPT_COMPILE) == [O.KIND_SYNTACTIC_VALIDITY]
+    assert A.obligation_capabilities(A.ADAPTER_CSS_SYNTAX) == [O.KIND_SYNTACTIC_VALIDITY]
+    assert A.obligation_capabilities(A.ADAPTER_BROWSER_CANVAS_JS) == [O.KIND_SYNTACTIC_VALIDITY]
+    assert A.obligation_capabilities(A.ADAPTER_BROWSER_INLINE_SCRIPT) == [O.KIND_SYNTACTIC_VALIDITY]
+    assert A.obligation_capabilities(A.ADAPTER_ALGORITHMIC_IO) == [
+        O.KIND_SYNTACTIC_VALIDITY, O.KIND_DECLARED_EXAMPLE]
+    assert A.obligation_capabilities(A.ADAPTER_INTERACTIVE_PYTHON_UNSUPPORTED) == []
+    assert A.obligation_capabilities(A.ADAPTER_UNSUPPORTED) == []
+
+
+def test_no_adapter_claims_a_kind_nothing_can_evaluate():
+    """unsupported is a real answer, never an evaluable one."""
+    for adapter in A.ALL_ADAPTERS:
+        assert O.KIND_UNSUPPORTED not in A.obligation_capabilities(adapter)
 
 
 def test_a_behavioral_obligation_on_a_syntax_only_adapter_is_never_complete():
     """The rule this pins: capability is an upper bound, never a substitute for
-    the obligation. A syntax-only verifier facing a behavioural requirement is
-    unverifiable -- it is NOT syntax-authorized."""
+    the obligation. A syntax-only verifier facing a behavioural obligation is
+    unverifiable -- it is NOT syntax-authorized.
+
+    It is pinned against a real declared-command obligation now. It used to
+    pass off the quarantine: python_compile happened to require browser
+    criteria, so every record was incomplete for a reason that had nothing to
+    do with the obligation in front of it.
+    """
+    command = O.obligation(kind=O.KIND_DECLARED_COMMAND, subject="pytest -q")
     rec = A.contract_record(
         adapter=A.ADAPTER_PYTHON_COMPILE, accepted=True, probe=None,
         contract_id="c.v1", contract_version="1", artifact_scope="s",
-        evaluation_context_hash="ctx", candidate_content_hash="h")
+        evaluation_context_hash="ctx", candidate_content_hash="h",
+        task_obligations=[command])
     assert rec["evidence_strength"] == C.SYNTAX
     assert rec["requirements_complete"] is False
     assert rec["closure_eligible"] is False
+    assert rec["missing_required"] == [command["id"]]
+    # Unmeasured, not refuted: the compile did not observe the command fail.
+    assert rec["observations"][command["id"]]["status"] == C.NOT_APPLICABLE
     assert rec["required_coverage_score"] == 0.0
     assert rec["missing_required"], "a behavioural obligation vanished"
 

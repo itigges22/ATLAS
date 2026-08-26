@@ -730,7 +730,11 @@ def test_generated_evidence_never_reaches_closure_or_a_verified_winner(monkeypat
     result = _run_with(monkeypatch, _sandbox_scoring(5), _generated_cases(),
                        plan_candidates=[RING2_CANDIDATE.replace("strip", "rstrip")])
     record = result.get("evidence_record") or {}
-    assert record.get("requirements_complete") is False
+    # The compile requirement IS complete -- the artifact parses, and saying
+    # otherwise was an accident of the old quarantine. What it cannot reach is
+    # the behavioural floor its adapter demands, which is the fact that keeps
+    # an untrusted pool from closing anything.
+    assert record.get("evidence_strength") == C.SYNTAX
     assert record.get("closure_eligible") is False
     selection = result.get("contract_selection") or {}
     assert selection.get("verified_winner") is None
