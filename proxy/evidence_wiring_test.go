@@ -27,7 +27,7 @@ func TestTheWiredProducerObservesTheDeliveredBytes(t *testing.T) {
 		"solve.py", code, true)
 
 	outcome := fallbackSyntaxOutcomeFor(w.ctx, w.path, code).aggregate()
-	ev, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, code, outcome)
+	ev, _, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, code, outcome)
 	if !ok {
 		t.Fatal("the wired producer observed nothing about a declared code output")
 	}
@@ -69,7 +69,7 @@ func TestTheWiredProducerRunsNoSecondCheck(t *testing.T) {
 	countingURL := w.ctx.SandboxURL
 	_ = countingURL
 	w.ctx.SandboxURL = "" // any further check would now be not_run, not a pass
-	ev, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, code, outcome)
+	ev, _, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, code, outcome)
 	if !ok {
 		t.Fatal("the producer refused a verdict it was handed")
 	}
@@ -88,7 +88,7 @@ func TestTheWiredProducerDistinguishesNegativeFromNotRun(t *testing.T) {
 			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
 			"solve.py", code, false)
 		outcome := fallbackSyntaxOutcomeFor(w.ctx, w.path, code).aggregate()
-		ev, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, code, outcome)
+		ev, _, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, code, outcome)
 		if !ok {
 			t.Fatal("a demonstrated failure produced no observation")
 		}
@@ -103,7 +103,7 @@ func TestTheWiredProducerDistinguishesNegativeFromNotRun(t *testing.T) {
 		w := wiringWorld(t,
 			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
 			"solve.py", code, true)
-		if _, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, code,
+		if _, _, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, code,
 			checkOutcome{Status: ValidationNotRun}); ok {
 			t.Error("a check that did not run produced a record")
 		}
@@ -112,7 +112,7 @@ func TestTheWiredProducerDistinguishesNegativeFromNotRun(t *testing.T) {
 		w := wiringWorld(t,
 			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
 			"solve.py", code, true)
-		if _, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, code,
+		if _, _, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, code,
 			checkOutcome{Status: ValidationUnknown}); ok {
 			t.Error("an unclassified check produced a record")
 		}
@@ -131,7 +131,7 @@ func TestTheWiringObservesOnlyDeclaredTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 	outcome := fallbackSyntaxOutcomeFor(w.ctx, other, code).aggregate()
-	if _, ok := observeDeliveredCandidateSyntax(w.ctx, other, code, outcome); ok {
+	if _, _, ok := observeDeliveredCandidateSyntax(w.ctx, other, code, outcome); ok {
 		t.Error("a delivery to an undeclared target produced evidence")
 	}
 }
@@ -142,7 +142,7 @@ func TestTheWiringFabricatesNoSyntaxForADocument(t *testing.T) {
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["notes.md"]}`,
 		"notes.md", body, true)
 	outcome := fallbackSyntaxOutcomeFor(w.ctx, w.path, body).aggregate()
-	if _, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, body, outcome); ok {
+	if _, _, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, body, outcome); ok {
 		t.Error("a class the gate does not govern got a fabricated structural record")
 	}
 }
@@ -156,7 +156,7 @@ func TestTheWiringIsSilentForLegacyTraffic(t *testing.T) {
 	} {
 		w := wiringWorld(t, contract, "solve.py", code, true)
 		outcome := fallbackSyntaxOutcomeFor(w.ctx, w.path, code).aggregate()
-		if _, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, code, outcome); ok {
+		if _, _, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, code, outcome); ok {
 			t.Errorf("%q produced evidence with no structured obligation", contract)
 		}
 	}
@@ -169,7 +169,7 @@ func TestTheWiringNeedsALiveRequestIdentity(t *testing.T) {
 		"solve.py", code, true)
 	w.ctx.Ctx = context.Background()
 	outcome := fallbackSyntaxOutcomeFor(w.ctx, w.path, code).aggregate()
-	if _, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, code, outcome); ok {
+	if _, _, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, code, outcome); ok {
 		t.Error("evidence was produced with no request to bind to")
 	}
 }
@@ -183,11 +183,11 @@ func TestTwoInvocationsProduceDistinctIdentities(t *testing.T) {
 		"solve.py", code, true)
 	outcome := fallbackSyntaxOutcomeFor(w.ctx, w.path, code).aggregate()
 
-	first, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, code, outcome)
+	first, _, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, code, outcome)
 	if !ok {
 		t.Fatal("first observation refused")
 	}
-	second, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, code, outcome)
+	second, _, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, code, outcome)
 	if !ok {
 		t.Fatal("second observation refused")
 	}
@@ -263,7 +263,7 @@ func TestTheEvidenceRecordCarriesNoContent(t *testing.T) {
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
 		"solve.py", secret, true)
 	outcome := fallbackSyntaxOutcomeFor(w.ctx, w.path, secret).aggregate()
-	ev, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, secret, outcome)
+	ev, _, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, secret, outcome)
 	if !ok {
 		t.Fatal("no evidence to inspect")
 	}

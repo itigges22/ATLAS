@@ -2004,7 +2004,15 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// recomputed, so no second sandbox call and no second opinion. What it
 	// produces goes to private telemetry and reaches no decision -- the
 	// authorization immediately below is the same one that ran at e8fefe8.
-	observeDeliveredCandidateSyntax(ctx, path, code, deliveredCheck)
+	if ev, evID, seen := observeDeliveredCandidateSyntax(ctx, path, code, deliveredCheck); seen {
+		// The typed answer to "may these bytes land", computed beside the live
+		// one and consulted by nothing. `authorizedV3` above already decided;
+		// this records what the obligation-and-evidence machinery WOULD have
+		// concluded, which is the only way to learn whether the two agree
+		// before either is allowed to depend on the other.
+		observeCandidateAuthorization(ctx, path, code, evID, v3Result.Evidence,
+			[]proxyEvidence{ev})
+	}
 	if deliveredCheck.Status == ValidationFailed {
 		if !authorizedV3 {
 			// The caller's own content, and it does not parse. Nothing here

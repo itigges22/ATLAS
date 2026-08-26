@@ -32,6 +32,8 @@ var provenanceReaders = []string{
 	"MayAuthorize", "BindsTo", "Authorizes",
 	"produceSyntaxEvidence", "produceDeclaredVerificationEvidence",
 	"declaredVerificationCoverage",
+	"decideAuthorization", "observeCandidateAuthorization",
+	"evidenceRefusalFor",
 }
 
 // TestEveryProductionConsumerOfProvenanceIsEnumerated fails when a call to a
@@ -48,6 +50,12 @@ func TestEveryProductionConsumerOfProvenanceIsEnumerated(t *testing.T) {
 		// THE production call path for the syntax producer, and the one place
 		// a record reaches private telemetry.
 		"evidence_wiring.go:observeDeliveredCandidateSyntax": true,
+		// The observe-only authorization owner reads evidence to reach a
+		// verdict nothing consults. Its own inertness is pinned separately.
+		"authorization_decision.go:decideAuthorization":           true,
+		"authorization_decision.go:observeCandidateAuthorization": true,
+		// The one site that computes the shadow decision beside the live one.
+		"tools.go:writeFileWithV3": true,
 	}
 	for _, fn := range provenanceReaders {
 		for site := range callSites(proxyFiles(t), fn) {
@@ -111,11 +119,15 @@ func TestNoProducerReachesTheDeliveryGraph(t *testing.T) {
 }
 
 // TestTheWritePathReadsNoObligationOrEvidence pins that the functions which
-// actually put bytes on disk consult none of this slice's vocabulary.
+// actually DECIDE what lands consult none of this slice's vocabulary.
+//
+// writeFileWithV3 is off this list on purpose: it is where the observation and
+// the shadow decision are computed, beside the live decision and after it.
+// What it may not do is let either answer reach the delivery, which is what
+// TestTheLiveDeliveryDecisionIgnoresTheShadowOne pins.
 func TestTheWritePathReadsNoObligationOrEvidence(t *testing.T) {
 	files := proxyFiles(t)
 	writePath := map[string]bool{
-		"writeFileWithV3":               true,
 		"improveContentWithV3":          true,
 		"authorizedV3Replacement":       true,
 		"v3DeliveryAuthorized":          true,
@@ -132,6 +144,68 @@ func TestTheWritePathReadsNoObligationOrEvidence(t *testing.T) {
 				t.Errorf("the write path function %s calls %s", caller, fn)
 			}
 		}
+	}
+}
+
+// TestTheAskedForIdentityIsNotEvidence pins the one exception above: the
+// authorization owner builds an identity to compare against and never gives it
+// a source, so nothing it constructs can be mistaken for a record.
+func TestTheAskedForIdentityIsNotEvidence(t *testing.T) {
+	files := proxyFiles(t)
+	f := files["authorization_decision.go"]
+	if f == nil {
+		t.Fatal("the authorization owner is gone")
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		lit, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		id, ok := lit.Type.(*ast.Ident)
+		if !ok || id.Name != "V3EvidenceProvenance" {
+			return true
+		}
+		for _, elt := range lit.Elts {
+			kv, ok := elt.(*ast.KeyValueExpr)
+			if !ok {
+				continue
+			}
+			if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "Source" {
+				t.Error("the authorization owner gives its asked-for identity a " +
+					"source; an identity with a source reads as a record")
+			}
+		}
+		return true
+	})
+}
+
+// TestTheLiveDeliveryDecisionIgnoresTheShadowOne is the inertness statement
+// for the one site that computes both.
+//
+// The shadow decision is computed AFTER the live authorization has already
+// chosen the bytes, and its value is discarded: no assignment, no branch, no
+// return. A future change that reads it fails here.
+func TestTheLiveDeliveryDecisionIgnoresTheShadowOne(t *testing.T) {
+	src, err := os.ReadFile("tools.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	i := strings.Index(body, "observeCandidateAuthorization(")
+	if i < 0 {
+		t.Fatal("the shadow decision is no longer computed on the production path")
+	}
+	// The call must be a bare statement. An assignment would mean somebody
+	// kept the answer.
+	lineStart := strings.LastIndex(body[:i], "\n") + 1
+	line := strings.TrimSpace(body[lineStart:i])
+	if line != "" {
+		t.Errorf("the shadow decision's value is captured: %q", line+"observeCandidateAuthorization(")
+	}
+	// And the live authorization is decided before it, by the same function
+	// that decided it at e8fefe8.
+	if strings.Index(body, "authorizedV3Replacement(v3Result, baselineContent)") > i {
+		t.Error("the shadow decision now runs before the live one")
 	}
 }
 
@@ -227,6 +301,10 @@ func TestNoProductionCodeConstructsAProvenanceOutsideTheProducers(t *testing.T) 
 		"types.go": true,
 		// The wire decoder materialises what the service sent.
 		"v3_bridge.go": true,
+		// The decision builds the identity evidence must MATCH, which is the
+		// opposite of producing evidence. It may not give that identity a
+		// source -- one with a source would read as a record.
+		"authorization_decision.go": true,
 	}
 	for name, f := range proxyFiles(t) {
 		if allowed[name] {

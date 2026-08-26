@@ -103,19 +103,19 @@ func nextInvocationIdentity(ctx *AgentContext, candidateHash string) candidateEv
 // ignores the return value: the record goes to private telemetry and the
 // delivery decision above is unchanged.
 func observeDeliveredCandidateSyntax(ctx *AgentContext, path, code string,
-	outcome checkOutcome) (proxyEvidence, bool) {
+	outcome checkOutcome) (proxyEvidence, candidateEvidenceIdentity, bool) {
 	if ctx == nil || ctx.TaskContract == nil {
-		return proxyEvidence{}, false
+		return proxyEvidence{}, candidateEvidenceIdentity{}, false
 	}
 	obs := requestObligations(ctx)
 	if len(obs) == 0 {
-		return proxyEvidence{}, false
+		return proxyEvidence{}, candidateEvidenceIdentity{}, false
 	}
 	resolved := resolveAgentPath(ctx, path)
 	// Only a target the client declared. A delivery elsewhere is not a
 	// delivery this evidence has anything to say about.
 	if !targetIsAuthorized(obs, resolved) {
-		return proxyEvidence{}, false
+		return proxyEvidence{}, candidateEvidenceIdentity{}, false
 	}
 	var syntax taskObligation
 	for _, o := range authorizationPrerequisites(obs) {
@@ -128,7 +128,7 @@ func observeDeliveredCandidateSyntax(ctx *AgentContext, path, code string,
 		// A class the gate does not govern owes no structural obligation, and
 		// inventing one to have something to evidence is the fabrication this
 		// whole split exists to prevent.
-		return proxyEvidence{}, false
+		return proxyEvidence{}, candidateEvidenceIdentity{}, false
 	}
 
 	hash := contentSHA256(code)
@@ -144,10 +144,10 @@ func observeDeliveredCandidateSyntax(ctx *AgentContext, path, code string,
 		BaselineIdentity:    baselineIdentityFor(ctx, resolved),
 	})
 	if !ok {
-		return proxyEvidence{}, false
+		return proxyEvidence{}, candidateEvidenceIdentity{}, false
 	}
 	recordEvidenceObservation(ctx, ev)
-	return ev, true
+	return ev, id, true
 }
 
 // recordEvidenceObservation writes one observation to the private shadow sink.
