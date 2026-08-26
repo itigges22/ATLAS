@@ -146,6 +146,7 @@ def test_client_declared_sources_may_reach_behavioural_closure():
     ("candidate_instance_id", "inv-1:generated:1"),
     ("candidate_hash", "d" * 64),
     ("command_identity", "python3 other.py"),
+    ("baseline_identity", "syntax:some-other-baseline"),
     ("obligation_id", "something_else"),
     ("workspace_generation", 8),
     ("workspace_state_hash", "z" * 64),
@@ -184,6 +185,27 @@ def test_command_identity_is_optional_but_binding_when_present():
     assert ok
     ok, why = P.binds_to(b, dict(b, command_identity="python3 solve.py"))
     assert not ok and "command_identity" in why
+
+
+def test_baseline_identity_is_optional_but_binding_when_present():
+    """A candidate that replaces nothing has no baseline. One that replaces a
+    validated artifact is about THAT artifact, and evidence earned against a
+    different baseline is about a different replacement."""
+    b = binding(baseline_identity=None)
+    ok, _ = P.binds_to(b, dict(b))
+    assert ok
+    ok, why = P.binds_to(b, dict(b, baseline_identity="syntax:abc"))
+    assert not ok and "baseline_identity" in why
+    held = binding(baseline_identity="syntax:abc")
+    ok, why = P.binds_to(held, dict(held, baseline_identity="syntax:def"))
+    assert not ok and "baseline_identity" in why
+
+
+def test_an_empty_baseline_identity_is_refused():
+    """Absent and blank are different: a blank one would compare equal to
+    another blank one and let two unrelated replacements share evidence."""
+    with pytest.raises(P.ProvenanceError):
+        binding(baseline_identity="   ")
 
 
 def test_workspace_generation_must_be_a_non_negative_integer():

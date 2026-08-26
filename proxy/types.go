@@ -1556,6 +1556,11 @@ type V3EvidenceProvenance struct {
 	// Absent for an obligation that runs no command. Absence is a real
 	// answer, and two bindings must still agree on it.
 	CommandIdentity string `json:"command_identity,omitempty"`
+	// BaselineIdentity names the validated baseline the candidate would
+	// replace, or "" when there is none. Absence is a real answer here too:
+	// evidence earned against one baseline is not about a different one, and
+	// evidence earned where nothing existed is not about a replacement.
+	BaselineIdentity string `json:"baseline_identity,omitempty"`
 
 	ObligationID     string `json:"obligation_id"`
 	RequiredStrength string `json:"required_strength"`
@@ -1630,6 +1635,7 @@ func (p *V3EvidenceProvenance) BindsTo(asked V3EvidenceProvenance) (bool, string
 		{"candidate_hash", p.CandidateHash, asked.CandidateHash},
 		{"workspace_state_hash", p.WorkspaceStateHash, asked.WorkspaceStateHash},
 		{"command_identity", p.CommandIdentity, asked.CommandIdentity},
+		{"baseline_identity", p.BaselineIdentity, asked.BaselineIdentity},
 		{"obligation_id", p.ObligationID, asked.ObligationID},
 	} {
 		if f.held != f.want {

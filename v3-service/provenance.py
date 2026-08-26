@@ -76,14 +76,16 @@ _MAX_AUTHORIZED_STRENGTH = {
     SOURCE_PROXY_OWNED_VALIDATION: contract.SYNTAX,
 }
 
-# Identities that must be present and must match exactly. command_identity is
-# handled separately: a syntax obligation runs no command, so absence is a
-# real answer -- but two bindings must still agree on it.
+# Identities that must be present and must match exactly. command_identity and
+# baseline_identity are handled separately: a syntax obligation runs no
+# command, and a candidate that replaces nothing has no baseline, so absence is
+# a real answer for both -- but two bindings must still agree on them.
 _REQUIRED_IDENTITY = (
     "request_id", "invocation_id", "candidate_instance_id", "candidate_hash",
     "workspace_state_hash", "obligation_id",
 )
-_BOUND_FIELDS = _REQUIRED_IDENTITY + ("workspace_generation", "command_identity")
+_BOUND_FIELDS = _REQUIRED_IDENTITY + ("workspace_generation", "command_identity",
+                                      "baseline_identity")
 
 
 class ProvenanceError(ValueError):
@@ -95,7 +97,8 @@ def binding(*, request_id: str, invocation_id: str, candidate_instance_id: str,
             candidate_hash: str, workspace_generation: int,
             workspace_state_hash: str, obligation_id: str,
             required_strength: str, source: str, observed_strength: str,
-            command_identity: Optional[str] = None) -> Dict[str, Any]:
+            command_identity: Optional[str] = None,
+            baseline_identity: Optional[str] = None) -> Dict[str, Any]:
     """One piece of evidence, with everything needed to say what it is about.
 
     Every authority-critical value is checked here rather than at use: an
@@ -125,12 +128,14 @@ def binding(*, request_id: str, invocation_id: str, candidate_instance_id: str,
         raise ProvenanceError(
             f"workspace_generation must be a non-negative integer, got "
             f"{workspace_generation!r}")
-    if command_identity is not None and (
-            not isinstance(command_identity, str) or not command_identity.strip()):
-        raise ProvenanceError("command_identity must be absent or a non-empty string")
+    for name, value in (("command_identity", command_identity),
+                        ("baseline_identity", baseline_identity)):
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise ProvenanceError(f"{name} must be absent or a non-empty string")
     out = dict(values)
     out["workspace_generation"] = workspace_generation
     out["command_identity"] = command_identity
+    out["baseline_identity"] = baseline_identity
     out["required_strength"] = required_strength
     out["observed_strength"] = observed_strength
     out["source"] = source
