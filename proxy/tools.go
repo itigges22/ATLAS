@@ -1738,6 +1738,13 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	//   llm_start   — V3 is starting an LLM call (candidate gen, scoring…)
 	//   llm_end     — V3's LLM call finished (with token/timing summary)
 	//   <other>     — pipeline stage marker (probe, plansearch, sandbox…)
+	// THE production call path for invocation feasibility. It asks, before a
+	// single candidate is generated, whether this task could close at all --
+	// the question the sealed Stage-A run answered 103 times, once per
+	// candidate, after generating each. Observe-only: generation proceeds
+	// exactly as it did at e8fefe8 whatever this concludes.
+	observeInvocationFeasibility(ctx)
+
 	currentV3Stage := ""
 	v3Result, err := callV3GenerateStreaming(ctx.Ctx, ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
 		// Token deltas: forward to the TUI on a separate SSE event so

@@ -3821,6 +3821,8 @@ const (
 	shadowSchemaVersionEvidence = 1
 	// One observe-only authorization decision.
 	shadowSchemaVersionAuthorization = 1
+	// One observe-only invocation feasibility answer.
+	shadowSchemaVersionFeasibility = 1
 )
 
 // canonicalSource keeps an unknown decision source out of the record. The

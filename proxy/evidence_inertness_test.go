@@ -54,10 +54,14 @@ func TestEveryProductionConsumerOfProvenanceIsEnumerated(t *testing.T) {
 		// verdict nothing consults. Its own inertness is pinned separately.
 		"authorization_decision.go:decideAuthorization":           true,
 		"authorization_decision.go:observeCandidateAuthorization": true,
-		// The one site that computes the shadow decision beside the live one.
+		// The one site that computes the shadow decision beside the live one,
+		// and the one that asks the feasibility question before generation.
 		"tools.go:writeFileWithV3": true,
+		// The feasibility owner reads only its own closed input set.
+		"feasibility_decision.go:observeInvocationFeasibility": true,
 	}
-	for _, fn := range provenanceReaders {
+	for _, fn := range append(append([]string{}, provenanceReaders...),
+		"decideInvocationFeasibility", "observeInvocationFeasibility") {
 		for site := range callSites(proxyFiles(t), fn) {
 			if allowed[site] {
 				continue
