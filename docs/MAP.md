@@ -50,6 +50,8 @@ vulkan / cpu / macos overlays), `atlas.conf.example` (K3s), `pyproject.toml`
 | [RELEASE.md](RELEASE.md) | Release contract: capability status, service contracts, and verification levels |
 | [PLAN_MODE.md](PLAN_MODE.md) | Plan mode: per-turn pre-flight planning and adherence constants |
 | [PROTOCOL.md](PROTOCOL.md) | Typed event envelope contract shared by proxy, v3-service, and clients |
+| [EVIDENCE_WIRE.md](EVIDENCE_WIRE.md) | Versioned evidence envelope between v3-service and the proxy, and the delivery rule |
+| [CANDIDATE_AUTHORIZATION.md](CANDIDATE_AUTHORIZATION.md) | Typed obligations, evidence provenance, candidate staging, and the observe-only authorization and feasibility decisions |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Common issues and solutions |
 | [SOURCES.md](SOURCES.md) | Research papers bucketed by status relative to the current release |
 | [STORY.md](STORY.md) | Project background |

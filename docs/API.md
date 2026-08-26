@@ -953,6 +953,7 @@ Run a shell command against the bind-mounted workspace. The proxy's `run_command
 | `timeout` | int | 30 | Max execution time in seconds. Capped at `MAX_EXECUTION_TIME` (60s in-code default; the Compose stack sets it to 300 via `ATLAS_SANDBOX_MAX_EXECUTION_TIME`, matching the proxy's `run_command` cap). |
 | `env` | object | null | Extra env vars merged on top of the container's environment. |
 | `files` | object | null | Optional map of `relative-path → content`. When present, `/shell` copies a bounded snapshot of the workspace into `/tmp`, overlays these files, runs the command there, then deletes the snapshot. Used by V3 build verification to test a candidate without writing it into the real bind-mounted project. |
+| `observe_paths` | array | null | Optional list of workspace-relative paths to hash before and after the command. When present, the response carries an `observation`. Opt-in: existing callers pay nothing. An empty list still reports the workspace digest. |
 
 **Response:**
 ```json
@@ -961,11 +962,40 @@ Run a shell command against the bind-mounted workspace. The proxy's `run_command
   "stdout": "Hello World\n",
   "stderr": "",
   "exit_code": 0,
-  "elapsed_ms": 78
+  "elapsed_ms": 78,
+  "timed_out": false
 }
 ```
 
-`success` is `exit_code == 0`. Stdout is truncated to its last 4000 chars and stderr to its last 2000 server-side; the proxy's `run_command` bridge applies its own caps (stdout 8000 / stderr 4000) on top. State is **not** persistent between calls — each call is its own subprocess. To preserve state (e.g. an installed pip package) chain commands with `&&` in a single call, or rely on a project venv that survives across calls because it lives on the bind-mounted workspace.
+`success` is `exit_code == 0`. `timed_out` states the timeout structurally so a
+caller does not have to recognise it from prose.
+
+**Observation** (present only when `observe_paths` was sent):
+
+```json
+{
+  "observation": {
+    "target_before": {"solve.py": "e3b0c442…"},
+    "target_after":  {"solve.py": "e3b0c442…"},
+    "workspace_before": "9f86d081…",
+    "workspace_after":  "9f86d081…",
+    "workspace_files": 42,
+    "digest_truncated": false
+  }
+}
+```
+
+The snapshot is deleted before the response returns, so nothing outside the
+executor can look at it afterwards — this is the only way a caller can learn
+whether a command changed what it was testing. It reports **facts and no
+conclusions**: an absent path is `""` rather than omitted, and
+`digest_truncated` is `true` when the tree exceeded
+`ATLAS_SHELL_OBSERVE_MAX_FILES` (5000) rather than a partial digest being
+passed off as a complete one. Whether any observed change was *permitted* is
+the caller's question; the executor has no way to know.
+
+The proxy uses this for candidate staging — see
+[CANDIDATE_AUTHORIZATION.md](CANDIDATE_AUTHORIZATION.md). Stdout is truncated to its last 4000 chars and stderr to its last 2000 server-side; the proxy's `run_command` bridge applies its own caps (stdout 8000 / stderr 4000) on top. State is **not** persistent between calls — each call is its own subprocess. To preserve state (e.g. an installed pip package) chain commands with `&&` in a single call, or rely on a project venv that survives across calls because it lives on the bind-mounted workspace.
 
 The proxy's destructive-verb gate (`validateShellCommand`) blocks catastrophic commands — fork bombs, `rm -rf /`-class whole-project wipes, `find … -delete` / `-exec rm` from a search root, `dd`/`mkfs`/`wipefs` against block devices — and unwraps one `bash -c "…"` / `eval "…"` layer so the inner command is checked too, *before* the call ever reaches `/shell`. Ordinary `mv`, `cp`, and targeted `rm` of specific files are allowed. This endpoint is the executor, not the gate.
 

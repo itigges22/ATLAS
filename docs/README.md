@@ -46,6 +46,11 @@ map of the repository itself, see [MAP.md](MAP.md).
   v3-service, geometric-lens, sandbox, llama-server).
 - [PROTOCOL.md](PROTOCOL.md) — the typed SSE event envelope shared by
   proxy, v3-service, and clients.
+- [EVIDENCE_WIRE.md](EVIDENCE_WIRE.md) — the versioned evidence envelope
+  between v3-service and the proxy, and the rule that authorizes delivery.
+- [CANDIDATE_AUTHORIZATION.md](CANDIDATE_AUTHORIZATION.md) — typed
+  obligations, evidence provenance, candidate staging, and the observe-only
+  authorization and feasibility decisions.
 - [schemas/](schemas/) — machine-readable contracts:
   [proxy_openapi.yaml](schemas/proxy_openapi.yaml),
   [error_envelope.schema.json](schemas/error_envelope.schema.json),
