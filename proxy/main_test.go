@@ -2565,12 +2565,18 @@ var shadowGuardOwners = map[string]bool{
 	"shadowCaptureRoot":         true,
 	"emitShadowRequestSnapshot": true,
 	"observeActionDemand":       true,
-	"contractOutputs":           true,
-	"shadowCanonicalSet":        true,
-	"shadowHashes":              true,
-	"shadowCompareSets":         true,
-	"shadowHash":                true,
-	"main":                      true,
+	// The observe-only writers. Each WRITES one record to the capture and
+	// reads nothing back from it; that they reach no live decision is pinned
+	// separately, by name, in evidence_inertness_test.go.
+	"recordEvidenceObservation":   true,
+	"recordAuthorizationDecision": true,
+	"recordFeasibilityDecision":   true,
+	"contractOutputs":             true,
+	"shadowCanonicalSet":          true,
+	"shadowHashes":                true,
+	"shadowCompareSets":           true,
+	"shadowHash":                  true,
+	"main":                        true,
 }
 
 // funcIdentity renders a declaration the way shadowGuardOwners keys it.
