@@ -67,9 +67,16 @@ func (a deliveryAuthorization) mayDeliver() bool {
 // It runs at the final-byte observation, where the bytes are fixed and both
 // producers have just spoken for exactly those bytes. It decides, and on an
 // authorized decision it mints the grant that the delivery below will spend.
+// It is also told why anything it was handed came up short. The caller has
+// facts this side cannot re-derive without asking again: the structural gate
+// said not_run because the sandbox was unreachable, a staged command was
+// refused, another timed out. Reporting all of that as "evidence missing" says
+// the candidate had nothing to show for itself, when in truth nothing was
+// checked -- and that is the wrong thing to go and fix.
 func authorizeCandidateDelivery(ctx *AgentContext, path, code string,
 	id candidateEvidenceIdentity, envelope *V3EvidenceEnvelope,
-	evidence []proxyEvidence, selectedCandidateID string) deliveryAuthorization {
+	evidence []proxyEvidence, selectedCandidateID string,
+	unmet map[string]AuthorizationReason, observed checkOutcome) deliveryAuthorization {
 	resolved := resolveAgentPath(ctx, path)
 	hash := contentSHA256(code)
 
@@ -89,6 +96,7 @@ func authorizeCandidateDelivery(ctx *AgentContext, path, code string,
 	// The one question that decides ownership, asked of the obligation owner
 	// rather than inferred from how many obligations came back.
 	declared := outputKnowledgeDeclared(ctx)
+	unmet = classifyStructuralUnmet(ctx, resolved, observed, unmet)
 	in := authorizationInput{
 		Obligations:             requestObligations(ctx),
 		TargetPath:              resolved,
@@ -97,6 +105,7 @@ func authorizeCandidateDelivery(ctx *AgentContext, path, code string,
 		Evidence:                evidence,
 		Envelope:                envelope,
 		BaselineWitnessCommand:  witness,
+		Unmet:                   unmet,
 		OutputKnowledgeDeclared: declared,
 	}
 	d := decideAuthorization(ctx, in)
@@ -357,4 +366,42 @@ func baselineObligationsSatisfied(obs []taskObligation, d AuthorizationDecision)
 		}
 	}
 	return true
+}
+
+// classifyStructuralUnmet adds the syntax obligation's own reason, when the
+// structural gate said something more specific than silence.
+//
+// not_run has two causes and they are not the same problem: the gate was
+// unreachable, or it was reachable and nobody asked. Both leave the obligation
+// unmet; only one is an outage.
+func classifyStructuralUnmet(ctx *AgentContext, resolved string,
+	observed checkOutcome, unmet map[string]AuthorizationReason) map[string]AuthorizationReason {
+	if ctx == nil || observed.Status == ValidationPassed {
+		return unmet
+	}
+	var why AuthorizationReason
+	switch {
+	case observed.ProducerUnavailable:
+		why = ReasonProducerUnavailable
+	case observed.Status == ValidationNotRun, observed.Status == ValidationUnknown:
+		why = ReasonProducerNotRun
+	case observed.Status == ValidationFailed:
+		// It ran and found against these bytes. That IS a fact about the
+		// candidate, and the only one in this set that is.
+		why = ReasonEvidenceExecutionFailed
+	default:
+		return unmet
+	}
+	for _, o := range authorizationPrerequisites(requestObligations(ctx)) {
+		if o.Kind != ObligationSyntacticValidity || o.Subject != resolved {
+			continue
+		}
+		if unmet == nil {
+			unmet = map[string]AuthorizationReason{}
+		}
+		if _, already := unmet[o.ID]; !already {
+			unmet[o.ID] = why
+		}
+	}
+	return unmet
 }

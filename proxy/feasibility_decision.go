@@ -81,7 +81,26 @@ type FeasibilityDecision struct {
 // invocation cannot gain authority retroactively, because the decision is made
 // once, before generation, from what exists at that moment.
 func producibleStrengths() map[string]string {
+	return producibleStrengthsWith(true)
+}
+
+// producibleStrengthsWith is the same inventory, told whether the sandbox that
+// runs both producers is actually reachable.
+//
+// A producer that is wired and unreachable can demonstrate nothing, and a
+// feasibility answer that ignored that would say a task could close while the
+// authorization it predicts is refusing every candidate for exactly that
+// reason. The two must agree about availability or they are answering about
+// different builds.
+//
+// Still observe-only: nothing reads the verdict.
+func producibleStrengthsWith(sandboxReachable bool) map[string]string {
 	out := map[string]string{}
+	if !sandboxReachable {
+		// Both producers run through the sandbox. With it down, neither can
+		// speak, and saying so is the whole point.
+		return out
+	}
 	if evidenceProducerStatus[ProvenanceProxyOwnedValidation] == evidenceProducerWired {
 		// The proxy's own gate: structural validity, at syntax.
 		out[ObligationSyntacticValidity] = "syntax"
@@ -249,13 +268,21 @@ func recordFeasibilityDecision(ctx *AgentContext, d FeasibilityDecision, targets
 // question before generation and records the answer.
 //
 // Generation proceeds regardless. Nothing reads what this returns.
+// sandboxConfigured reports whether a sandbox is even addressable. It probes
+// nothing: a feasibility answer must not make a network call of its own, and
+// the runtime outage is what the authorization decision reports truthfully
+// after the fact.
+func sandboxConfigured(ctx *AgentContext) bool {
+	return ctx != nil && strings.TrimSpace(ctx.SandboxURL) != ""
+}
+
 func observeInvocationFeasibility(ctx *AgentContext) FeasibilityDecision {
 	obs := requestObligations(ctx)
 	targets := authorizedTargets(obs)
 	d := decideInvocationFeasibility(feasibilityInput{
 		Obligations:       obs,
 		AuthorizedTargets: targets,
-		Producible:        producibleStrengths(),
+		Producible:        producibleStrengthsWith(sandboxConfigured(ctx)),
 	})
 	recordFeasibilityDecision(ctx, d, len(targets))
 	return d

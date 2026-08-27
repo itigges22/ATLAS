@@ -53,6 +53,28 @@ const (
 	// was owed and nothing spoke for it. Collapsing them would tell a caller
 	// its declared document was undeclared.
 	ReasonNoAuthorizationPrerequisite AuthorizationReason = "no_authorization_prerequisite"
+
+	// Why a prerequisite went unmet, when something is known about it.
+	//
+	// evidence_missing is the honest answer only when a producer WAS available
+	// and simply did not speak. Reporting it for a sandbox that was down says
+	// the candidate had nothing to show for itself, when in truth nothing was
+	// checked -- a different fact, and the one an operator needs.
+	//
+	// ReasonProducerUnavailable: the thing that produces this evidence could
+	// not be reached.
+	ReasonProducerUnavailable AuthorizationReason = "trusted_producer_unavailable"
+	// ReasonProducerNotRun: it was reachable and was not asked.
+	ReasonProducerNotRun AuthorizationReason = "trusted_producer_not_run"
+	// ReasonEvidenceExecutionFailed: it ran and what it observed does not
+	// support the candidate. This IS a fact about the candidate.
+	ReasonEvidenceExecutionFailed AuthorizationReason = "evidence_execution_failed"
+	// ReasonEvidenceRefused: a safety owner declined to run it.
+	ReasonEvidenceRefused AuthorizationReason = "evidence_safety_refused"
+	// ReasonEvidenceTimedOut: it did not finish inside its budget.
+	ReasonEvidenceTimedOut AuthorizationReason = "evidence_timed_out"
+	// ReasonEvidenceCancelled: the request ended before it could.
+	ReasonEvidenceCancelled AuthorizationReason = "evidence_cancelled"
 	// ReasonUnknown is never chosen deliberately. It is what a contradictory
 	// or unclassified state becomes, and it never authorizes.
 	ReasonUnknown AuthorizationReason = "unknown"
@@ -66,8 +88,15 @@ var authorizationReasons = map[AuthorizationReason]bool{
 	ReasonRequestOrInvocationMismatch: true, ReasonWorkspaceStale: true,
 	ReasonBaselineNotPreserved: true, ReasonCommandMismatch: true,
 	ReasonLegacyRecord: true, ReasonPostDeliverySettlementPending: true,
-	ReasonNoAuthorizationPrerequisite: true, ReasonUnknown: true,
+	ReasonNoAuthorizationPrerequisite: true, ReasonProducerUnavailable: true,
+	ReasonProducerNotRun: true, ReasonEvidenceExecutionFailed: true,
+	ReasonEvidenceRefused: true, ReasonEvidenceTimedOut: true,
+	ReasonEvidenceCancelled: true, ReasonUnknown: true,
 }
+
+// authorizingReasons are the ones that grant. Exactly one, and naming the set
+// is what stops a new member being added on the granting side by accident.
+var authorizingReasons = map[AuthorizationReason]bool{ReasonAuthorized: true}
 
 // AuthorizationDecision is one complete answer about one candidate.
 //
@@ -121,6 +150,10 @@ type authorizationInput struct {
 	// is "" for a syntax baseline, which has no command behind it, and for a
 	// target with no baseline at all.
 	BaselineWitnessCommand string
+	// Unmet explains, per obligation id, why a prerequisite could not be
+	// satisfied, when the caller observed something more specific than its
+	// absence. Closed vocabulary; identities only.
+	Unmet map[string]AuthorizationReason
 	// OutputKnowledgeDeclared is whether the client STATED what this request
 	// produces. It is presence-aware and is the only thing that decides
 	// whether this owns the answer.
@@ -335,6 +368,22 @@ func decideAuthorization(ctx *AgentContext, in authorizationInput) Authorization
 		d.Reason = ReasonEvidenceMissing
 		if firstRefusal != ReasonUnknown {
 			d.Reason = firstRefusal
+		}
+		// And when the caller knows WHY a prerequisite went unmet -- the
+		// producer was down, refused, timed out, or ran and found against the
+		// candidate -- that is the truthful answer. `evidence_missing` for a
+		// sandbox that was never reachable says the candidate had nothing to
+		// show for itself, when in truth nothing was checked.
+		//
+		// Sorted order, so the reported reason does not depend on map order.
+		if len(in.Unmet) > 0 {
+			for _, id := range d.Missing {
+				if why, known := in.Unmet[id]; known && authorizationReasons[why] &&
+					!authorizingReasons[why] {
+					d.Reason = why
+					break
+				}
+			}
 		}
 		// A baseline obligation left unmet is its own fact, and the more
 		// useful one to report.

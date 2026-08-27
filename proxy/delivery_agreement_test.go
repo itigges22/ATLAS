@@ -390,7 +390,8 @@ func TestARepairCandidateIsJudgedOnItsOwnBytes(t *testing.T) {
 		t.Error("a repair reused the first delivery's candidate identity")
 	}
 	a := authorizeCandidateDelivery(w.ctx, w.path, repaired, evID, nil,
-		[]proxyEvidence{ev}, "selected-repair")
+		[]proxyEvidence{ev}, "selected-repair", nil,
+		fallbackSyntaxOutcomeFor(w.ctx, w.path, repaired).aggregate())
 	if a.Grant != nil && a.Grant.CandidateHash != contentSHA256(repaired) {
 		t.Error("the repair's grant is about other bytes")
 	}

@@ -164,22 +164,27 @@ func observeDeliveredCandidateSyntax(ctx *AgentContext, path, code string,
 // Returns the evidence for the caller's own inspection in tests. Production
 // ignores the return value: records go to private telemetry and no delivery,
 // completion or generation decision reads them.
+// It also says WHY each declared command went unsatisfied. The reason matters
+// as much as the outcome: a command that could not run because the executor
+// was unreachable, one a safety owner declined, one that ran out of budget and
+// one that ran and failed are four different facts, and only the last is a
+// fact about the candidate.
 func observeCandidateVerification(ctx *AgentContext, path, code string,
-	id candidateEvidenceIdentity) ([]proxyEvidence, bool) {
+	id candidateEvidenceIdentity) ([]proxyEvidence, map[string]AuthorizationReason) {
 	if ctx == nil || ctx.TaskContract == nil {
-		return nil, false
+		return nil, nil
 	}
 	if strings.TrimSpace(id.InvocationID) == "" ||
 		strings.TrimSpace(id.CandidateInstanceID) == "" {
-		return nil, false
+		return nil, nil
 	}
 	obs := requestObligations(ctx)
 	if len(obs) == 0 {
-		return nil, false
+		return nil, nil
 	}
 	resolved := resolveAgentPath(ctx, path)
 	if !targetIsAuthorized(obs, resolved) {
-		return nil, false
+		return nil, nil
 	}
 
 	// The declared commands, from the proxy's own derivation of the validated
@@ -191,7 +196,7 @@ func observeCandidateVerification(ctx *AgentContext, path, code string,
 		}
 	}
 	if len(declared) == 0 {
-		return nil, false
+		return nil, nil
 	}
 
 	hash := contentSHA256(code)
@@ -223,17 +228,17 @@ func observeCandidateVerification(ctx *AgentContext, path, code string,
 	if ok, _ := req.validate(); !ok {
 		// A declared set the staging budget cannot hold whole. Nothing runs:
 		// a partial set is not a smaller obligation.
-		return nil, false
+		return nil, unmetForAll(declared, ReasonEvidenceTimedOut)
 	}
 
 	result, ok := stageCandidate(ctx, req)
 	if !ok {
-		return nil, false
+		return nil, unmetForAll(declared, ReasonProducerUnavailable)
 	}
 	if valid, _ := result.validateAgainst(req); !valid {
 		// The result contradicted the request it answers. Refusing here is
 		// what makes a malformed or forged result worth nothing.
-		return nil, false
+		return nil, unmetForAll(declared, ReasonEvidenceExecutionFailed)
 	}
 
 	byID := map[string]taskObligation{}
@@ -241,21 +246,62 @@ func observeCandidateVerification(ctx *AgentContext, path, code string,
 		byID[o.ID] = o
 	}
 	var out []proxyEvidence
+	unmet := map[string]AuthorizationReason{}
 	for _, r := range result.Commands {
 		o, known := byID[r.ObligationID]
 		if !known {
 			continue
 		}
+		if r.Outcome != stagingExitedZero || r.MutatedTarget || r.MutatedWorkspace {
+			unmet[o.ID] = stagingUnmetReason(r)
+		}
 		ev, ok := produceDeclaredVerificationEvidence(ctx, verificationEvidenceRequest{
 			Obligation: o, Result: r, Identity: result.Identity,
 		})
 		if !ok {
+			if _, already := unmet[o.ID]; !already {
+				unmet[o.ID] = ReasonEvidenceMissing
+			}
 			continue
 		}
 		recordEvidenceObservation(ctx, ev)
 		out = append(out, ev)
 	}
-	return out, len(out) > 0
+	return out, unmet
+}
+
+// stagingUnmetReason turns one staged outcome into the truthful reason its
+// obligation went unmet. The distinctions are the point: only exited_nonzero
+// and a mutation are facts about the candidate.
+func stagingUnmetReason(r stagingCommandResult) AuthorizationReason {
+	switch {
+	case r.MutatedTarget, r.MutatedWorkspace:
+		return ReasonEvidenceExecutionFailed
+	case r.Outcome == stagingUnavailable:
+		return ReasonProducerUnavailable
+	case r.Outcome == stagingRefused:
+		return ReasonEvidenceRefused
+	case r.Outcome == stagingTimedOut, r.Outcome == stagingBudgetExceeded:
+		return ReasonEvidenceTimedOut
+	case r.Outcome == stagingCancelled:
+		return ReasonEvidenceCancelled
+	case r.Outcome == stagingUnobservable:
+		return ReasonProducerNotRun
+	case r.Outcome == stagingExitedNonZero:
+		return ReasonEvidenceExecutionFailed
+	default:
+		return ReasonEvidenceMissing
+	}
+}
+
+// unmetForAll marks every declared obligation with one reason, for the cases
+// where nothing ran at all.
+func unmetForAll(declared []taskObligation, why AuthorizationReason) map[string]AuthorizationReason {
+	out := map[string]AuthorizationReason{}
+	for _, o := range declared {
+		out[o.ID] = why
+	}
+	return out
 }
 
 // recordEvidenceObservation writes one observation to the private shadow sink.

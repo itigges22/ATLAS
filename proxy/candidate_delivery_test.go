@@ -338,6 +338,9 @@ type routeWorld struct {
 	winner string
 	shell  *stubSandbox
 	gen    *int32
+	// shellGone makes the staging executor unreachable while the structural
+	// gate keeps answering, which is the shape of a partial outage.
+	shellGone *bool
 }
 
 const routeBaseline = "def solve(values):\n    total = 0\n    for v in values:\n        total += v\n    return total\n"
@@ -352,6 +355,7 @@ func newRouteWorld(t *testing.T, contract string, commands map[string]stubEffect
 		stub.script(cmd, effect)
 	}
 	var generateCalls int32
+	shellGone := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/v3/generate":
@@ -395,6 +399,18 @@ func newRouteWorld(t *testing.T, contract string, commands map[string]stubEffect
 		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
 			json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
 		case strings.HasSuffix(r.URL.Path, "/shell"):
+			if shellGone {
+				// The connection dies mid-request: a transport failure, not a
+				// refusal, which is what an executor that is not there looks
+				// like from here.
+				if hj, ok := w.(http.Hijacker); ok {
+					if conn, _, err := hj.Hijack(); err == nil {
+						conn.Close()
+						return
+					}
+				}
+				return
+			}
 			stub.srv.Config.Handler.ServeHTTP(w, r)
 		default:
 			http.Error(w, "unexpected "+r.URL.Path, http.StatusTeapot)
@@ -412,7 +428,7 @@ func newRouteWorld(t *testing.T, contract string, commands map[string]stubEffect
 		ctx.TaskContract = mustContract(t, dir, contract)
 	}
 	return &routeWorld{ctx: ctx, dir: dir, path: filepath.Join(dir, "solve.py"),
-		winner: routeWinner, shell: stub, gen: &generateCalls}
+		winner: routeWinner, shell: stub, gen: &generateCalls, shellGone: &shellGone}
 }
 
 // generateCalls is how many times the pipeline was actually asked for

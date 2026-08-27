@@ -458,6 +458,15 @@ var syntaxGateLanguages = map[string]syntaxLanguage{
 type checkOutcome struct {
 	Status ValidationStatus
 	Detail string
+	// ProducerUnavailable says the check could not run because the thing that
+	// runs it was not reachable, as distinct from not being attempted.
+	//
+	// Both are `not_run` and neither is a failure, but they are different
+	// facts about different problems: one says the service is down, the other
+	// says nobody asked. A caller that has to explain itself truthfully needs
+	// to tell them apart, and parsing Detail for prose would be both fragile
+	// and a way for that prose to reach somewhere it should not.
+	ProducerUnavailable bool
 }
 
 func (o checkOutcome) applicable() bool { return o.Status != ValidationNotApplicable }
@@ -502,7 +511,8 @@ func (f fallbackSyntaxOutcome) aggregate() checkOutcome {
 	}
 	for _, c := range checks {
 		if c.Status == ValidationNotRun {
-			return checkOutcome{Status: ValidationNotRun, Detail: c.Detail}
+			return checkOutcome{Status: ValidationNotRun, Detail: c.Detail,
+				ProducerUnavailable: c.ProducerUnavailable}
 		}
 	}
 	for _, c := range checks {
@@ -552,7 +562,7 @@ func sandboxSyntaxOutcome(ctx *AgentContext, path, content string) checkOutcome 
 	}
 	lang := meta.Language
 	if ctx == nil || ctx.SandboxURL == "" {
-		return checkOutcome{Status: ValidationNotRun, Detail: "no sandbox configured"}
+		return checkOutcome{Status: ValidationNotRun, Detail: "no sandbox configured", ProducerUnavailable: true}
 	}
 	body, err := json.Marshal(map[string]string{"code": content, "language": lang})
 	if err != nil {
@@ -569,18 +579,18 @@ func sandboxSyntaxOutcome(ctx *AgentContext, path, content string) checkOutcome 
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return checkOutcome{Status: ValidationNotRun, Detail: "sandbox unreachable"}
+		return checkOutcome{Status: ValidationNotRun, Detail: "sandbox unreachable", ProducerUnavailable: true}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return checkOutcome{Status: ValidationNotRun, Detail: "sandbox returned a non-200"}
+		return checkOutcome{Status: ValidationNotRun, Detail: "sandbox returned a non-200", ProducerUnavailable: true}
 	}
 	var out struct {
 		Valid  bool     `json:"valid"`
 		Errors []string `json:"errors"`
 	}
 	if json.NewDecoder(resp.Body).Decode(&out) != nil {
-		return checkOutcome{Status: ValidationNotRun, Detail: "sandbox response was undecodable"}
+		return checkOutcome{Status: ValidationNotRun, Detail: "sandbox response was undecodable", ProducerUnavailable: true}
 	}
 	if out.Valid {
 		return checkOutcome{Status: ValidationPassed}
@@ -680,7 +690,7 @@ func embeddedScriptOutcome(ctx *AgentContext, path, content, previous string) ch
 		return checkOutcome{Status: ValidationNotRun, Detail: "no agent context"}
 	}
 	if ctx.V3URL == "" {
-		return checkOutcome{Status: ValidationNotRun, Detail: "no embedded-script service configured"}
+		return checkOutcome{Status: ValidationNotRun, Detail: "no embedded-script service configured", ProducerUnavailable: true}
 	}
 	body, err := json.Marshal(map[string]string{
 		"path": path, "source": content, "previous": previous})

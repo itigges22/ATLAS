@@ -56,14 +56,20 @@ func (w *authWorld) decide(id candidateEvidenceIdentity, evidence ...proxyEviden
 func authorizeCandidateDeliveryDecision(ctx *AgentContext, path, code string,
 	id candidateEvidenceIdentity, envelope *V3EvidenceEnvelope,
 	evidence []proxyEvidence) AuthorizationDecision {
-	return authorizeCandidateDelivery(ctx, path, code, id, envelope, evidence, "selected").Decision
+	observed := fallbackSyntaxOutcomeFor(ctx, path, code).aggregate()
+	return authorizeCandidateDelivery(ctx, path, code, id, envelope,
+		evidence, "selected", nil, observed).Decision
 }
 
 // authorize runs the LIVE owner, so the matrix describes what production
 // actually concludes rather than a parallel computation that could drift.
 func (w *authWorld) authorize(id candidateEvidenceIdentity,
 	envelope *V3EvidenceEnvelope, evidence ...proxyEvidence) deliveryAuthorization {
-	return authorizeCandidateDelivery(w.ctx, w.path, w.code, id, envelope, evidence, "selected")
+	// The real observation, so a row that refuses is refused for the reason
+	// production would give rather than for a zero value.
+	observed := fallbackSyntaxOutcomeFor(w.ctx, w.path, w.code).aggregate()
+	return authorizeCandidateDelivery(w.ctx, w.path, w.code, id, envelope,
+		evidence, "selected", nil, observed)
 }
 
 // stagedWorld is a world whose client declared commands, with an executor that

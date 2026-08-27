@@ -2019,6 +2019,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// `authorizedV3` stands exactly as it did.
 	var observed []proxyEvidence
 	var evID candidateEvidenceIdentity
+	var unmet map[string]AuthorizationReason
 	if ev, id, seen := observeDeliveredCandidateSyntax(ctx, path, code, deliveredCheck); seen {
 		observed, evID = []proxyEvidence{ev}, id
 		// THE production call path for the client-declared verification
@@ -2027,9 +2028,8 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		// behavioral question has an answer rather than a blocker. It runs at
 		// all only for a request that declared commands, and the staging
 		// budget bounds what it may spend on one.
-		if behavioral, ran := observeCandidateVerification(ctx, path, code, evID); ran {
-			observed = append(observed, behavioral...)
-		}
+		behavioral, why := observeCandidateVerification(ctx, path, code, evID)
+		observed, unmet = append(observed, behavioral...), why
 	}
 	selected := ""
 	if v3Result != nil && v3Result.Evidence != nil {
@@ -2042,7 +2042,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// candidate landing on a structured request because nothing could speak
 	// for it. The owner handles an empty evidence set: it refuses.
 	delivery := authorizeCandidateDelivery(ctx, path, code, evID,
-		v3Result.Evidence, observed, selected)
+		v3Result.Evidence, observed, selected, unmet, deliveredCheck)
 	// A typed refusal withdraws the candidate. The caller's own content is the
 	// alternative, and it is checked before being restored -- the same rule
 	// every other gate on this path follows.

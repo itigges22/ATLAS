@@ -74,7 +74,7 @@ func TestTheObserversRunAndRecordAttributably(t *testing.T) {
 		outcome := fallbackSyntaxOutcomeFor(w.ctx, w.path, w.code).aggregate()
 		if ev, id, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, w.code, outcome); ok {
 			authorizeCandidateDelivery(w.ctx, w.path, w.code, id, nil,
-				[]proxyEvidence{ev}, "selected")
+				[]proxyEvidence{ev}, "selected", nil, checkOutcome{Status: ValidationPassed})
 		} else {
 			t.Error("the producer did not run on a declared code output")
 		}
@@ -221,7 +221,7 @@ func TestTheObserversAreSilentWithNoSink(t *testing.T) {
 		t.Fatal("the producer went silent with the sink off")
 	}
 	a := authorizeCandidateDelivery(w.ctx, w.path, w.code, id, nil,
-		[]proxyEvidence{ev}, "selected")
+		[]proxyEvidence{ev}, "selected", nil, checkOutcome{Status: ValidationPassed})
 	if !a.Decision.Authorized {
 		t.Errorf("the decision changed with the sink off: %q", a.Decision.Reason)
 	}
