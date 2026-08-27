@@ -2011,6 +2011,13 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// recomputed, so no second sandbox call and no second opinion. What it
 	// produces goes to private telemetry and reaches no decision -- the
 	// authorization immediately below is the same one that ran at e8fefe8.
+	// THE live authorization owner. For a request that declared structured
+	// obligations the typed answer is binding: no candidate lands without a
+	// one-time grant, and a refusal keeps the caller's own content rather than
+	// falling through to a candidate the envelope happened to like. For a
+	// request that declared nothing there is no typed answer to give, so
+	// `authorizedV3` stands exactly as it did.
+	var delivery deliveryAuthorization
 	if ev, evID, seen := observeDeliveredCandidateSyntax(ctx, path, code, deliveredCheck); seen {
 		observed := []proxyEvidence{ev}
 		// THE production call path for the client-declared verification
@@ -2022,12 +2029,29 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		if behavioral, ran := observeCandidateVerification(ctx, path, code, evID); ran {
 			observed = append(observed, behavioral...)
 		}
-		// The typed answer to "may these bytes land", computed beside the live
-		// one and consulted by nothing. `authorizedV3` above already decided;
-		// this records what the obligation-and-evidence machinery WOULD have
-		// concluded, which is the only way to learn whether the two agree
-		// before either is allowed to depend on the other.
-		observeCandidateAuthorization(ctx, path, code, evID, v3Result.Evidence, observed)
+		selected := ""
+		if v3Result != nil && v3Result.Evidence != nil {
+			selected = v3Result.Evidence.Identity.CandidateContentHash
+		}
+		delivery = authorizeCandidateDelivery(ctx, path, code, evID,
+			v3Result.Evidence, observed, selected)
+	}
+	// A typed refusal withdraws the candidate. The caller's own content is the
+	// alternative, and it is checked before being restored -- the same rule
+	// every other gate on this path follows.
+	if authorizedV3 && !delivery.mayDeliver() {
+		baseCheck := fallbackSyntaxOutcomeFor(ctx, path, baselineContent).aggregate()
+		if baseCheck.Status == ValidationFailed {
+			return &ToolResult{Success: false,
+				Error:            fallbackSyntaxRejection(path, baselineContent, baseCheck.Detail),
+				MutationStatus:   MutationRefused,
+				ValidationKind:   ValidationKindSyntax,
+				ValidationStatus: ValidationFailed,
+				ValidationDetail: baseCheck.Detail}, nil
+		}
+		code, authorizedV3, fellBack = revokeV3(
+			baselineContent, "the authorization refused it ("+delivery.Refusal+")", path)
+		deliveredCheck, checkedFor = baseCheck, code
 	}
 	if deliveredCheck.Status == ValidationFailed {
 		if !authorizedV3 {
@@ -2236,6 +2260,34 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		})
 	}
 
+	// THE consumer of the authorization grant, and the only mutation on this
+	// route that a typed request can reach. Everything it needs is re-read
+	// from disk inside it: the grant froze a moment and this is a later one.
+	if delivery.Typed {
+		result, outcome, err := deliverAuthorizedCandidate(ctx, path, code, delivery.Grant, final)
+		if err != nil {
+			if result == nil {
+				// Refused before any byte moved. Nothing mutated, nothing
+				// recorded, and the caller is told which check said no.
+				return &ToolResult{Success: false,
+					Error:            deliveryRefusalMessage(outcome.Reason),
+					MutationStatus:   MutationRefused,
+					ValidationKind:   final.kind(),
+					ValidationStatus: final.Status,
+					ValidationDetail: final.Detail}, nil
+			}
+			return result, err
+		}
+		if !outcome.Delivered {
+			// The write happened and the result is not what was authorized.
+			// No V3 metadata is attached: reporting a verified delivery over
+			// bytes that did not settle is the same false claim in a
+			// different field.
+			return result, nil
+		}
+		return v3DeliveredResult(ctx, result, v3Result, code), nil
+	}
+
 	result, err := writeFileRecorded(path, code, ctx)
 	if err != nil {
 		// The candidate never became an artifact, so no provenance is attached
@@ -2249,7 +2301,17 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// this; validation says only what was checked here.
 	overlayValidation(result, final)
 
-	// Enrich result with V3 metadata
+	return v3DeliveredResult(ctx, result, v3Result, code), nil
+}
+
+// v3DeliveredResult attaches the pipeline's metadata to a delivery that
+// actually happened. One owner for both routes, so the typed and untyped
+// deliveries are provably identical in what they report.
+func v3DeliveredResult(ctx *AgentContext, result *ToolResult,
+	v3Result *V3GenerateResponse, code string) *ToolResult {
+	if result == nil || v3Result == nil {
+		return result
+	}
 	out := WriteFileOutput{
 		BytesWritten:         len(code),
 		V3Used:               true,
@@ -2265,8 +2327,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	result.WinningScore = v3Result.WinningScore
 	result.PhaseSolved = v3Result.PhaseSolved
 	result.VerificationEvidence = v3Result.VerificationEvidence
-
-	return result, nil
+	return result
 }
 
 // ---------------------------------------------------------------------------

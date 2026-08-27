@@ -6562,6 +6562,16 @@ func emitTerminal(ctx *AgentContext, st *runState, status TerminalStatus, reason
 		status, reason = TerminalIncomplete, "unclassified_producer"
 	}
 	ctx.terminalOnce.Do(func() {
+		// Nothing may be delivered from here on. An authorization that
+		// outlived the turn it was granted in would let a candidate land
+		// against a workspace whose story has already been told.
+		//
+		// Here rather than in finalizeCompletion because that function is
+		// also called on the path that BOUNCES for debt recovery and keeps
+		// running: retiring there would leave the recovery turn unable to
+		// deliver the thing it was bounced to write. This is the emission
+		// itself, and it happens once.
+		retireAuthorizationGrants(ctx, grantTerminal)
 		ctx.TerminalStatus = status
 		ctx.TerminalReason = reason
 		if st != nil && st.pendingToolCall != "" {

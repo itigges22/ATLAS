@@ -639,8 +639,14 @@ func TestWriteRoutesDoNotRecomputeTheirObservation(t *testing.T) {
 		}
 		return true
 	})
-	if structured != 15 {
-		t.Errorf("fallbackSyntaxOutcomeFor call sites = %d, want 15; a new one on a "+
+	// 16 since the typed authorization went live: a typed refusal restores
+	// the caller's own baseline, and the baseline is observed before it is
+	// restored -- the same rule the structural and embedded-script
+	// revocations already follow. Every site is beside the bytes it
+	// describes; a site that re-derived an observation a route already holds
+	// would be the recomputation this counts against.
+	if structured != 16 {
+		t.Errorf("fallbackSyntaxOutcomeFor call sites = %d, want 16; a new one on a "+
 			"route that already holds an observation is a recomputation", structured)
 	}
 	// The migration is complete: no route calls the legacy wrapper any more.

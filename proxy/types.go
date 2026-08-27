@@ -275,6 +275,17 @@ type ToolResult struct {
 	ValidationStatus ValidationStatus `json:"validation_status,omitempty"`
 	ValidationDetail string           `json:"validation_detail,omitempty"`
 
+	// AuthorizedDeliveryHash names the candidate this call actually
+	// delivered, and is set ONLY after the write returned and a re-read of
+	// the target hashed to exactly the bytes a one-time authorization grant
+	// was spent on.
+	//
+	// It is not the pool record's `delivered` field, which is the service
+	// describing what it selected before anything reached this filesystem.
+	// That one is history; this one is a statement about disk, made by the
+	// side that wrote it.
+	AuthorizedDeliveryHash string `json:"authorized_delivery_hash,omitempty"`
+
 	// V3 metadata (populated when V3 pipeline was used)
 	V3Used               bool                     `json:"v3_used,omitempty"`
 	CandidatesTested     int                      `json:"candidates_tested,omitempty"`

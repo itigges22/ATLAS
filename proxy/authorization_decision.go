@@ -83,8 +83,10 @@ type AuthorizationDecision struct {
 	// delivers still owes it afterwards.
 	SettlementRequired bool
 
-	// InfluencesLiveDecision is false on this build and is written into the
-	// record. It is a fact about the wiring, not an intention.
+	// InfluencesLiveDecision says whether this answer decided anything. It is
+	// true for a request that declared structured obligations, because there
+	// the typed path owns delivery, and false for contractless traffic, where
+	// it has nothing to be about.
 	InfluencesLiveDecision bool
 }
 
@@ -166,7 +168,13 @@ func baselinePreservedBy(o taskObligation, witnessCommand string,
 // strength. A refusal names the first thing that was wrong, so a reader learns
 // what to fix rather than that something was.
 func decideAuthorization(ctx *AgentContext, in authorizationInput) AuthorizationDecision {
-	d := AuthorizationDecision{Reason: ReasonUnknown, InfluencesLiveDecision: false}
+	// Whether this answer decides anything is a property of the REQUEST, not
+	// of the answer: a request that declared structured obligations is one
+	// this owns, and a contractless one is not.
+	d := AuthorizationDecision{
+		Reason:                 ReasonUnknown,
+		InfluencesLiveDecision: len(in.Obligations) > 0,
+	}
 
 	// Nothing structured was stated, so there is nothing to authorize on. This
 	// is not a refusal of the request -- legacy delivery is unchanged and
@@ -393,61 +401,24 @@ func recordAuthorizationDecision(ctx *AgentContext, in authorizationInput,
 		reason = ReasonUnknown
 	}
 	sink.submit(map[string]interface{}{
-		"schema_version":           shadowSchemaVersionAuthorization,
-		"record_kind":              "shadow_authorization_decision",
-		"request_id":               in.Identity.RequestID,
-		"invocation_id":            in.Identity.InvocationID,
-		"candidate_instance_id":    in.Identity.CandidateInstanceID,
-		"candidate_hash":           in.CandidateHash,
-		"authorized":               d.Authorized,
-		"reason":                   string(reason),
-		"obligations_satisfied":    d.Satisfied,
-		"obligations_missing":      d.Missing,
-		"evidence_consumed":        d.EvidenceConsumed,
-		"settlement_required":      d.SettlementRequired,
-		"influences_live_decision": false,
+		"schema_version":        shadowSchemaVersionAuthorization,
+		"record_kind":           "candidate_authorization_decision",
+		"request_id":            in.Identity.RequestID,
+		"invocation_id":         in.Identity.InvocationID,
+		"candidate_instance_id": in.Identity.CandidateInstanceID,
+		"candidate_hash":        in.CandidateHash,
+		"authorized":            d.Authorized,
+		"reason":                string(reason),
+		"obligations_satisfied": d.Satisfied,
+		"obligations_missing":   d.Missing,
+		"evidence_consumed":     d.EvidenceConsumed,
+		"settlement_required":   d.SettlementRequired,
+		// True, and a fact about the wiring rather than an intention: for a
+		// request that declared structured obligations this decision is what
+		// decides whether the candidate lands. It said false while nothing
+		// read it, and leaving that in place once something did would have
+		// made the record a lie about its own weight.
+		"influences_live_decision": len(in.Obligations) > 0,
 		"build_version":            APIVersion,
 	})
-}
-
-// observeCandidateAuthorization is the one production call path: it assembles
-// the input from what the delivery site already has and records what the typed
-// answer would have been.
-//
-// The live authorization ran above it and is unaffected. This is a second,
-// silent opinion.
-func observeCandidateAuthorization(ctx *AgentContext, path, code string,
-	id candidateEvidenceIdentity, envelope *V3EvidenceEnvelope,
-	evidence []proxyEvidence) AuthorizationDecision {
-	resolved := resolveAgentPath(ctx, path)
-	hash := contentSHA256(code)
-
-	// The identity evidence must bind to is built HERE, from the live request
-	// and the workspace as it stands right now -- never copied off the record
-	// being checked. A decision that read the asked-for identity out of the
-	// evidence would be asking every record whether it matched itself, and
-	// every mismatch reason would be unreachable.
-	generation, stateHash := workspaceIdentity(ctx)
-	asked := V3EvidenceProvenance{
-		RequestID:           requestIDOf(ctx),
-		InvocationID:        id.InvocationID,
-		CandidateInstanceID: id.CandidateInstanceID,
-		CandidateHash:       hash,
-		WorkspaceGeneration: generation,
-		WorkspaceStateHash:  stateHash,
-		BaselineIdentity:    baselineIdentityFor(ctx, resolved),
-	}
-	_, witness := baselineWitness(ctx, resolved)
-	in := authorizationInput{
-		Obligations:            requestObligations(ctx),
-		TargetPath:             resolved,
-		CandidateHash:          hash,
-		Identity:               asked,
-		Evidence:               evidence,
-		Envelope:               envelope,
-		BaselineWitnessCommand: witness,
-	}
-	d := decideAuthorization(ctx, in)
-	recordAuthorizationDecision(ctx, in, d)
-	return d
 }

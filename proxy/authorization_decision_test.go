@@ -48,12 +48,32 @@ func (w *authWorld) stage(id candidateEvidenceIdentity) []proxyEvidence {
 // exactly as production does: the asked-for identity is the one the producer
 // minted, and the evidence has to match it.
 func (w *authWorld) decide(id candidateEvidenceIdentity, evidence ...proxyEvidence) AuthorizationDecision {
-	return observeCandidateAuthorization(w.ctx, w.path, w.code, id, nil, evidence)
+	return w.authorize(id, nil, evidence...).Decision
+}
+
+// authorizeCandidateDeliveryDecision is the live owner's decision, for rows
+// that build their own identity rather than using the world's.
+func authorizeCandidateDeliveryDecision(ctx *AgentContext, path, code string,
+	id candidateEvidenceIdentity, envelope *V3EvidenceEnvelope,
+	evidence []proxyEvidence) AuthorizationDecision {
+	return authorizeCandidateDelivery(ctx, path, code, id, envelope, evidence, "selected").Decision
+}
+
+// authorize runs the LIVE owner, so the matrix describes what production
+// actually concludes rather than a parallel computation that could drift.
+func (w *authWorld) authorize(id candidateEvidenceIdentity,
+	envelope *V3EvidenceEnvelope, evidence ...proxyEvidence) deliveryAuthorization {
+	return authorizeCandidateDelivery(w.ctx, w.path, w.code, id, envelope, evidence, "selected")
 }
 
 // stagedWorld is a world whose client declared commands, with an executor that
 // answers them.
 func stagedWorld(t *testing.T, commands ...string) *authWorld {
+	t.Helper()
+	return stagedWorldWithCode(t, authPy, commands...)
+}
+
+func stagedWorldWithCode(t *testing.T, code string, commands ...string) *authWorld {
 	t.Helper()
 	quoted := make([]string, 0, len(commands))
 	for _, c := range commands {
@@ -64,7 +84,7 @@ func stagedWorld(t *testing.T, commands ...string) *authWorld {
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
 			`"verification_knowledge":"declared","verification":[`+
 			strings.Join(quoted, ",")+`]}`,
-		"solve.py", authPy, true)
+		"solve.py", code, true)
 }
 
 func (w *authWorld) mustObserve(t *testing.T) (proxyEvidence, candidateEvidenceIdentity) {
@@ -88,8 +108,45 @@ func expectReason(t *testing.T, row string, d AuthorizationDecision,
 	if !authorizationReasons[d.Reason] {
 		t.Errorf("%s: %q is outside the closed vocabulary", row, d.Reason)
 	}
-	if d.InfluencesLiveDecision {
-		t.Errorf("%s: the decision claims to influence a live one", row)
+}
+
+// TestTheDecisionSaysTruthfullyWhetherItDecides pins what
+// influences_live_decision now means. It said false while nothing read the
+// answer; leaving that in place once the typed path started owning delivery
+// would have made every record a lie about its own weight.
+//
+// It is a property of the REQUEST, not of the outcome: a request that declared
+// structured obligations is one this owns however the decision comes out, and
+// a request that declared none is one it has nothing to say about.
+func TestTheDecisionSaysTruthfullyWhetherItDecides(t *testing.T) {
+	for _, c := range []struct {
+		name, contract string
+		influences     bool
+	}{
+		{"declared outputs", `{"task_mode":"work","output_knowledge":"declared",` +
+			`"expected_outputs":["solve.py"]}`, true},
+		{"declared outputs and commands", `{"task_mode":"work","output_knowledge":"declared",` +
+			`"expected_outputs":["solve.py"],"verification_knowledge":"declared",` +
+			`"verification":["pytest -q"]}`, true},
+		{"task mode only", `{"task_mode":"work"}`, false},
+		{"declared nothing", `{"task_mode":"work","output_knowledge":"unspecified"}`, false},
+		{"no contract at all", "", false},
+	} {
+		w := newAuthWorld(t, c.contract, "solve.py", authPy, true)
+		ev, evID, _ := w.observe(t)
+		a := w.authorize(evID, nil, ev)
+		if a.Decision.InfluencesLiveDecision != c.influences {
+			t.Errorf("%s: influences_live_decision=%v, want %v",
+				c.name, a.Decision.InfluencesLiveDecision, c.influences)
+		}
+		// And the typed route is exactly the set that influences: a request
+		// this does not own must be left to the decision that always made it.
+		if a.Typed != c.influences {
+			t.Errorf("%s: typed=%v, want %v", c.name, a.Typed, c.influences)
+		}
+		if !a.Typed && !a.mayDeliver() {
+			t.Errorf("%s: an unowned request was refused by the typed path", c.name)
+		}
 	}
 }
 
@@ -595,7 +652,7 @@ func TestAuthorizationMatrix(t *testing.T) {
 	t.Run("legacy envelope", func(t *testing.T) {
 		w := newAuthWorld(t, declaredPy, "solve.py", authPy, true)
 		ev, evID, _ := w.observe(t)
-		d := observeCandidateAuthorization(w.ctx, w.path, w.code, evID,
+		d := authorizeCandidateDeliveryDecision(w.ctx, w.path, w.code, evID,
 			&V3EvidenceEnvelope{}, []proxyEvidence{ev})
 		expectReason(t, "legacy envelope", d, false, ReasonLegacyRecord)
 	})
@@ -603,8 +660,7 @@ func TestAuthorizationMatrix(t *testing.T) {
 	t.Run("undeclared target", func(t *testing.T) {
 		w := newAuthWorld(t, declaredPy, "solve.py", authPy, true)
 		ev, evID, _ := w.observe(t)
-		d := observeCandidateAuthorization(w.ctx,
-			resolveAgentPath(w.ctx, "other.py"), w.code, evID, nil, []proxyEvidence{ev})
+		d := authorizeCandidateDeliveryDecision(w.ctx, resolveAgentPath(w.ctx, "other.py"), w.code, evID, nil, []proxyEvidence{ev})
 		expectReason(t, "undeclared target", d, false, ReasonTargetNotDeclared)
 	})
 
@@ -645,7 +701,7 @@ func TestAuthorizationMatrix(t *testing.T) {
 		d := w.decide(secondID, second)
 		expectReason(t, "repair candidate", d, true, ReasonAuthorized)
 		// The first candidate's evidence cannot stand in for it.
-		stale := observeCandidateAuthorization(w.ctx, w.path, w.code, secondID, nil,
+		stale := authorizeCandidateDeliveryDecision(w.ctx, w.path, w.code, secondID, nil,
 			[]proxyEvidence{first, second})
 		if !stale.Authorized {
 			t.Errorf("the current candidate's own evidence stopped working: %q", stale.Reason)
@@ -704,7 +760,7 @@ func TestAuthorizationMatrix(t *testing.T) {
 			}
 		})
 		t.Run("unknown wire version", func(t *testing.T) {
-			d := observeCandidateAuthorization(w.ctx, w.path, w.code, evID,
+			d := authorizeCandidateDeliveryDecision(w.ctx, w.path, w.code, evID,
 				&V3EvidenceEnvelope{WireVersion: "99.0.0"}, []proxyEvidence{ev})
 			expectReason(t, "unknown wire version", d, false, ReasonLegacyRecord)
 		})
@@ -808,11 +864,22 @@ func TestTheDecisionReachesNoLiveWrite(t *testing.T) {
 		}
 		return true
 	})
+	// The record's own claim about its weight must be DERIVED, not asserted.
+	// It said false while nothing read the answer; hardcoding either value now
+	// would make it a statement about intent rather than about the wiring.
 	src, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(src), `"influences_live_decision": false`) {
-		t.Error("the record does not declare itself inert")
+	body := string(src)
+	for _, hardcoded := range []string{
+		`"influences_live_decision": false`, `"influences_live_decision": true`,
+	} {
+		if strings.Contains(body, hardcoded) {
+			t.Errorf("the record hardcodes %s instead of deriving it", hardcoded)
+		}
+	}
+	if !strings.Contains(body, `"influences_live_decision": len(in.Obligations) > 0`) {
+		t.Error("the record does not derive its own weight from the request")
 	}
 }

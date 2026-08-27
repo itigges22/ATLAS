@@ -1,0 +1,299 @@
+package main
+
+import (
+	"log"
+	"os"
+	"strings"
+)
+
+// Where an authorization becomes bytes on disk.
+//
+// Two things had to be true before this file could exist, and both now are: a
+// decision that says whether a candidate MAY land, and a grant that can be
+// spent exactly once. What this adds is the only place either is acted on.
+//
+// The shape is deliberately narrow. For a request that declared structured
+// obligations, no candidate lands without a grant -- the typed answer is
+// binding, and a typed refusal falls back to the caller's own content rather
+// than to a candidate the envelope happened to like. For a request that
+// declared nothing there is no typed answer to give, so the existing decision
+// stands untouched and byte-for-byte.
+//
+// Everything between consuming the grant and writing is re-checked against
+// what is on disk right now, because a grant froze a moment and the write
+// happens in a later one.
+
+// deliveryAuthorization is the typed answer about one candidate.
+type deliveryAuthorization struct {
+	// Typed is true when the request declared structured obligations, so the
+	// typed path owns whether this candidate may land. False for contractless
+	// and unspecified traffic, where it has nothing to say and says nothing.
+	Typed bool
+	// Decision is what the obligation-and-evidence machinery concluded.
+	Decision AuthorizationDecision
+	// Grant is non-nil only when the decision authorized AND a one-time grant
+	// was minted for it. A nil grant on a typed request is a refusal.
+	Grant *authorizationGrant
+	// Refusal names why, for the log. It carries no content.
+	Refusal string
+}
+
+// mayDeliver reports whether the candidate may land under the typed answer.
+//
+// A contractless request returns true because the typed path is not its owner:
+// saying "no" for a request that declared nothing would change the behaviour of
+// every caller that never opted in.
+func (a deliveryAuthorization) mayDeliver() bool {
+	if !a.Typed {
+		return true
+	}
+	return a.Grant != nil
+}
+
+// authorizeCandidateDelivery is THE live authorization owner for a candidate.
+//
+// It runs at the final-byte observation, where the bytes are fixed and both
+// producers have just spoken for exactly those bytes. It decides, and on an
+// authorized decision it mints the grant that the delivery below will spend.
+func authorizeCandidateDelivery(ctx *AgentContext, path, code string,
+	id candidateEvidenceIdentity, envelope *V3EvidenceEnvelope,
+	evidence []proxyEvidence, selectedCandidateID string) deliveryAuthorization {
+	resolved := resolveAgentPath(ctx, path)
+	hash := contentSHA256(code)
+
+	// The identity evidence must bind to, built HERE from the live request and
+	// the workspace as it stands. Never copied off a record being checked.
+	generation, stateHash := workspaceIdentity(ctx)
+	asked := V3EvidenceProvenance{
+		RequestID:           requestIDOf(ctx),
+		InvocationID:        id.InvocationID,
+		CandidateInstanceID: id.CandidateInstanceID,
+		CandidateHash:       hash,
+		WorkspaceGeneration: generation,
+		WorkspaceStateHash:  stateHash,
+		BaselineIdentity:    baselineIdentityFor(ctx, resolved),
+	}
+	_, witness := baselineWitness(ctx, resolved)
+	in := authorizationInput{
+		Obligations:            requestObligations(ctx),
+		TargetPath:             resolved,
+		CandidateHash:          hash,
+		Identity:               asked,
+		Evidence:               evidence,
+		Envelope:               envelope,
+		BaselineWitnessCommand: witness,
+	}
+	d := decideAuthorization(ctx, in)
+	recordAuthorizationDecision(ctx, in, d)
+
+	// Contractless and unspecified traffic. There are no structured
+	// obligations, so there is nothing for a typed answer to be about, and the
+	// existing delivery decision keeps its exact previous behaviour.
+	if len(in.Obligations) == 0 {
+		return deliveryAuthorization{Typed: false, Decision: d}
+	}
+
+	auth := deliveryAuthorization{Typed: true, Decision: d}
+	if !d.Authorized {
+		auth.Refusal = string(d.Reason)
+		return auth
+	}
+	g, ok, why := mintAuthorizationGrant(ctx, in, d, selectedCandidateID)
+	if !ok {
+		auth.Refusal = why
+		return auth
+	}
+	auth.Grant = g
+	return auth
+}
+
+// deliveryOutcome is the live result: true only when the exact authorized
+// bytes are what is on disk afterwards.
+//
+// It is separate from the pool record's `delivered` field on purpose. That
+// field is the service's description of what it selected -- history, written
+// before anything reached this machine's filesystem. This is a statement about
+// disk, made after the write, by the side that did it.
+type deliveryOutcome struct {
+	// Delivered is true only after the write returned successfully AND a
+	// re-read of the target hashed to exactly the authorized candidate.
+	Delivered bool
+	// Hash is what is actually on disk, whatever happened.
+	Hash string
+	// Generation is the target's ledger generation as the delivery found it.
+	// The ledger effect itself stays with its existing owner; this records
+	// what this delivery is answerable for.
+	Generation int
+	// Restored records that post-write validation failed and an eligible
+	// baseline was put back.
+	Restored bool
+	// Reason names the first thing that went wrong. Identities and
+	// classifications only -- never a source line or a command.
+	Reason string
+}
+
+// deliverAuthorizedCandidate is THE consumer of an authorization grant.
+//
+// The order below is the order in which the authorization stops being valid,
+// and every step is checked against the filesystem rather than against what
+// something earlier believed:
+//
+//  1. the grant is consumed, atomically and once;
+//  2. workspace and baseline are re-read;
+//  3. every bound identity is re-validated (which is what consumption does);
+//  4. the bytes about to be written must hash to exactly the grant's candidate;
+//  5. the target must still be the declared canonical target;
+//  6. nothing may have mutated, moved, recreated or tombstoned it in between;
+//  7. the existing write path does the mutation and its accounting;
+//  8. the exact authorized bytes are written -- no normalisation, no repair,
+//     no appended newline, no rewrite;
+//  9. the existing validation runs on the bytes that landed;
+//  10. what landed is re-read and compared with what was authorized.
+//
+// A mismatch before the write mutates nothing. A write failure claims no
+// delivery and leaves the mutation debt standing. A validation failure after
+// the write never reports delivered, and restores an eligible baseline where
+// one structurally exists.
+func deliverAuthorizedCandidate(ctx *AgentContext, path, code string,
+	g *authorizationGrant, observed checkOutcome) (*ToolResult, deliveryOutcome, error) {
+	out := deliveryOutcome{}
+	if ctx == nil || g == nil {
+		out.Reason = "no authorization"
+		return nil, out, errNoMutation(errDeliveryUnauthorized)
+	}
+	resolved := resolveAgentPath(ctx, path)
+
+	// (4) and (5), before anything is spent: the bytes must be the grant's,
+	// and the target must be the one it was minted for.
+	if contentSHA256(code) != g.CandidateHash {
+		out.Reason = "candidate_hash_mismatch"
+		return nil, out, errNoMutation(errDeliveryUnauthorized)
+	}
+	if resolved != g.TargetPath {
+		out.Reason = "target_mismatch"
+		return nil, out, errNoMutation(errDeliveryUnauthorized)
+	}
+
+	// (2) and (6): read the workspace and the target as they are NOW. A grant
+	// froze a moment; this is a later one, and the claim has to describe it.
+	generation, stateHash := workspaceIdentity(ctx)
+	claim := grantClaim{
+		RequestID:           requestIDOf(ctx),
+		InvocationID:        g.InvocationID,
+		CandidateInstanceID: g.CandidateInstanceID,
+		CandidateHash:       contentSHA256(code),
+		TargetPath:          resolved,
+		WorkspaceGeneration: generation,
+		WorkspaceStateHash:  stateHash,
+		BaselineIdentity:    baselineIdentityFor(ctx, resolved),
+		BaselineHash:        fileSHA256(ctx, resolved),
+		BaselineGeneration:  targetGeneration(ctx, resolved),
+		BaselineTombstoned:  targetTombstoned(ctx, resolved),
+		ObligationSetID:     g.ObligationSetID,
+		EvidenceSetID:       g.EvidenceSetID,
+	}
+	// (1) and (3): consuming IS the re-validation, and it happens exactly
+	// once. Nothing is mutated before this returns.
+	spent, why := consumeAuthorizationGrant(ctx, claim)
+	if spent == nil {
+		out.Reason = why
+		log.Printf("[write_file] authorization not spendable for %s (%s)", logPath(path), why)
+		return nil, out, errNoMutation(errDeliveryUnauthorized)
+	}
+
+	// (7) and (8): the existing write path, handed the exact authorized bytes.
+	result, err := writeFileRecorded(path, code, ctx)
+	if err != nil {
+		// The candidate never became an artifact. No delivery is claimed and
+		// the mutation debt the write path recorded stands.
+		out.Reason = "write_failed"
+		return result, out, overlayValidationOnError(err, observed)
+	}
+
+	// (10): what landed, read back from disk rather than assumed.
+	landed, readable := readLedgerBytes(resolved)
+	out.Hash = ""
+	if readable {
+		out.Hash = hashBytes(landed)
+	}
+	out.Generation = targetGeneration(ctx, resolved)
+
+	// (9): the observation made on exactly these bytes.
+	overlayValidation(result, observed)
+
+	switch {
+	case !readable:
+		out.Reason = "delivered_bytes_unreadable"
+	case out.Hash != g.CandidateHash:
+		out.Reason = "delivered_bytes_are_not_the_authorized_ones"
+	case observed.Status == ValidationFailed:
+		out.Reason = "post_write_validation_failed"
+	default:
+		out.Delivered = true
+	}
+	if out.Delivered {
+		result.AuthorizedDeliveryHash = g.CandidateHash
+		return result, out, nil
+	}
+
+	// Post-write failure. Never report delivered, and put back an eligible
+	// baseline where one structurally exists -- restoration rehashes disk and
+	// the ledger for itself, and declines when there is nothing demonstrably
+	// valid to return to.
+	log.Printf("[write_file] authorized delivery for %s did not settle (%s)",
+		logPath(path), out.Reason)
+	if dec := restoreDeliverable(ctx, ledgerKey(ctx, resolved)); dec.Restored {
+		out.Restored = true
+	}
+	result.Success = false
+	if result.Error == "" {
+		result.Error = "the authorized candidate did not land as authorized"
+	}
+	return result, out, nil
+}
+
+// errDeliveryUnauthorized is what a refused delivery returns. It names no
+// path, no bytes and no reason: the reason travels in the outcome, where the
+// caller can classify it without it reaching a model-visible string.
+var errDeliveryUnauthorized = &deliveryRefusal{}
+
+type deliveryRefusal struct{}
+
+func (d *deliveryRefusal) Error() string {
+	return "the candidate is not authorized to land"
+}
+
+// deliveryRefusalMessage is what a typed refusal tells the caller. It names
+// the classification and nothing else -- a reason string is a closed-vocabulary
+// token, not prose about the artifact.
+func deliveryRefusalMessage(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = string(ReasonUnknown)
+	}
+	return "the generated candidate was not authorized to replace your content (" +
+		reason + ") — your own content was kept"
+}
+
+// readLedgerBytesOrEmpty is a small convenience for the settlement side.
+func readLedgerBytesOrEmpty(path string) []byte {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// kind is the validation kind an observation implies, using exactly the
+// mapping overlayValidation already applies. Having it in one place is what
+// stops a refusal path from classifying the same outcome differently.
+func (o checkOutcome) kind() ValidationKind {
+	switch o.Status {
+	case ValidationNotApplicable:
+		return ValidationKindNone
+	case ValidationUnknown:
+		return ValidationKindUnknown
+	default:
+		return ValidationKindSyntax
+	}
+}

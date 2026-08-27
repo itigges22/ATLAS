@@ -32,7 +32,8 @@ var provenanceReaders = []string{
 	"MayAuthorize", "BindsTo", "Authorizes",
 	"produceSyntaxEvidence", "produceDeclaredVerificationEvidence",
 	"declaredVerificationCoverage", "observeCandidateVerification",
-	"decideAuthorization", "observeCandidateAuthorization",
+	"decideAuthorization", "authorizeCandidateDelivery",
+	"deliverAuthorizedCandidate", "consumeAuthorizationGrant",
 	"evidenceRefusalFor",
 }
 
@@ -55,10 +56,12 @@ func TestEveryProductionConsumerOfProvenanceIsEnumerated(t *testing.T) {
 		// decision's word for it. It reads the answer and mints or refuses;
 		// it reaches no delivery, which the guards below pin.
 		"authorization_grant.go:mintAuthorizationGrant": true,
-		// The observe-only authorization owner reads evidence to reach a
-		// verdict nothing consults. Its own inertness is pinned separately.
-		"authorization_decision.go:decideAuthorization":           true,
-		"authorization_decision.go:observeCandidateAuthorization": true,
+		// THE live authorization owner, and THE consumer of the grant it
+		// mints. Exactly one of each, pinned by name below.
+		"candidate_delivery.go:authorizeCandidateDelivery": true,
+		"candidate_delivery.go:deliverAuthorizedCandidate": true,
+		// The decision's own refusal classifier, called from the decision.
+		"authorization_decision.go:decideAuthorization": true,
 		// The one site that computes the shadow decision beside the live one,
 		// and the one that asks the feasibility question before generation.
 		"tools.go:writeFileWithV3": true,
@@ -133,88 +136,81 @@ func TestNoProducerReachesTheDeliveryGraph(t *testing.T) {
 // writeFileWithV3 is off this list on purpose: it is where the observation and
 // the shadow decision are computed, beside the live decision and after it.
 // What it may not do is let either answer reach the delivery, which is what
-// TestTheLiveDeliveryDecisionIgnoresTheShadowOne pins.
-func TestTheWritePathReadsNoObligationOrEvidence(t *testing.T) {
-	files := proxyFiles(t)
-	writePath := map[string]bool{
-		"improveContentWithV3":          true,
-		"authorizedV3Replacement":       true,
-		"v3DeliveryAuthorized":          true,
-		"EvidenceSupportsProvenanceFor": true,
-	}
-	banned := append(append([]string{}, provenanceReaders...),
-		"deriveTaskObligations", "newTaskObligation", "obligationID",
-		"obligationClosureFloor", "baselineEvidenceStrength",
-		"baselineIdentityFor", "workspaceIdentity")
-	for _, fn := range banned {
-		for site := range callSites(files, fn) {
-			caller := site[strings.Index(site, ":")+1:]
-			if writePath[caller] {
-				t.Errorf("the write path function %s calls %s", caller, fn)
-			}
-		}
-	}
-}
-
-// TestTheAskedForIdentityIsNotEvidence pins the one exception above: the
-// authorization owner builds an identity to compare against and never gives it
-// a source, so nothing it constructs can be mistaken for a record.
-func TestTheAskedForIdentityIsNotEvidence(t *testing.T) {
-	files := proxyFiles(t)
-	f := files["authorization_decision.go"]
-	if f == nil {
-		t.Fatal("the authorization owner is gone")
-	}
-	ast.Inspect(f, func(n ast.Node) bool {
-		lit, ok := n.(*ast.CompositeLit)
-		if !ok {
-			return true
-		}
-		id, ok := lit.Type.(*ast.Ident)
-		if !ok || id.Name != "V3EvidenceProvenance" {
-			return true
-		}
-		for _, elt := range lit.Elts {
-			kv, ok := elt.(*ast.KeyValueExpr)
-			if !ok {
-				continue
-			}
-			if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "Source" {
-				t.Error("the authorization owner gives its asked-for identity a " +
-					"source; an identity with a source reads as a record")
-			}
-		}
-		return true
-	})
-}
-
-// TestTheLiveDeliveryDecisionIgnoresTheShadowOne is the inertness statement
-// for the one site that computes both.
+// TestExactlyOneLiveAuthorizationOwnerAnswersForACandidate replaces the
+// inertness statement that stood here.
 //
-// The shadow decision is computed AFTER the live authorization has already
-// chosen the bytes, and its value is discarded: no assignment, no branch, no
-// return. A future change that reads it fails here.
-func TestTheLiveDeliveryDecisionIgnoresTheShadowOne(t *testing.T) {
+// The typed decision used to be computed beside the live one and discarded.
+// It now decides, so what has to hold is different and stricter: one function
+// reaches the decision, one function spends the grant it mints, and each is
+// called from exactly one place on the write path. Two live authorization
+// paths for one candidate is the state this pins against.
+func TestExactlyOneLiveAuthorizationOwnerAnswersForACandidate(t *testing.T) {
+	files := proxyFiles(t)
+	for _, c := range []struct{ fn, site string }{
+		{"authorizeCandidateDelivery", "tools.go:writeFileWithV3"},
+		{"deliverAuthorizedCandidate", "tools.go:writeFileWithV3"},
+		{"consumeAuthorizationGrant", "candidate_delivery.go:deliverAuthorizedCandidate"},
+		{"mintAuthorizationGrant", "candidate_delivery.go:authorizeCandidateDelivery"},
+		{"decideAuthorization", "candidate_delivery.go:authorizeCandidateDelivery"},
+	} {
+		sites := callSites(files, c.fn)
+		if len(sites) != 1 {
+			t.Errorf("%s is called from %d places %v, want exactly one", c.fn, len(sites), sites)
+			continue
+		}
+		if _, ok := sites[c.site]; !ok {
+			t.Errorf("%s is called from %v, want %s", c.fn, sites, c.site)
+		}
+	}
+	// And the superseded observe-only owner is gone rather than left beside
+	// the live one, where the two could drift.
+	if sites := callSites(files, "observeCandidateAuthorization"); len(sites) != 0 {
+		t.Errorf("the superseded observe-only owner is still called from %v", sites)
+	}
+	src, err := os.ReadFile("authorization_decision.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(src), "func observeCandidateAuthorization(") {
+		t.Error("the superseded observe-only owner is still defined")
+	}
+}
+
+// TestATypedRefusalNeverFallsBackToACandidate pins the routing rule that makes
+// the typed answer binding: when it refuses, the caller's own content is what
+// is kept. Falling through to the envelope's winner would mean the typed path
+// could be overruled by the thing it exists to check.
+func TestATypedRefusalNeverFallsBackToACandidate(t *testing.T) {
 	src, err := os.ReadFile("tools.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	body := string(src)
-	i := strings.Index(body, "observeCandidateAuthorization(")
+	i := strings.Index(body, "!delivery.mayDeliver()")
 	if i < 0 {
-		t.Fatal("the shadow decision is no longer computed on the production path")
+		t.Fatal("the typed refusal is no longer on the production path")
 	}
-	// The call must be a bare statement. An assignment would mean somebody
-	// kept the answer.
-	lineStart := strings.LastIndex(body[:i], "\n") + 1
-	line := strings.TrimSpace(body[lineStart:i])
-	if line != "" {
-		t.Errorf("the shadow decision's value is captured: %q", line+"observeCandidateAuthorization(")
+	// The refusal branch restores the caller's own baseline. It must name
+	// baselineContent and must not reach for the candidate.
+	end := strings.Index(body[i:], "\n\t}\n")
+	if end < 0 {
+		t.Fatal("could not bound the refusal branch")
 	}
-	// And the live authorization is decided before it, by the same function
-	// that decided it at e8fefe8.
-	if strings.Index(body, "authorizedV3Replacement(v3Result, baselineContent)") > i {
-		t.Error("the shadow decision now runs before the live one")
+	branch := body[i : i+end]
+	if !strings.Contains(branch, "revokeV3(") || !strings.Contains(branch, "baselineContent") {
+		t.Error("a typed refusal does not restore the caller's own content")
+	}
+	if strings.Contains(branch, "v3Result.Code") || strings.Contains(branch, "authorizedV3Replacement") {
+		t.Error("a typed refusal reaches for a candidate")
+	}
+	// And the grant is only ever spent on the typed route.
+	j := strings.Index(body, "deliverAuthorizedCandidate(")
+	if j < 0 {
+		t.Fatal("the grant consumer is not on the production path")
+	}
+	before := body[:j]
+	if !strings.Contains(before[strings.LastIndex(before, "\n\tif "):], "delivery.Typed") {
+		t.Error("the grant consumer is not guarded by the typed route")
 	}
 }
 
@@ -316,10 +312,10 @@ func TestNoProductionCodeConstructsAProvenanceOutsideTheProducers(t *testing.T) 
 		"types.go": true,
 		// The wire decoder materialises what the service sent.
 		"v3_bridge.go": true,
-		// The decision builds the identity evidence must MATCH, which is the
+		// The live owner builds the identity evidence must MATCH, which is the
 		// opposite of producing evidence. It may not give that identity a
 		// source -- one with a source would read as a record.
-		"authorization_decision.go": true,
+		"candidate_delivery.go": true,
 	}
 	for name, f := range proxyFiles(t) {
 		if allowed[name] {

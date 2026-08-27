@@ -29,13 +29,21 @@ type grantWorld struct {
 
 func newGrantWorld(t *testing.T, commands ...string) *grantWorld {
 	t.Helper()
+	return newGrantWorldWithCode(t, authPy, commands...)
+}
+
+// newGrantWorldWithCode builds the world around EXACT bytes, so a row that
+// cares what lands does not have to swap the candidate out from under evidence
+// that already described something else.
+func newGrantWorldWithCode(t *testing.T, code string, commands ...string) *grantWorld {
+	t.Helper()
 	var w *authWorld
 	if len(commands) == 0 {
 		w = newAuthWorld(t,
 			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
-			"solve.py", authPy, true)
+			"solve.py", code, true)
 	} else {
-		w = stagedWorld(t, commands...)
+		w = stagedWorldWithCode(t, code, commands...)
 	}
 	ev, evID := w.mustObserve(t)
 	evidence := append([]proxyEvidence{ev}, w.stage(evID)...)
@@ -80,6 +88,8 @@ func (w *grantWorld) claim() grantClaim {
 		WorkspaceStateHash:  stateHash,
 		BaselineIdentity:    baselineIdentityFor(w.ctx, w.path),
 		BaselineHash:        fileSHA256(w.ctx, w.path),
+		BaselineGeneration:  targetGeneration(w.ctx, w.path),
+		BaselineTombstoned:  targetTombstoned(w.ctx, w.path),
 		ObligationSetID:     obligationSetIdentity(w.in.Obligations),
 		EvidenceSetID:       evidenceSetIdentity(w.in.Evidence),
 	}
@@ -328,6 +338,8 @@ func TestNoOtherIdentityCanBorrowAGrant(t *testing.T) {
 		"other bytes":          func(c *grantClaim) { c.CandidateHash = contentSHA256("other") },
 		"another workspace":    func(c *grantClaim) { c.WorkspaceStateHash = contentSHA256("moved") },
 		"a later generation":   func(c *grantClaim) { c.WorkspaceGeneration += 1 },
+		"the target moved on":  func(c *grantClaim) { c.BaselineGeneration += 1 },
+		"the target removed":   func(c *grantClaim) { c.BaselineTombstoned = true },
 		"another baseline":     func(c *grantClaim) { c.BaselineIdentity = "syntax:elsewhere" },
 		"other baseline bytes": func(c *grantClaim) { c.BaselineHash = contentSHA256("was something else") },
 		"another obligation set": func(c *grantClaim) {
@@ -570,7 +582,9 @@ func TestGrantTelemetryCarriesNoPathOrContent(t *testing.T) {
 			TargetPath: w.path, WorkspaceGeneration: g.WorkspaceGeneration,
 			WorkspaceStateHash: g.WorkspaceStateHash,
 			BaselineIdentity:   g.BaselineIdentity, BaselineHash: g.BaselineHash,
-			ObligationSetID: g.ObligationSetID, EvidenceSetID: g.EvidenceSetID,
+			BaselineGeneration: g.BaselineGeneration,
+			BaselineTombstoned: g.BaselineTombstoned,
+			ObligationSetID:    g.ObligationSetID, EvidenceSetID: g.EvidenceSetID,
 		}
 		if _, why := consumeAuthorizationGrant(w.ctx, claim); why != "" {
 			t.Fatalf("the grant would not spend: %s", why)

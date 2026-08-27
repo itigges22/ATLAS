@@ -73,36 +73,45 @@ func TestTheObserversRunAndRecordAttributably(t *testing.T) {
 		observeInvocationFeasibility(w.ctx)
 		outcome := fallbackSyntaxOutcomeFor(w.ctx, w.path, w.code).aggregate()
 		if ev, id, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, w.code, outcome); ok {
-			observeCandidateAuthorization(w.ctx, w.path, w.code, id, nil, []proxyEvidence{ev})
+			authorizeCandidateDelivery(w.ctx, w.path, w.code, id, nil,
+				[]proxyEvidence{ev}, "selected")
 		} else {
 			t.Error("the producer did not run on a declared code output")
 		}
 	})
 
-	for _, kind := range []string{
-		"shadow_invocation_feasibility",
-		"candidate_evidence_observation",
-		"shadow_authorization_decision",
+	// Each record says truthfully whether it decided anything. Feasibility and
+	// the evidence observation still decide nothing; the authorization now
+	// does, for a request that declared obligations, and a record that still
+	// claimed inertness would be lying about its own weight.
+	for _, c := range []struct {
+		kind       string
+		influences bool
+	}{
+		{"shadow_invocation_feasibility", false},
+		{"candidate_evidence_observation", false},
+		{"candidate_authorization_decision", true},
 	} {
-		got := recordsOfKind(recs, kind)
+		got := recordsOfKind(recs, c.kind)
 		if len(got) != 1 {
-			t.Fatalf("%s: %d records, want exactly one", kind, len(got))
+			t.Fatalf("%s: %d records, want exactly one", c.kind, len(got))
 		}
 		rec := got[0]
-		if rec["influences_live_decision"] != false {
-			t.Errorf("%s does not declare itself inert", kind)
+		if rec["influences_live_decision"] != c.influences {
+			t.Errorf("%s says influences_live_decision=%v, want %v",
+				c.kind, rec["influences_live_decision"], c.influences)
 		}
 		if rec["request_id"] != "req-matrix" {
-			t.Errorf("%s is not attributable to the request: %v", kind, rec["request_id"])
+			t.Errorf("%s is not attributable to the request: %v", c.kind, rec["request_id"])
 		}
 		if rec["schema_version"] == nil || rec["build_version"] == nil {
-			t.Errorf("%s carries no version", kind)
+			t.Errorf("%s carries no version", c.kind)
 		}
 	}
 
 	// The evidence and authorization records join to the same candidate.
 	ev := recordsOfKind(recs, "candidate_evidence_observation")[0]
-	auth := recordsOfKind(recs, "shadow_authorization_decision")[0]
+	auth := recordsOfKind(recs, "candidate_authorization_decision")[0]
 	for _, field := range []string{"invocation_id", "candidate_instance_id", "candidate_hash"} {
 		if ev[field] == "" || ev[field] == nil {
 			t.Errorf("the evidence record has no %s", field)
@@ -122,10 +131,11 @@ func TestTheObserversRunAndRecordAttributably(t *testing.T) {
 		t.Errorf("feasibility reason %v is outside the closed vocabulary", feas["reason"])
 	}
 
-	// And the decision is refused, because the declared command has no
-	// producer: an observe-only run that always said yes would prove nothing.
+	// And the decision is refused, because staging was never run for this
+	// candidate so the declared command has no observation. A run that always
+	// said yes would prove nothing.
 	if auth["authorized"] != false {
-		t.Error("the shadow decision authorized a task whose command has no source")
+		t.Error("the decision authorized a task whose command was never staged")
 	}
 	if auth["reason"] != string(ReasonEvidenceMissing) {
 		t.Errorf("reason %v, want evidence_missing", auth["reason"])
@@ -210,8 +220,13 @@ func TestTheObserversAreSilentWithNoSink(t *testing.T) {
 	if !ok {
 		t.Fatal("the producer went silent with the sink off")
 	}
-	d := observeCandidateAuthorization(w.ctx, w.path, w.code, id, nil, []proxyEvidence{ev})
-	if !d.Authorized {
-		t.Errorf("the decision changed with the sink off: %q", d.Reason)
+	a := authorizeCandidateDelivery(w.ctx, w.path, w.code, id, nil,
+		[]proxyEvidence{ev}, "selected")
+	if !a.Decision.Authorized {
+		t.Errorf("the decision changed with the sink off: %q", a.Decision.Reason)
+	}
+	// And the grant is minted either way: capture observes, it never gates.
+	if a.Grant == nil {
+		t.Errorf("no grant with the sink off: %s", a.Refusal)
 	}
 }

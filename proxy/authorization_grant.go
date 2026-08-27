@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -69,6 +70,13 @@ type authorizationGrant struct {
 
 	BaselineIdentity string
 	BaselineHash     string
+	// BaselineGeneration is the target's own ledger generation when the
+	// grant was minted. The workspace digest catches a change anywhere; this
+	// catches a move, a recreation or a tombstone at exactly this path, which
+	// is the one that decides whether the thing being replaced is still the
+	// thing that was authorized.
+	BaselineGeneration int
+	BaselineTombstoned bool
 
 	// ObligationSetID and EvidenceSetID name the exact sets the decision was
 	// reached over. A grant minted against one set may not be spent after
@@ -208,6 +216,8 @@ func mintAuthorizationGrant(ctx *AgentContext, in authorizationInput,
 		WorkspaceStateHash:  id.WorkspaceStateHash,
 		BaselineIdentity:    id.BaselineIdentity,
 		BaselineHash:        fileSHA256(ctx, target),
+		BaselineGeneration:  targetGeneration(ctx, target),
+		BaselineTombstoned:  targetTombstoned(ctx, target),
 		ObligationSetID:     obligationSetIdentity(in.Obligations),
 		EvidenceSetID:       evidenceSetIdentity(in.Evidence),
 		SelectedCandidateID: selectedCandidateID,
@@ -254,6 +264,8 @@ type grantClaim struct {
 	WorkspaceStateHash  string
 	BaselineIdentity    string
 	BaselineHash        string
+	BaselineGeneration  int
+	BaselineTombstoned  bool
 	ObligationSetID     string
 	EvidenceSetID       string
 }
@@ -301,6 +313,14 @@ func consumeAuthorizationGrant(ctx *AgentContext, claim grantClaim) (*authorizat
 			recordGrantEvent(ctx, g, "refused", f.name+"_differs")
 			return nil, f.name + " is not what the authorization was about"
 		}
+	}
+	if g.BaselineGeneration != claim.BaselineGeneration {
+		recordGrantEvent(ctx, g, "refused", "baseline_generation_differs")
+		return nil, "the target changed since the authorization"
+	}
+	if g.BaselineTombstoned != claim.BaselineTombstoned || claim.BaselineTombstoned {
+		recordGrantEvent(ctx, g, "refused", "target_tombstoned")
+		return nil, "the target was deliberately removed"
 	}
 	if g.WorkspaceGeneration != claim.WorkspaceGeneration {
 		recordGrantEvent(ctx, g, "refused", "workspace_generation_differs")
@@ -386,4 +406,33 @@ func recordGrantEvent(ctx *AgentContext, g *authorizationGrant, event, detail st
 		"decision_generation":   g.DecisionGeneration,
 		"build_version":         APIVersion,
 	})
+}
+
+// targetGeneration and targetTombstoned read one path's ledger facts.
+//
+// Separate from workspaceIdentity on purpose: the digest says the workspace
+// moved, and these say whether THIS artifact did. A delivery cares about the
+// second, and reporting the first for it would blame an unrelated write.
+func targetGeneration(ctx *AgentContext, resolved string) int {
+	if ctx == nil {
+		return 0
+	}
+	ctx.LedgerMu.Lock()
+	defer ctx.LedgerMu.Unlock()
+	if d := ctx.Ledger[filepath.Clean(resolved)]; d != nil {
+		return d.Generation
+	}
+	return 0
+}
+
+func targetTombstoned(ctx *AgentContext, resolved string) bool {
+	if ctx == nil {
+		return false
+	}
+	ctx.LedgerMu.Lock()
+	defer ctx.LedgerMu.Unlock()
+	if d := ctx.Ledger[filepath.Clean(resolved)]; d != nil {
+		return d.Tombstoned
+	}
+	return false
 }
