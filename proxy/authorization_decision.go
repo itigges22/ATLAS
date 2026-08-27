@@ -43,6 +43,16 @@ const (
 	ReasonCommandMismatch               AuthorizationReason = "command_mismatch"
 	ReasonLegacyRecord                  AuthorizationReason = "legacy_record"
 	ReasonPostDeliverySettlementPending AuthorizationReason = "post_delivery_settlement_pending"
+	// ReasonNoAuthorizationPrerequisite is a DECLARED target that states
+	// nothing demonstrable about itself. A markdown file is the ordinary case:
+	// the client asked for it, and the structural gate does not govern its
+	// class, so there is no prerequisite for evidence to satisfy.
+	//
+	// Distinct from target_not_declared, which says the client never asked for
+	// this artifact at all, and from evidence_missing, which says something
+	// was owed and nothing spoke for it. Collapsing them would tell a caller
+	// its declared document was undeclared.
+	ReasonNoAuthorizationPrerequisite AuthorizationReason = "no_authorization_prerequisite"
 	// ReasonUnknown is never chosen deliberately. It is what a contradictory
 	// or unclassified state becomes, and it never authorizes.
 	ReasonUnknown AuthorizationReason = "unknown"
@@ -56,7 +66,7 @@ var authorizationReasons = map[AuthorizationReason]bool{
 	ReasonRequestOrInvocationMismatch: true, ReasonWorkspaceStale: true,
 	ReasonBaselineNotPreserved: true, ReasonCommandMismatch: true,
 	ReasonLegacyRecord: true, ReasonPostDeliverySettlementPending: true,
-	ReasonUnknown: true,
+	ReasonNoAuthorizationPrerequisite: true, ReasonUnknown: true,
 }
 
 // AuthorizationDecision is one complete answer about one candidate.
@@ -111,6 +121,16 @@ type authorizationInput struct {
 	// is "" for a syntax baseline, which has no command behind it, and for a
 	// target with no baseline at all.
 	BaselineWitnessCommand string
+	// OutputKnowledgeDeclared is whether the client STATED what this request
+	// produces. It is presence-aware and is the only thing that decides
+	// whether this owns the answer.
+	//
+	// Not len(Obligations): a contract declaring `expected_outputs: []` states
+	// authoritatively that it produces nothing, and derives no obligations for
+	// exactly that reason. Reading the count would make the most explicit
+	// statement a client can make indistinguishable from silence, and would
+	// hand the candidate to the legacy decision on the strength of it.
+	OutputKnowledgeDeclared bool
 }
 
 // baselinePreservedBy answers whether the evidence that authorized this
@@ -169,17 +189,17 @@ func baselinePreservedBy(o taskObligation, witnessCommand string,
 // what to fix rather than that something was.
 func decideAuthorization(ctx *AgentContext, in authorizationInput) AuthorizationDecision {
 	// Whether this answer decides anything is a property of the REQUEST, not
-	// of the answer: a request that declared structured obligations is one
-	// this owns, and a contractless one is not.
+	// of the answer: a request that STATED what it produces is one this owns,
+	// and a request that stated nothing is not.
 	d := AuthorizationDecision{
 		Reason:                 ReasonUnknown,
-		InfluencesLiveDecision: len(in.Obligations) > 0,
+		InfluencesLiveDecision: in.OutputKnowledgeDeclared,
 	}
 
-	// Nothing structured was stated, so there is nothing to authorize on. This
-	// is not a refusal of the request -- legacy delivery is unchanged and
+	// No stated output knowledge, so there is nothing to authorize on. This is
+	// not a refusal of the request -- legacy delivery is unchanged and
 	// authoritative -- it is this decision declining to have an opinion.
-	if len(in.Obligations) == 0 {
+	if !in.OutputKnowledgeDeclared {
 		d.Reason = ReasonLegacyRecord
 		return d
 	}
@@ -197,6 +217,9 @@ func decideAuthorization(ctx *AgentContext, in authorizationInput) Authorization
 	}
 	// The client must have asked for this artifact. Identity is necessary and
 	// never sufficient: everything below still has to hold.
+	//
+	// A declared-and-empty output set arrives here with no targets at all, and
+	// takes this branch: it authorizes nothing, which is exactly what it says.
 	if !targetIsAuthorized(in.Obligations, in.TargetPath) {
 		d.Reason = ReasonTargetNotDeclared
 		return d
@@ -324,10 +347,14 @@ func decideAuthorization(ctx *AgentContext, in authorizationInput) Authorization
 		return d
 	}
 	if len(d.Satisfied) == 0 {
-		// Every prerequisite accounted for and none of them required anything:
-		// the task stated no quality obligation at all. Target identity alone
-		// does not authorize arbitrary bytes.
-		d.Reason = ReasonEvidenceMissing
+		// The client asked for this artifact and its class states nothing
+		// demonstrable -- a document, ordinarily. Target identity alone does
+		// not authorize arbitrary bytes, and saying so precisely matters: this
+		// is a DECLARED target with no prerequisite, not an undeclared one and
+		// not one whose evidence went missing.
+		// Reached only when nothing was OWED: a prerequisite that was owed and
+		// unmet took the branch above and reported evidence_missing there.
+		d.Reason = ReasonNoAuthorizationPrerequisite
 		return d
 	}
 
@@ -413,12 +440,13 @@ func recordAuthorizationDecision(ctx *AgentContext, in authorizationInput,
 		"obligations_missing":   d.Missing,
 		"evidence_consumed":     d.EvidenceConsumed,
 		"settlement_required":   d.SettlementRequired,
-		// True, and a fact about the wiring rather than an intention: for a
-		// request that declared structured obligations this decision is what
-		// decides whether the candidate lands. It said false while nothing
-		// read it, and leaving that in place once something did would have
-		// made the record a lie about its own weight.
-		"influences_live_decision": len(in.Obligations) > 0,
+		// A fact about the wiring rather than an intention: for a request that
+		// STATED what it produces, this decision is what decides whether the
+		// candidate lands. Read from the same field the decision itself reads
+		// -- deriving it here from the obligation count would make the record
+		// disagree with the answer it describes, and would call a
+		// verification-only contract owned when the output route is not.
+		"influences_live_decision": in.OutputKnowledgeDeclared,
 		"build_version":            APIVersion,
 	})
 }

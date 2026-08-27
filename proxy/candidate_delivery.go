@@ -25,9 +25,15 @@ import (
 
 // deliveryAuthorization is the typed answer about one candidate.
 type deliveryAuthorization struct {
-	// Typed is true when the request declared structured obligations, so the
-	// typed path owns whether this candidate may land. False for contractless
-	// and unspecified traffic, where it has nothing to say and says nothing.
+	// Typed is true when the request STATED what it produces, so the typed path
+	// owns whether this candidate may land. False for contractless traffic and
+	// for a contract whose output knowledge is unspecified, where it has
+	// nothing to say and says nothing.
+	//
+	// Presence-aware, not count-based: `expected_outputs: []` is a client
+	// stating authoritatively that this request produces nothing, and it is
+	// owned -- it authorizes no target, which is the answer, not an absence of
+	// one.
 	Typed bool
 	// Decision is what the obligation-and-evidence machinery concluded.
 	Decision AuthorizationDecision
@@ -80,22 +86,26 @@ func authorizeCandidateDelivery(ctx *AgentContext, path, code string,
 		BaselineIdentity:    baselineIdentityFor(ctx, resolved),
 	}
 	_, witness := baselineWitness(ctx, resolved)
+	// The one question that decides ownership, asked of the obligation owner
+	// rather than inferred from how many obligations came back.
+	declared := outputKnowledgeDeclared(ctx)
 	in := authorizationInput{
-		Obligations:            requestObligations(ctx),
-		TargetPath:             resolved,
-		CandidateHash:          hash,
-		Identity:               asked,
-		Evidence:               evidence,
-		Envelope:               envelope,
-		BaselineWitnessCommand: witness,
+		Obligations:             requestObligations(ctx),
+		TargetPath:              resolved,
+		CandidateHash:           hash,
+		Identity:                asked,
+		Evidence:                evidence,
+		Envelope:                envelope,
+		BaselineWitnessCommand:  witness,
+		OutputKnowledgeDeclared: declared,
 	}
 	d := decideAuthorization(ctx, in)
 	recordAuthorizationDecision(ctx, in, d)
 
-	// Contractless and unspecified traffic. There are no structured
-	// obligations, so there is nothing for a typed answer to be about, and the
-	// existing delivery decision keeps its exact previous behaviour.
-	if len(in.Obligations) == 0 {
+	// Contractless traffic, and a contract that stated no output knowledge.
+	// There is nothing for a typed answer to be about, and the existing
+	// delivery decision keeps its exact previous behaviour.
+	if !declared {
 		return deliveryAuthorization{Typed: false, Decision: d}
 	}
 

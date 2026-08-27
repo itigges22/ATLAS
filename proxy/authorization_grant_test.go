@@ -62,8 +62,9 @@ func newGrantWorldWithCode(t *testing.T, code string, commands ...string) *grant
 			WorkspaceStateHash:  stateHash,
 			BaselineIdentity:    baselineIdentityFor(w.ctx, w.path),
 		},
-		Evidence:               evidence,
-		BaselineWitnessCommand: grantWitness(w.ctx, w.path),
+		Evidence:                evidence,
+		BaselineWitnessCommand:  grantWitness(w.ctx, w.path),
+		OutputKnowledgeDeclared: outputKnowledgeDeclared(w.ctx),
 	}
 	d := decideAuthorization(w.ctx, in)
 	return &grantWorld{authWorld: w, in: in, decision: d}
@@ -520,7 +521,8 @@ func TestAGrantCarriesNoContent(t *testing.T) {
 			WorkspaceGeneration: generation, WorkspaceStateHash: stateHash,
 			BaselineIdentity: baselineIdentityFor(w.ctx, w.path),
 		},
-		Evidence: append([]proxyEvidence{ev}, w.stage(evID)...),
+		Evidence:                append([]proxyEvidence{ev}, w.stage(evID)...),
+		OutputKnowledgeDeclared: outputKnowledgeDeclared(w.ctx),
 	}
 	d := decideAuthorization(w.ctx, in)
 	g, ok, why := mintAuthorizationGrant(w.ctx, in, d, "selected")
@@ -567,7 +569,8 @@ func TestGrantTelemetryCarriesNoPathOrContent(t *testing.T) {
 			WorkspaceGeneration: generation, WorkspaceStateHash: stateHash,
 			BaselineIdentity: baselineIdentityFor(w.ctx, w.path),
 		},
-		Evidence: append([]proxyEvidence{ev}, w.stage(evID)...),
+		Evidence:                append([]proxyEvidence{ev}, w.stage(evID)...),
+		OutputKnowledgeDeclared: outputKnowledgeDeclared(w.ctx),
 	}
 	d := decideAuthorization(w.ctx, in)
 

@@ -150,9 +150,10 @@ func mintAuthorizationGrant(ctx *AgentContext, in authorizationInput,
 		return nil, false, "the decision did not authorize"
 	}
 	// Target knowledge must be contract-declared. A grant over a target the
-	// client never named is the one thing no amount of evidence can fix.
-	if ctx.TaskContract == nil || len(in.Obligations) == 0 {
-		return nil, false, "no declared obligations"
+	// client never named is the one thing no amount of evidence can fix, and a
+	// request that stated no output knowledge has named nothing.
+	if ctx.TaskContract == nil || !in.OutputKnowledgeDeclared {
+		return nil, false, "output knowledge was not declared"
 	}
 	// Canonical before the check: obligations hold canonical paths, and an
 	// alias spelling of a declared target is still that target. Resolving

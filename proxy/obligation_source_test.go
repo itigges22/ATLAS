@@ -233,6 +233,11 @@ func TestEachObligationClassHasExactlyOneLiveDecision(t *testing.T) {
 		// The one place a caller asks what a request obliges. It derives from
 		// what the owners said and decides nothing itself.
 		"obligation_kinds.go:requestObligations": true,
+		// The one place a caller asks whether output knowledge was STATED.
+		// It reads KnowledgeSpecified and nothing else -- the alternative is
+		// every caller re-deriving `declared` from raw contract fields, which
+		// is exactly how declared-and-empty came to be mistaken for silence.
+		"obligations.go:outputKnowledgeDeclared": true,
 	}
 	files := proxyFiles(t)
 	for _, fn := range []string{"resolveOutputObligation", "resolveVerificationObligation"} {
@@ -261,6 +266,7 @@ func TestOnlyNamedReadersReachTheObligationOwner(t *testing.T) {
 		"guardrails.go:decideVerificationDemand":          true,
 		"verification_evidence.go:requestDeclaredCommand": true,
 		"obligation_kinds.go:requestObligations":          true,
+		"obligations.go:outputKnowledgeDeclared":          true,
 	}
 	files := proxyFiles(t)
 	for _, fn := range []string{"resolveOutputObligation", "resolveVerificationObligation"} {

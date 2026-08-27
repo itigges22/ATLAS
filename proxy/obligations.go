@@ -144,3 +144,24 @@ func resolveVerificationObligation(ctx *AgentContext) obligationDecision {
 	// already computes from the deliverables.
 	return d
 }
+
+// outputKnowledgeDeclared reports whether this request STATED what it produces.
+//
+// It is the ownership question, and it is presence-aware on purpose. A contract
+// declaring `expected_outputs: []` says authoritatively that the request
+// produces nothing; a contract that says nothing about outputs, and a request
+// with no contract at all, say only that nobody stated anything. Those are
+// different facts and the count of derived obligations cannot tell them apart,
+// because both derive none.
+//
+// One reader, asking the one owner. Nothing re-derives it from contract fields.
+func outputKnowledgeDeclared(ctx *AgentContext) bool {
+	if ctx == nil || ctx.TaskContract == nil {
+		return false
+	}
+	message := ""
+	if ctx.HumanTask != "" {
+		message = ctx.HumanTask
+	}
+	return resolveOutputObligation(ctx, message).KnowledgeSpecified
+}

@@ -129,6 +129,13 @@ func TestTheDecisionSaysTruthfullyWhetherItDecides(t *testing.T) {
 			`"expected_outputs":["solve.py"],"verification_knowledge":"declared",` +
 			`"verification":["pytest -q"]}`, true},
 		{"task mode only", `{"task_mode":"work"}`, false},
+		// Verification knowledge is a different class. Declaring it says
+		// nothing about what this request produces, so the output route stays
+		// where it was.
+		{"verification declared, outputs not", `{"task_mode":"work",` +
+			`"verification_knowledge":"declared","verification":["pytest -q"]}`, false},
+		{"declared and authoritatively empty", `{"task_mode":"work",` +
+			`"output_knowledge":"declared","expected_outputs":[]}`, true},
 		{"declared nothing", `{"task_mode":"work","output_knowledge":"unspecified"}`, false},
 		{"no contract at all", "", false},
 	} {
@@ -182,9 +189,11 @@ func TestAuthorizationMatrix(t *testing.T) {
 			t.Error("a structural record was fabricated for a document")
 		}
 		d := w.decide(candidateEvidenceIdentity{})
-		// No prerequisite exists to satisfy, so nothing authorizes it. Being
-		// the declared target is not evidence about the bytes.
-		expectReason(t, "document", d, false, ReasonEvidenceMissing)
+		// The client asked for it and its class states nothing demonstrable,
+		// so nothing authorizes it. Being the declared target is not evidence
+		// about the bytes -- and the refusal says exactly that rather than
+		// calling a declared document undeclared.
+		expectReason(t, "document", d, false, ReasonNoAuthorizationPrerequisite)
 		if len(d.Missing) != 0 {
 			t.Errorf("missing %v, want no fabricated obligation", d.Missing)
 		}
@@ -745,9 +754,10 @@ func TestAuthorizationMatrix(t *testing.T) {
 			unsup, _ := newTaskObligation(ObligationUnsupported, "a thing", "", true)
 			exists, _ := newTaskObligation(ObligationArtifactExists, w.path, "", true)
 			d := decideAuthorization(w.ctx, authorizationInput{
-				Obligations:   []taskObligation{exists, unsup},
-				TargetPath:    w.path,
-				CandidateHash: w.hash,
+				Obligations:             []taskObligation{exists, unsup},
+				TargetPath:              w.path,
+				CandidateHash:           w.hash,
+				OutputKnowledgeDeclared: true,
 			})
 			expectReason(t, "unsupported obligation", d, false, ReasonObligationUnknown)
 		})
@@ -879,7 +889,12 @@ func TestTheDecisionReachesNoLiveWrite(t *testing.T) {
 			t.Errorf("the record hardcodes %s instead of deriving it", hardcoded)
 		}
 	}
-	if !strings.Contains(body, `"influences_live_decision": len(in.Obligations) > 0`) {
+	// Derived from the same field the decision reads, so the record and the
+	// answer it describes cannot disagree.
+	if !strings.Contains(body, `"influences_live_decision": in.OutputKnowledgeDeclared`) {
 		t.Error("the record does not derive its own weight from the request")
+	}
+	if !strings.Contains(body, "InfluencesLiveDecision: in.OutputKnowledgeDeclared") {
+		t.Error("the decision does not derive its own weight from the request")
 	}
 }

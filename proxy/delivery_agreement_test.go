@@ -131,12 +131,16 @@ func agreementRows() []agreementRow {
 			contract: `{"task_mode":"work","output_knowledge":"declared",` +
 				`"expected_outputs":["something_else.py"]}`},
 
-		// A contract that declares zero outputs states no structured
-		// obligation about anything, so the typed path has nothing to own and
-		// the existing decision keeps its exact behaviour. Declaring
-		// knowledge of an empty set is not the same as declaring this target.
+		// A contract that declares zero outputs states authoritatively that
+		// this request produces nothing. The typed path owns it and
+		// authorizes no target: an explicit empty set is an answer, not an
+		// absence of one, and it may not fall through to legacy delivery.
 		{name: "declared empty outputs",
-			contract:   `{"task_mode":"work","output_knowledge":"declared","expected_outputs":[]}`,
+			contract: `{"task_mode":"work","output_knowledge":"declared","expected_outputs":[]}`},
+		// The same shape without the declaration. Nothing was stated, so the
+		// existing decision keeps its exact behaviour.
+		{name: "unspecified outputs",
+			contract:   `{"task_mode":"work","output_knowledge":"unspecified"}`,
 			wantWinner: true},
 	}
 }
