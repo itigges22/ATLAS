@@ -2264,7 +2264,8 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// route that a typed request can reach. Everything it needs is re-read
 	// from disk inside it: the grant froze a moment and this is a later one.
 	if delivery.Typed {
-		result, outcome, err := deliverAuthorizedCandidate(ctx, path, code, delivery.Grant, final)
+		result, outcome, err := deliverAuthorizedCandidate(ctx, path, code,
+			delivery.Grant, final, delivery.MetCommands, delivery.BaselinePreserved)
 		if err != nil {
 			if result == nil {
 				// Refused before any byte moved. Nothing mutated, nothing

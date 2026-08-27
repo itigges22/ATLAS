@@ -55,7 +55,7 @@ const deliveredCode = "print(42)\n"
 func TestAnAuthorizedCandidateLandsByteForByte(t *testing.T) {
 	w := newDeliveryWorld(t)
 	// The grant is for w.code, and w.code is what gets written.
-	res, out, err := deliverAuthorizedCandidate(w.ctx, w.path, w.code, w.grant, w.check)
+	res, out, err := deliverAuthorizedCandidate(w.ctx, w.path, w.code, w.grant, w.check, nil, true)
 	if err != nil {
 		t.Fatalf("an authorized delivery failed: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestAnAuthorizedCandidateLandsByteForByte(t *testing.T) {
 		t.Error("a settled delivery is not reported successful")
 	}
 	// And the licence is spent: a second delivery of the same bytes refuses.
-	if _, out2, err2 := deliverAuthorizedCandidate(w.ctx, w.path, w.code, w.grant, w.check); err2 == nil {
+	if _, out2, err2 := deliverAuthorizedCandidate(w.ctx, w.path, w.code, w.grant, w.check, nil, true); err2 == nil {
 		t.Errorf("a spent grant delivered again (%+v)", out2)
 	}
 }
@@ -92,7 +92,7 @@ func TestDeliveryWritesTheBytesUnaltered(t *testing.T) {
 			t.Fatalf("%q: no grant (%s)", body, why)
 		}
 		check := fallbackSyntaxOutcomeFor(w.ctx, w.path, body).aggregate()
-		_, out, err := deliverAuthorizedCandidate(w.ctx, w.path, body, g, check)
+		_, out, err := deliverAuthorizedCandidate(w.ctx, w.path, body, g, check, nil, true)
 		if err != nil || !out.Delivered {
 			t.Fatalf("%q: not delivered (%s, %v)", body, out.Reason, err)
 		}
@@ -120,7 +120,7 @@ func TestABeforeWriteMismatchMutatesNothing(t *testing.T) {
 		w := newDeliveryWorld(t)
 		before := w.onDisk(t)
 		path, code := mutate(w)
-		res, out, err := deliverAuthorizedCandidate(w.ctx, path, code, w.grant, w.check)
+		res, out, err := deliverAuthorizedCandidate(w.ctx, path, code, w.grant, w.check, nil, true)
 		if err == nil {
 			t.Errorf("%s: delivery was allowed", name)
 		}
@@ -146,7 +146,7 @@ func TestAnInterveningMutationRefusesTheDelivery(t *testing.T) {
 	if err := os.WriteFile(w.path, []byte("SOMEONE ELSE = 1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	res, out, err := deliverAuthorizedCandidate(w.ctx, w.path, w.code, w.grant, w.check)
+	res, out, err := deliverAuthorizedCandidate(w.ctx, w.path, w.code, w.grant, w.check, nil, true)
 	if err == nil || res != nil || out.Delivered {
 		t.Fatal("a delivery ran against a target that had changed underneath it")
 	}
@@ -158,7 +158,7 @@ func TestAnInterveningMutationRefusesTheDelivery(t *testing.T) {
 func TestATombstonedTargetRefusesTheDelivery(t *testing.T) {
 	w := newDeliveryWorld(t)
 	tombstoneDeliverable(w.ctx, w.path, "deleted")
-	if _, out, err := deliverAuthorizedCandidate(w.ctx, w.path, w.code, w.grant, w.check); err == nil {
+	if _, out, err := deliverAuthorizedCandidate(w.ctx, w.path, w.code, w.grant, w.check, nil, true); err == nil {
 		t.Errorf("a delivery resurrected a deliberately removed file (%+v)", out)
 	}
 }
@@ -170,7 +170,7 @@ func TestACancelledRequestDeliversNothing(t *testing.T) {
 		context.WithValue(context.Background(), requestIDKey, requestIDOf(w.ctx)))
 	cancel()
 	w.ctx.Ctx = cancelled
-	if _, out, err := deliverAuthorizedCandidate(w.ctx, w.path, w.code, w.grant, w.check); err == nil {
+	if _, out, err := deliverAuthorizedCandidate(w.ctx, w.path, w.code, w.grant, w.check, nil, true); err == nil {
 		t.Errorf("a cancelled request delivered (%+v)", out)
 	}
 	if got := w.onDisk(t); got != before {
@@ -181,7 +181,7 @@ func TestACancelledRequestDeliversNothing(t *testing.T) {
 func TestDeliveryWithoutAGrantRefuses(t *testing.T) {
 	w := newDeliveryWorld(t)
 	before := w.onDisk(t)
-	if _, _, err := deliverAuthorizedCandidate(w.ctx, w.path, w.code, nil, w.check); err == nil {
+	if _, _, err := deliverAuthorizedCandidate(w.ctx, w.path, w.code, nil, w.check, nil, true); err == nil {
 		t.Error("a delivery with no authorization at all was allowed")
 	}
 	if got := w.onDisk(t); got != before {
@@ -195,7 +195,7 @@ func TestAPostWriteValidationFailureNeverClaimsDelivery(t *testing.T) {
 	w := newDeliveryWorld(t)
 	// The bytes are what was authorized; the observation about them failed.
 	failed := checkOutcome{Status: ValidationFailed, Detail: "SyntaxError: invalid syntax"}
-	res, out, err := deliverAuthorizedCandidate(w.ctx, w.path, w.code, w.grant, failed)
+	res, out, err := deliverAuthorizedCandidate(w.ctx, w.path, w.code, w.grant, failed, nil, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestRestorationRehashesRatherThanTrustingTheLedger(t *testing.T) {
 		t.Fatalf("no grant: %s (%s)", a.Refusal, a.Decision.Reason)
 	}
 	failed := checkOutcome{Status: ValidationFailed, Detail: "SyntaxError"}
-	_, out, err := deliverAuthorizedCandidate(w.ctx, w.path, w.code, a.Grant, failed)
+	_, out, err := deliverAuthorizedCandidate(w.ctx, w.path, w.code, a.Grant, failed, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +268,7 @@ func TestBytesThatDoNotLandAreNotDelivered(t *testing.T) {
 	forged := *w.ctx.grants[w.grant.ID]
 	w.ctx.grantMu.Unlock()
 
-	_, out, err := deliverAuthorizedCandidate(w.ctx, w.path, w.code, &forged, w.check)
+	_, out, err := deliverAuthorizedCandidate(w.ctx, w.path, w.code, &forged, w.check, nil, true)
 	if err == nil {
 		t.Fatal("bytes that are not the authorized ones were delivered")
 	}
@@ -314,7 +314,7 @@ func TestTheDeliveryOwnerLeaksNoContent(t *testing.T) {
 		t.Fatalf("no grant: %s", why)
 	}
 	failed := checkOutcome{Status: ValidationFailed, Detail: "SyntaxError: line 1"}
-	_, out, _ := deliverAuthorizedCandidate(w.ctx, w.path, secret, g, failed)
+	_, out, _ := deliverAuthorizedCandidate(w.ctx, w.path, secret, g, failed, nil, true)
 	for _, needle := range []string{secret, "hunter2", "TOKEN", "print(7)", "SyntaxError"} {
 		if strings.Contains(out.Reason, needle) {
 			t.Errorf("the outcome reason carries %q", needle)
@@ -542,7 +542,7 @@ func TestNothingIsDeliveredAfterTerminalEmission(t *testing.T) {
 		g = held
 	}
 	w.ctx.grantMu.Unlock()
-	if _, out, err := deliverAuthorizedCandidate(w.ctx, w.path, w.code, g, check); err == nil {
+	if _, out, err := deliverAuthorizedCandidate(w.ctx, w.path, w.code, g, check, nil, true); err == nil {
 		t.Errorf("a candidate landed after the terminal (%+v)", out)
 	}
 	after, err := os.ReadFile(w.path)

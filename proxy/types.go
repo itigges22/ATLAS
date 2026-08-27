@@ -893,6 +893,12 @@ type AgentContext struct {
 	grantSeq  int
 	grantsOff string
 
+	// settlements holds what each authorized delivery left behind, keyed by
+	// canonical target. Written only by the delivery owner, and only for a
+	// delivery whose exact authorized bytes were confirmed on disk. Guarded
+	// by grantMu, beside the licence that produced it.
+	settlements map[string]*deliverySettlement
+
 	// HumanTask is the CURRENT request's actual human instruction, captured
 	// once at the top of runAgentLoop before the loop appends anything.
 	// ATLAS represents internal correctives, manifests and re-injected file

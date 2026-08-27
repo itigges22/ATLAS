@@ -36,6 +36,12 @@ type deliveryAuthorization struct {
 	Grant *authorizationGrant
 	// Refusal names why, for the log. It carries no content.
 	Refusal string
+	// MetCommands are the declared-command obligations this decision found
+	// covered by current trusted evidence, and BaselinePreserved says the
+	// preservation requirement was satisfied. Both travel to settlement so it
+	// can tell what the delivery actually answered for.
+	MetCommands       []string
+	BaselinePreserved bool
 }
 
 // mayDeliver reports whether the candidate may land under the typed answer.
@@ -93,7 +99,11 @@ func authorizeCandidateDelivery(ctx *AgentContext, path, code string,
 		return deliveryAuthorization{Typed: false, Decision: d}
 	}
 
-	auth := deliveryAuthorization{Typed: true, Decision: d}
+	met, _ := declaredVerificationCoverage(in.Obligations, evidence)
+	auth := deliveryAuthorization{
+		Typed: true, Decision: d, MetCommands: met,
+		BaselinePreserved: baselineObligationsSatisfied(in.Obligations, d),
+	}
 	if !d.Authorized {
 		auth.Refusal = string(d.Reason)
 		return auth
@@ -155,7 +165,8 @@ type deliveryOutcome struct {
 // the write never reports delivered, and restores an eligible baseline where
 // one structurally exists.
 func deliverAuthorizedCandidate(ctx *AgentContext, path, code string,
-	g *authorizationGrant, observed checkOutcome) (*ToolResult, deliveryOutcome, error) {
+	g *authorizationGrant, observed checkOutcome, met []string,
+	baselinePreserved bool) (*ToolResult, deliveryOutcome, error) {
 	out := deliveryOutcome{}
 	if ctx == nil || g == nil {
 		out.Reason = "no authorization"
@@ -201,6 +212,10 @@ func deliverAuthorizedCandidate(ctx *AgentContext, path, code string,
 		return nil, out, errNoMutation(errDeliveryUnauthorized)
 	}
 
+	// Read before the write, so settlement can tell the generation this
+	// delivery produced from the one that was already there.
+	priorGeneration := targetGeneration(ctx, resolved)
+
 	// (7) and (8): the existing write path, handed the exact authorized bytes.
 	result, err := writeFileRecorded(path, code, ctx)
 	if err != nil {
@@ -233,6 +248,21 @@ func deliverAuthorizedCandidate(ctx *AgentContext, path, code string,
 	}
 	if out.Delivered {
 		result.AuthorizedDeliveryHash = g.CandidateHash
+		// The only writer of a settlement record, and only for a delivery
+		// whose exact authorized bytes were just confirmed on disk. Nothing
+		// else can produce one, which is what stops a successful tool result
+		// or a selection label from manufacturing settlement.
+		recordDeliverySettlement(ctx, deliverySettlement{
+			GrantID:             spent.ID,
+			RequestID:           spent.RequestID,
+			InvocationID:        spent.InvocationID,
+			CandidateInstanceID: spent.CandidateInstanceID,
+			CandidateHash:       spent.CandidateHash,
+			TargetPath:          resolved,
+			PriorGeneration:     priorGeneration,
+			MetCommands:         met,
+			BaselinePreserved:   baselinePreserved,
+		})
 		return result, out, nil
 	}
 
@@ -296,4 +326,25 @@ func (o checkOutcome) kind() ValidationKind {
 	default:
 		return ValidationKindSyntax
 	}
+}
+
+// baselineObligationsSatisfied reports whether every preservation obligation
+// the task stated was among the ones the decision satisfied.
+//
+// A task with no baseline states none, and vacuously satisfies it: a new file
+// replaces nothing.
+func baselineObligationsSatisfied(obs []taskObligation, d AuthorizationDecision) bool {
+	satisfied := map[string]bool{}
+	for _, id := range d.Satisfied {
+		satisfied[id] = true
+	}
+	for _, o := range authorizationPrerequisites(obs) {
+		if o.Kind != ObligationBaselinePreserved || !o.Required {
+			continue
+		}
+		if !satisfied[o.ID] {
+			return false
+		}
+	}
+	return true
 }

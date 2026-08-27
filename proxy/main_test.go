@@ -809,6 +809,11 @@ func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
 		"agent.go:": true, "guardrails.go:": true, "obligations.go:": true,
 		"obligation_kinds.go:": true, "evidence_wiring.go:": true,
 		"authorization_grant.go:": true,
+		// delivery_settlement.go joins for the same reason again: it asks
+		// whether the request HAS a contract, because a run that declared
+		// nothing has no existence obligation to discharge. It reads no
+		// contract FIELD and reaches no decision of its own.
+		"delivery_settlement.go:": true,
 	}
 	readerAllowed := func(r string) bool {
 		for prefix := range contractReaders {

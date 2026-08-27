@@ -8038,6 +8038,18 @@ func finalizeCompletion(ctx *AgentContext, st *runState, userMessage, completedR
 		log.Printf("[agent] work contract: no current bound verification for %q", d.Missing)
 		return TerminalIncomplete, "verification_demanded_unmet"
 	}
+	// A candidate this run authorized and delivered owes one more thing that
+	// could not be answered before it landed: that it is still there, at the
+	// bytes it was authorized at, with the session's own record agreeing.
+	//
+	// Scoped to targets this run actually delivered to. An output that was
+	// never produced is owed by missingExpectedOutputs, which already owns
+	// that question; claiming it here too would be a second rule for one
+	// obligation.
+	if owed, why := postDeliverySettlementOwed(ctx); owed {
+		log.Printf("[agent] authorized delivery is not settled: %s", why)
+		return TerminalIncomplete, "post_delivery_settlement_pending"
+	}
 	// The model asking to finish is part of the evidence. A prose reply after a
 	// mutation is a chat turn, not a completion claim, so it stays honest even
 	// when everything else is satisfied. Bounded continuation is a later slice.
