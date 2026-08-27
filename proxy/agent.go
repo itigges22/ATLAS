@@ -2219,11 +2219,21 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 								}
 							}
 						}
+						// Stamped AFTER recordLedgerEffect ran for this call:
+						// executeToolCall reconciles a shell effect into the
+						// ledger (invalidateTrackedValidation rehashes every
+						// tracked path and bumps the generation where bytes
+						// moved) before the result reaches this loop. So the
+						// identity below describes the workspace the command
+						// LEFT, never the one it found.
+						stampGeneration, stampState := workspaceIdentity(ctx)
 						ctx.VerificationEvidence = append(ctx.VerificationEvidence, VerificationRecord{
-							Command:  rc.Command,
-							Redirect: stdinRedirectSource(rc.Command),
-							Covered:  covered,
-							Turn:     turn,
+							Command:             rc.Command,
+							Redirect:            stdinRedirectSource(rc.Command),
+							Covered:             covered,
+							Turn:                turn,
+							WorkspaceGeneration: stampGeneration,
+							WorkspaceStateHash:  stampState,
 						})
 						// A program run as `prog < data` is verified under a
 						// contract the caller may not use. Tracked so the exit

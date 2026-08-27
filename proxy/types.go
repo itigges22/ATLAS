@@ -546,6 +546,16 @@ type RunCommandOutput struct {
 	Stdout   string `json:"stdout"`
 	Stderr   string `json:"stderr"`
 	ExitCode int    `json:"exit_code"`
+
+	// TimedOut is the executor's own structural answer, decoded rather than
+	// read out of the stderr text. A killed command's exit status is whatever
+	// the signal left behind, so a caller that only looked at the code would
+	// be guessing about the one case where guessing is worst.
+	TimedOut bool `json:"timed_out,omitempty"`
+	// OutputTruncated says the transcript this result carries is not the whole
+	// one. It does not change the exit status, and is recorded so no consumer
+	// has to infer completeness from length.
+	OutputTruncated bool `json:"output_truncated,omitempty"`
 }
 
 // -- background commands --

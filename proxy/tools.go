@@ -4280,6 +4280,11 @@ func runCommandTool() *ToolDef {
 
 			outBytes, _ := json.Marshal(out)
 			var errMsg string
+			if out.TimedOut && out.ExitCode == 0 {
+				// A kill that left a zero status behind. Saying nothing here
+				// would hand the model a silent failure.
+				errMsg = "the command was killed on its timeout"
+			}
 			if out.ExitCode != 0 {
 				errMsg = strings.TrimSpace(out.Stderr)
 				if errMsg == "" {
@@ -4296,7 +4301,7 @@ func runCommandTool() *ToolDef {
 				errMsg += shellQuotingHint(input.Command, errMsg)
 			}
 			return &ToolResult{
-				Success: out.ExitCode == 0,
+				Success: runCommandVerifiable(out),
 				Data:    outBytes,
 				Error:   errMsg,
 			}, nil
@@ -4347,21 +4352,50 @@ func runViaSandbox(ctx *AgentContext, command, cwd string, timeoutSec int) (RunC
 			ExitCode: 1,
 		}, nil
 	}
+	var out RunCommandOutput
+	if err := decodeShellResponse(resp.Body, &out); err != nil {
+		return RunCommandOutput{}, err
+	}
+	return out, nil
+}
+
+// decodeShellResponse reads the executor's answer into the shape the rest of
+// the proxy uses.
+//
+// timed_out is decoded, not inferred. The executor sets it structurally when
+// it kills a command, precisely so nothing downstream has to recognise
+// "Execution timed out after 5s" in a stderr string to reach a decision.
+func decodeShellResponse(body io.Reader, out *RunCommandOutput) error {
 	var sr struct {
 		Success   bool   `json:"success"`
 		Stdout    string `json:"stdout"`
 		Stderr    string `json:"stderr"`
 		ExitCode  int    `json:"exit_code"`
 		ElapsedMS int    `json:"elapsed_ms"`
+		TimedOut  bool   `json:"timed_out"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&sr); err != nil {
-		return RunCommandOutput{}, fmt.Errorf("decode sandbox response: %w", err)
+	if err := json.NewDecoder(body).Decode(&sr); err != nil {
+		return fmt.Errorf("decode sandbox response: %w", err)
 	}
-	return RunCommandOutput{
-		Stdout:   truncateStr(sr.Stdout, 8000),
-		Stderr:   truncateStr(sr.Stderr, 4000),
-		ExitCode: sr.ExitCode,
-	}, nil
+	stdout := truncateStr(sr.Stdout, 8000)
+	stderr := truncateStr(sr.Stderr, 4000)
+	*out = RunCommandOutput{
+		Stdout: stdout, Stderr: stderr, ExitCode: sr.ExitCode,
+		TimedOut:        sr.TimedOut,
+		OutputTruncated: len(stdout) < len(sr.Stdout) || len(stderr) < len(sr.Stderr),
+	}
+	return nil
+}
+
+// runCommandVerifiable reports whether an execution is sound enough to stand
+// as verification of anything.
+//
+// One predicate, over structural facts only: the executor's exit status and
+// its own timeout flag. Refusal, cancellation and an unreachable sandbox all
+// arrive here as a nonzero status set by the caller that observed them, so
+// none of them can pass. No string is examined.
+func runCommandVerifiable(out RunCommandOutput) bool {
+	return out.ExitCode == 0 && !out.TimedOut
 }
 
 // runLocally executes a command only when the operator explicitly selects
@@ -4381,8 +4415,10 @@ func runLocally(command, cwd string, timeout time.Duration) RunCommandOutput {
 
 	err := cmd.Run()
 	var exitCode int
+	timedOut := false
 	if ctx.Err() == context.DeadlineExceeded {
 		exitCode = 124
+		timedOut = true
 		stderr.WriteString(fmt.Sprintf("\nCommand timed out after %s", timeout))
 	} else if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -4393,10 +4429,14 @@ func runLocally(command, cwd string, timeout time.Duration) RunCommandOutput {
 		}
 	}
 
+	so, se := stdout.String(), stderr.String()
+	outStr, errStr := truncateStr(so, 8000), truncateStr(se, 4000)
 	return RunCommandOutput{
-		Stdout:   truncateStr(stdout.String(), 8000),
-		Stderr:   truncateStr(stderr.String(), 4000),
-		ExitCode: exitCode,
+		Stdout: outStr, Stderr: errStr, ExitCode: exitCode,
+		// Structural on this path too: the deadline is what this side observed,
+		// not something a reader has to find in the message it appended.
+		TimedOut:        timedOut,
+		OutputTruncated: len(outStr) < len(so) || len(errStr) < len(se),
 	}
 }
 

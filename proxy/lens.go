@@ -324,6 +324,22 @@ type VerificationRecord struct {
 	Redirect string            // stdin redirect source ("" = ran standalone)
 	Covered  map[string]string // session-written path -> sha256 at pass time
 	Turn     int
+
+	// The workspace this run was about, stamped from workspaceIdentity after
+	// the command's own effects were reconciled into the ledger.
+	//
+	// Covered answers "which artifact bytes did this command exercise", and a
+	// command that names no file answers it with nothing -- which is honest,
+	// and is why a pathless command could never be current before. These two
+	// answer a different question: WHEN did it run, in terms the session can
+	// re-check. A pathless command is current exactly while both still equal
+	// the workspace's current identity, and any material mutation to a tracked
+	// artifact moves them.
+	//
+	// They are not a second coverage: they say nothing about which bytes the
+	// command touched, and nothing here may satisfy a path obligation.
+	WorkspaceGeneration int
+	WorkspaceStateHash  string
 }
 
 // verifiedFinalWrites selects the PassWrites behavioral evidence actually

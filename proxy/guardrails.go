@@ -805,47 +805,78 @@ func decideVerificationDemand(ctx *AgentContext, tc *TaskContract, expected []st
 	if len(paths) == 0 && len(obligation.Items) == 0 {
 		return verificationDemand{}
 	}
-	type liveRecord struct {
-		command string
-		covered map[string]string
-	}
-	current := make([]liveRecord, 0, len(ctx.VerificationEvidence))
-	for _, rec := range ctx.VerificationEvidence {
-		if covered, ok := evidenceIsCurrent(ctx, rec); ok {
-			current = append(current, liveRecord{command: rec.Command, covered: covered})
-		}
-	}
+	// Two demand sets, evaluated independently.
+	//
+	// Path coverage asks which artifact bytes were exercised, and only an
+	// evidence record that NAMED the path can answer it. The exact-command
+	// demand asks whether the client's own command ran, and a command that
+	// names no file answers that perfectly well while covering nothing. They
+	// were one loop over one list, so `pytest` created an obligation nothing
+	// could discharge and the session could never reach settlement.
 	for _, p := range paths {
 		h := fileSHA256(ctx, p)
 		if h == "" {
 			return verificationDemand{Required: true, Missing: p}
 		}
-		covered := false
-		for _, rec := range current {
-			if rec.covered[p] == h {
-				covered = true
-				break
-			}
-		}
-		if !covered {
+		if !pathCoverageSatisfied(ctx, p, h) {
 			return verificationDemand{Required: true, Missing: p}
 		}
 	}
-	// Declared commands are matched by exact recorded identity. No shell
-	// parsing, no equivalence: "python3  solve.py" is not "python3 solve.py".
 	for _, want := range obligation.Items {
-		ran := false
-		for _, rec := range current {
-			if rec.command == want {
-				ran = true
-				break
-			}
-		}
-		if !ran {
+		if !commandObligationSatisfied(ctx, want) {
 			return verificationDemand{Required: true, Missing: want}
 		}
 	}
 	return verificationDemand{Required: true, Met: true}
+}
+
+// pathCoverageSatisfied answers the artifact question and only that one.
+//
+// Coverage comes from Covered and from nowhere else: a record that did not
+// name the path cannot vouch for its bytes, however green it was.
+func pathCoverageSatisfied(ctx *AgentContext, path, hash string) bool {
+	for _, rec := range ctx.VerificationEvidence {
+		covered, ok := evidenceIsCurrent(ctx, rec)
+		if ok && covered[path] == hash {
+			return true
+		}
+	}
+	return stagedCoverageSatisfied(ctx, path, hash)
+}
+
+// commandObligationSatisfied answers the command question and only that one.
+//
+// Exact identity, byte for byte: no normalisation, no equivalence, no shell
+// parsing. "python3  solve.py" is not "python3 solve.py".
+func commandObligationSatisfied(ctx *AgentContext, want string) bool {
+	for _, rec := range ctx.VerificationEvidence {
+		if rec.Command == want && commandEvidenceCurrent(ctx, rec) {
+			return true
+		}
+	}
+	return stagedCommandSatisfied(ctx, want)
+}
+
+// commandEvidenceCurrent reports whether a direct execution still describes
+// the workspace as it is now.
+//
+// A record that named paths is current on its coverage, exactly as before. A
+// record that named none is current on the workspace identity it was stamped
+// with -- which is conservative by construction: any material mutation to a
+// tracked artifact moves the identity and stales every pathless record at
+// once, including ones the mutation had nothing to do with.
+func commandEvidenceCurrent(ctx *AgentContext, rec VerificationRecord) bool {
+	if len(rec.Covered) > 0 {
+		_, ok := evidenceIsCurrent(ctx, rec)
+		return ok
+	}
+	if rec.WorkspaceStateHash == "" {
+		// A record from before the stamp existed says nothing about when it
+		// ran, and an unanswerable question is not a satisfied one.
+		return false
+	}
+	generation, state := workspaceIdentity(ctx)
+	return rec.WorkspaceGeneration == generation && rec.WorkspaceStateHash == state
 }
 
 // driftedSinceVerification names the first session-written file whose bytes
