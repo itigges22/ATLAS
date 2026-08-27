@@ -255,6 +255,11 @@ func observeCandidateVerification(ctx *AgentContext, path, code string,
 		if r.Outcome != stagingExitedZero || r.MutatedTarget || r.MutatedWorkspace {
 			unmet[o.ID] = stagingUnmetReason(r)
 		}
+		// The same execution, kept for the completion gate as well as the
+		// authorization one. It was already the only place the client's
+		// declared command actually ran against the exact candidate; the
+		// completion gate simply had no way to hear about it.
+		recordStagedCommandFulfillment(ctx, o, r, result.Identity)
 		ev, ok := produceDeclaredVerificationEvidence(ctx, verificationEvidenceRequest{
 			Obligation: o, Result: r, Identity: result.Identity,
 		})

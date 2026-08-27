@@ -884,6 +884,13 @@ type AgentContext struct {
 	// audit finding).
 	VerificationEvidence []VerificationRecord
 
+	// StagedCommands are declared commands that ran against exact candidate
+	// bytes in the staging overlay, kept in their own store rather than
+	// flattened into the record above. That record can say which paths a run
+	// named; it cannot say which candidate, invocation or grant a run belongs
+	// to, and those are exactly what makes a staged execution worth trusting.
+	StagedCommands []stagedCommandFulfillment
+
 	// v3InvocationSeq numbers the candidate generations this request has
 	// made. One V3 call is one invocation, and evidence about a candidate
 	// from one invocation must never bind to a candidate from another --

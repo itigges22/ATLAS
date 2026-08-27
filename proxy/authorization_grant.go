@@ -385,6 +385,28 @@ func consumeAuthorizationGrant(ctx *AgentContext, claim grantClaim) (*authorizat
 	return &held, ""
 }
 
+// grantConsumedForCandidate reports whether the one-time licence for exactly
+// this candidate at exactly this target was minted, validated and spent.
+//
+// A read, never a take: it changes nothing, and a grant that is still live,
+// merely attempted, cancelled or absent answers false. Consumption is the
+// proof that the delivery happened under authorization, which is what lets
+// evidence gathered before the landing describe the artifact afterwards.
+func grantConsumedForCandidate(ctx *AgentContext, requestID, invocationID,
+	candidateInstanceID, canonicalTarget, candidateHash string) bool {
+	if ctx == nil {
+		return false
+	}
+	key := grantKey(requestID, invocationID, candidateInstanceID, canonicalTarget)
+	ctx.grantMu.Lock()
+	defer ctx.grantMu.Unlock()
+	g := ctx.grants[key]
+	return g != nil && g.retired == grantConsumed &&
+		g.RequestID == requestID && g.InvocationID == invocationID &&
+		g.CandidateInstanceID == candidateInstanceID &&
+		g.TargetPath == canonicalTarget && g.CandidateHash == candidateHash
+}
+
 // grantRefused records a mismatch on a grant that is already spent, and
 // returns the caller's reason. It never unspends: a failed attempt that gave
 // the licence back would make probing free.
