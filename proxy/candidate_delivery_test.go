@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -336,6 +337,7 @@ type routeWorld struct {
 	path   string
 	winner string
 	shell  *stubSandbox
+	gen    *int32
 }
 
 const routeBaseline = "def solve(values):\n    total = 0\n    for v in values:\n        total += v\n    return total\n"
@@ -349,9 +351,11 @@ func newRouteWorld(t *testing.T, contract string, commands map[string]stubEffect
 	for cmd, effect := range commands {
 		stub.script(cmd, effect)
 	}
+	var generateCalls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/v3/generate":
+			atomic.AddInt32(&generateCalls, 1)
 			body, _ := json.Marshal(map[string]interface{}{
 				"code": routeWinner, "passed": true, "phase_solved": "phase_one",
 				"candidates_tested": 3, "winning_score": 0.9,
@@ -408,8 +412,12 @@ func newRouteWorld(t *testing.T, contract string, commands map[string]stubEffect
 		ctx.TaskContract = mustContract(t, dir, contract)
 	}
 	return &routeWorld{ctx: ctx, dir: dir, path: filepath.Join(dir, "solve.py"),
-		winner: routeWinner, shell: stub}
+		winner: routeWinner, shell: stub, gen: &generateCalls}
 }
+
+// generateCalls is how many times the pipeline was actually asked for
+// candidates. Feasibility is observe-only, so this must not move.
+func (w *routeWorld) generateCalls() int { return int(atomic.LoadInt32(w.gen)) }
 
 func (w *routeWorld) write(t *testing.T) (*ToolResult, error) {
 	t.Helper()

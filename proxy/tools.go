@@ -2017,9 +2017,10 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// falling through to a candidate the envelope happened to like. For a
 	// request that declared nothing there is no typed answer to give, so
 	// `authorizedV3` stands exactly as it did.
-	var delivery deliveryAuthorization
-	if ev, evID, seen := observeDeliveredCandidateSyntax(ctx, path, code, deliveredCheck); seen {
-		observed := []proxyEvidence{ev}
+	var observed []proxyEvidence
+	var evID candidateEvidenceIdentity
+	if ev, id, seen := observeDeliveredCandidateSyntax(ctx, path, code, deliveredCheck); seen {
+		observed, evID = []proxyEvidence{ev}, id
 		// THE production call path for the client-declared verification
 		// producer. It stages these exact bytes in a workspace that is not the
 		// caller's and runs the commands the client declared there, so the
@@ -2029,13 +2030,19 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		if behavioral, ran := observeCandidateVerification(ctx, path, code, evID); ran {
 			observed = append(observed, behavioral...)
 		}
-		selected := ""
-		if v3Result != nil && v3Result.Evidence != nil {
-			selected = v3Result.Evidence.Identity.CandidateContentHash
-		}
-		delivery = authorizeCandidateDelivery(ctx, path, code, evID,
-			v3Result.Evidence, observed, selected)
 	}
+	selected := ""
+	if v3Result != nil && v3Result.Evidence != nil {
+		selected = v3Result.Evidence.Identity.CandidateContentHash
+	}
+	// Unconditionally, and deliberately so. The producers decline for a target
+	// the client never declared and for a class the structural gate does not
+	// govern, and gating the AUTHORIZATION on a producer having spoken would
+	// mean exactly those two cases fell through to the legacy decision -- a
+	// candidate landing on a structured request because nothing could speak
+	// for it. The owner handles an empty evidence set: it refuses.
+	delivery := authorizeCandidateDelivery(ctx, path, code, evID,
+		v3Result.Evidence, observed, selected)
 	// A typed refusal withdraws the candidate. The caller's own content is the
 	// alternative, and it is checked before being restored -- the same rule
 	// every other gate on this path follows.
