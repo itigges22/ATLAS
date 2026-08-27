@@ -4531,6 +4531,11 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 		V3ModeRaw        string `json:"v3_mode,omitempty"`            // explicit capability mode; overrides bypass_v3
 		DisableFreshSlot bool   `json:"disable_fresh_slot,omitempty"` // keep the pre-warmed KV prefix
 		SandboxSubdir    string `json:"sandbox_subdir,omitempty"`     // confine writes to this workspace subdir
+		// What this request does with the pre-generation feasibility answer.
+		// Absent means observe, which is current behaviour; an unrecognised
+		// value is refused rather than defaulted, because a mode nobody
+		// registered is a state nobody has reasoned about.
+		FeasibilityModeRaw string `json:"feasibility_mode,omitempty"`
 		// What the client declares about the request. Optional, and absent
 		// stays distinguishable from present-and-empty. Nothing reads it yet.
 		TaskContract *TaskContract `json:"task_contract,omitempty"`
@@ -4593,6 +4598,17 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusBadRequest, ErrInvalidInput,
 			fmt.Sprintf("unknown v3_mode %q (want full, off or planner_only)", req.V3ModeRaw))
+		return
+	}
+	// One derivation, at decode, refusing an unrecognised mode rather than
+	// defaulting it: defaulting a typo to enforce would silently stop
+	// generating candidates.
+	if mode, ok := ParseFeasibilityMode(req.FeasibilityModeRaw); ok {
+		ctx.FeasibilityMode = mode
+	} else {
+		writeError(w, http.StatusBadRequest, ErrInvalidInput,
+			fmt.Sprintf("unknown feasibility_mode %q (want observe or enforce)",
+				req.FeasibilityModeRaw))
 		return
 	}
 	ctx.DisableFreshSlot = req.DisableFreshSlot

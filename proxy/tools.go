@@ -1717,6 +1717,27 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		req.BuildCommand = ctx.Project.BuildCommand
 	}
 
+	// THE production call path for invocation feasibility. It asks, before a
+	// single candidate is generated, whether this task could close at all --
+	// the question the sealed Stage-A run answered 103 times, once per
+	// candidate, after generating each.
+	//
+	// It sits ABOVE the "V3 is taking over" message on purpose: under enforce
+	// a skipped invocation must not first tell the user a pipeline is running.
+	// Under observe the answer is recorded and generation proceeds exactly as
+	// it did at e8fefe8, whatever it concludes.
+	if skipped, why := generationSkipped(ctx, observeInvocationFeasibility(ctx)); skipped {
+		// No candidate is generated. The run continues through the same
+		// direct-write path a V3 outage takes, so nothing about the plan, the
+		// prompt, recovery, the terminal rules, permissions or the completion
+		// gates changes -- and no candidate pool, selection or delivery record
+		// is invented for a pipeline that never ran.
+		log.Printf("[write_file] no closure path for %s (%s) — writing directly",
+			logPath(path), why)
+		return writeWithoutCandidate(ctx, path, baselineContent,
+			"  \u2514\u2500 no structured closure path — writing your version")
+	}
+
 	// Tell the user V3 is taking over so they don't think the file
 	// vanished. write_file with V3 holds the disk write until V3 picks
 	// a winner — without this message the chat goes silent for the 1–3
@@ -1738,13 +1759,6 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	//   llm_start   — V3 is starting an LLM call (candidate gen, scoring…)
 	//   llm_end     — V3's LLM call finished (with token/timing summary)
 	//   <other>     — pipeline stage marker (probe, plansearch, sandbox…)
-	// THE production call path for invocation feasibility. It asks, before a
-	// single candidate is generated, whether this task could close at all --
-	// the question the sealed Stage-A run answered 103 times, once per
-	// candidate, after generating each. Observe-only: generation proceeds
-	// exactly as it did at e8fefe8 whatever this concludes.
-	observeInvocationFeasibility(ctx)
-
 	currentV3Stage := ""
 	v3Result, err := callV3GenerateStreaming(ctx.Ctx, ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
 		// Token deltas: forward to the TUI on a separate SSE event so
@@ -1897,52 +1911,11 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		// call writing a SyntaxError to disk with success=true is how the
 		// mini-bench got its two broken files (t06/t09).
 		log.Printf("[write_file] V3 failed: %s — falling back to direct write", err)
-		// A FRESH check, deliberately, even though the preflight already
-		// examined these bytes: generation can run for minutes, and this
-		// revalidates the exact content about to be written immediately
-		// before writing it. The observation therefore describes the bytes
-		// that land, with no window between the two.
-		fallbackCheck := fallbackSyntaxOutcomeFor(ctx, path, baselineContent).aggregate()
-		if fallbackCheck.Status == ValidationFailed {
-			synErr := fallbackCheck.Detail
-			log.Printf("[write_file] fallback content for %s failed syntax gate: %s", logPath(path), safeDiagnosticSummary(synErr))
-			// Refused before any byte reached disk, on exactly the content
-			// that would have been written.
-			return &ToolResult{Success: false,
-				Error:            fallbackSyntaxRejection(path, baselineContent, synErr),
-				MutationStatus:   MutationRefused,
-				ValidationKind:   ValidationKindSyntax,
-				ValidationStatus: ValidationFailed,
-				ValidationDetail: synErr}, nil
-		}
-		// #147: structural gate on the fallback too. It matters on the
-		// DeadlineExceeded case — /generate timed out but the service is
-		// up, so /internal/structural_check (own 5s timeout) still
-		// answers; when the service is genuinely down the gate fails open.
-		if original, ok := readOriginalForGate(path); ok {
-			if introduced := editIntroducesUnresolved(ctx, path, original, baselineContent); len(introduced) > 0 {
-				log.Printf("[write_file] fallback content introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(path))
-				// Syntax ran first and did not fail on these exact bytes, so
-				// the structural failure is the decisive one. Recording it as
-				// syntax/failed would assert the opposite of what happened.
-				rejection := structuralWriteRejection(path, introduced)
-				return &ToolResult{Success: false, Error: rejection,
-					MutationStatus:   MutationRefused,
-					ValidationKind:   ValidationKindStructural,
-					ValidationStatus: ValidationFailed,
-					ValidationDetail: rejection}, nil
-			}
-		}
 		msg := "  \u2514\u2500 V3 unavailable, writing directly"
 		if errors.Is(err, context.DeadlineExceeded) {
 			msg = fmt.Sprintf("  \u2514\u2500 V3 exceeded %s cap, writing your version", v3CallTimeout())
 		}
-		ctx.Stream("text", map[string]string{"content": msg})
-		// The model's own bytes, unchanged: no V3 provenance is attached
-		// because nothing here was generated, verified or scored. Only the
-		// validation observation is overlaid onto what the writer reported.
-		fbRes, fbErr := writeFileRecorded(path, baselineContent, ctx)
-		return applyRouteObservation(fbRes, fbErr, fallbackCheck)
+		return writeWithoutCandidate(ctx, path, baselineContent, msg)
 	}
 
 	// Write the winning candidate (or baseline if V3 didn't improve).
@@ -5810,4 +5783,57 @@ func finishedBackgroundNote(ctx *AgentContext) string {
 			id, truncateStr(cmd, 80), id)
 	}
 	return strings.TrimLeft(sb.String(), "\n")
+}
+
+// writeWithoutCandidate is the direct path: the caller's own bytes, checked
+// and written, with no candidate anywhere in the story.
+//
+// Two callers reach it and they mean different things -- a V3 outage, and an
+// invocation enforcement found no closure path for -- so each supplies its own
+// message. What they share is everything after: the same fresh syntax check on
+// exactly the bytes about to land, the same structural gate, the same write,
+// and no V3 provenance, because nothing here was generated, verified or scored.
+func writeWithoutCandidate(ctx *AgentContext, path, content, message string) (*ToolResult, error) {
+	// A FRESH check, deliberately: the decision above can take time, and this
+	// revalidates the exact content about to be written immediately before
+	// writing it. The observation therefore describes the bytes that land,
+	// with no window between the two.
+	check := fallbackSyntaxOutcomeFor(ctx, path, content).aggregate()
+	if check.Status == ValidationFailed {
+		synErr := check.Detail
+		log.Printf("[write_file] fallback content for %s failed syntax gate: %s",
+			logPath(path), safeDiagnosticSummary(synErr))
+		// Refused before any byte reached disk, on exactly the content that
+		// would have been written.
+		return &ToolResult{Success: false,
+			Error:            fallbackSyntaxRejection(path, content, synErr),
+			MutationStatus:   MutationRefused,
+			ValidationKind:   ValidationKindSyntax,
+			ValidationStatus: ValidationFailed,
+			ValidationDetail: synErr}, nil
+	}
+	// #147: structural gate on the fallback too. It matters on the
+	// DeadlineExceeded case -- /generate timed out but the service is up, so
+	// /internal/structural_check (own 5s timeout) still answers; when the
+	// service is genuinely down the gate fails open.
+	if original, ok := readOriginalForGate(path); ok {
+		if introduced := editIntroducesUnresolved(ctx, path, original, content); len(introduced) > 0 {
+			log.Printf("[write_file] fallback content introduces unresolved call(s) %v in %s — rejecting",
+				logPaths(introduced), logPath(path))
+			// Syntax ran first and did not fail on these exact bytes, so the
+			// structural failure is the decisive one. Recording it as
+			// syntax/failed would assert the opposite of what happened.
+			rejection := structuralWriteRejection(path, introduced)
+			return &ToolResult{Success: false, Error: rejection,
+				MutationStatus:   MutationRefused,
+				ValidationKind:   ValidationKindStructural,
+				ValidationStatus: ValidationFailed,
+				ValidationDetail: rejection}, nil
+		}
+	}
+	if message != "" {
+		ctx.Stream("text", map[string]string{"content": message})
+	}
+	res, err := writeFileRecorded(path, content, ctx)
+	return applyRouteObservation(res, err, check)
 }

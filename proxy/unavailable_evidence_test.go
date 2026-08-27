@@ -191,20 +191,15 @@ func TestAvailabilityReachesFeasibilityConsistently(t *testing.T) {
 	if len(without) != 0 {
 		t.Errorf("producible with the sandbox down: %v", without)
 	}
-	// And feasibility is still observe-only: the answer is computed and the
-	// value discarded.
-	src, err := os.ReadFile("tools.go")
-	if err != nil {
-		t.Fatal(err)
+	// And the default mode is still observe: availability changes what the
+	// answer IS, and only an explicit enforce lets it change what happens.
+	if got := defaultFeasibilityMode(); got != FeasibilityObserve {
+		t.Errorf("default feasibility mode is %q, want observe", got)
 	}
-	body := string(src)
-	i := strings.Index(body, "observeInvocationFeasibility(")
-	if i < 0 {
-		t.Fatal("feasibility is no longer observed")
-	}
-	lineStart := strings.LastIndex(body[:i], "\n") + 1
-	if line := strings.TrimSpace(body[lineStart:i]); line != "" {
-		t.Errorf("the feasibility answer is captured: %q", line)
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	if skipped, _ := generationSkipped(ctx, FeasibilityDecision{
+		Feasible: false, Reason: FeasibilityNoTrustedSource}); skipped {
+		t.Error("an infeasible invocation was skipped under the default mode")
 	}
 }
 

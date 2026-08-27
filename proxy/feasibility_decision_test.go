@@ -373,30 +373,110 @@ func TestFeasibilityCallsNothingThatGenerates(t *testing.T) {
 
 // TestGenerationProceedsWhateverFeasibilityConcludes pins the call shape at the
 // production site: the answer is computed before generation and discarded, and
-// no branch sits between it and the V3 call.
-func TestGenerationProceedsWhateverFeasibilityConcludes(t *testing.T) {
-	src, err := os.ReadFile("tools.go")
-	if err != nil {
-		t.Fatal(err)
+// TestObserveIsTheDefaultAndOnlyEnforceActs pins the mode boundary.
+//
+// This used to assert that generation followed the question unconditionally.
+// It now can, and under observe it still does; what has to hold is that only
+// an explicitly declared enforce changes anything, and that an unrecognised
+// mode is refused rather than defaulted into skipping.
+func TestObserveIsTheDefaultAndOnlyEnforceActs(t *testing.T) {
+	if got := defaultFeasibilityMode(); got != FeasibilityObserve {
+		t.Fatalf("shipped default is %q, want observe", got)
 	}
-	body := string(src)
-	call := strings.Index(body, "observeInvocationFeasibility(ctx)")
-	if call < 0 {
-		t.Fatal("feasibility is no longer computed before generation")
-	}
-	lineStart := strings.LastIndex(body[:call], "\n") + 1
-	if prefix := strings.TrimSpace(body[lineStart:call]); prefix != "" {
-		t.Errorf("the feasibility answer is captured: %q", prefix)
-	}
-	gen := strings.Index(body[call:], "callV3GenerateStreaming(")
-	if gen < 0 {
-		t.Fatal("generation no longer follows the feasibility question")
-	}
-	between := body[call : call+gen]
-	for _, branch := range []string{"if ", "return ", "switch "} {
-		if strings.Contains(between, branch) {
-			t.Errorf("a %q sits between the feasibility answer and generation", branch)
+	infeasible := FeasibilityDecision{Feasible: false, Reason: FeasibilityNoTrustedSource}
+	feasible := FeasibilityDecision{Feasible: true, Reason: FeasibilityClosurePathAvailable}
+
+	for _, c := range []struct {
+		name string
+		mode FeasibilityMode
+		d    FeasibilityDecision
+		skip bool
+	}{
+		{"observe, infeasible", FeasibilityObserve, infeasible, false},
+		{"observe, feasible", FeasibilityObserve, feasible, false},
+		{"enforce, feasible", FeasibilityEnforce, feasible, false},
+		{"enforce, infeasible", FeasibilityEnforce, infeasible, true},
+	} {
+		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+		ctx.FeasibilityMode = c.mode
+		if got, _ := generationSkipped(ctx, c.d); got != c.skip {
+			t.Errorf("%s: skipped=%v, want %v", c.name, got, c.skip)
 		}
+	}
+	// Absent is observe: a client that says nothing is asking for current
+	// behaviour. Surrounding whitespace is whitespace, not a different word,
+	// and is trimmed. Everything else unrecognised is REFUSED rather than
+	// defaulted, because a mode nobody registered is a state nobody has
+	// reasoned about -- and defaulting a typo to enforce would silently stop
+	// generating candidates.
+	for _, c := range []struct {
+		raw  string
+		mode FeasibilityMode
+		ok   bool
+	}{
+		{"", FeasibilityObserve, true},
+		{"  ", FeasibilityObserve, true},
+		{"observe", FeasibilityObserve, true},
+		{"enforce", FeasibilityEnforce, true},
+		{" enforce ", FeasibilityEnforce, true},
+		{"OBSERVE", FeasibilityObserve, false},
+		{"Enforce", FeasibilityObserve, false},
+		{"true", FeasibilityObserve, false},
+		{"1", FeasibilityObserve, false},
+		{"skip", FeasibilityObserve, false},
+		{"enforce,observe", FeasibilityObserve, false},
+	} {
+		mode, ok := ParseFeasibilityMode(c.raw)
+		if ok != c.ok || mode != c.mode {
+			t.Errorf("%q: mode=%q ok=%v, want %q/%v", c.raw, mode, ok, c.mode, c.ok)
+		}
+	}
+	// A context carrying nonsense reads as observe rather than acting.
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	ctx.FeasibilityMode = FeasibilityMode("something_new")
+	if feasibilityModeOf(ctx) != FeasibilityObserve {
+		t.Error("an unregistered mode was honoured")
+	}
+	if skipped, _ := generationSkipped(ctx, infeasible); skipped {
+		t.Error("an unregistered mode skipped generation")
+	}
+}
+
+// TestEveryFailClosedReasonSkipsUnderEnforceAndKeepsItsName pins that the
+// vocabulary stays closed and truthful through the skip.
+func TestEveryFailClosedReasonSkipsUnderEnforceAndKeepsItsName(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	ctx.FeasibilityMode = FeasibilityEnforce
+	for _, reason := range []FeasibilityReason{
+		FeasibilityUnspecifiedContract, FeasibilityNoTrustedSource,
+		FeasibilityAdapterCannotMeasure, FeasibilityUnsupportedObligation,
+		FeasibilityBaselineFloorUnreachable,
+	} {
+		skipped, why := generationSkipped(ctx,
+			FeasibilityDecision{Feasible: false, Reason: reason})
+		if !skipped {
+			t.Errorf("%s did not skip under enforce", reason)
+		}
+		if why != reason {
+			t.Errorf("%s was reported as %q; the reason must survive the skip", reason, why)
+		}
+	}
+	// An unclassified state still skips -- proceeding would be generating
+	// without a closure path on the strength of not knowing -- but it is
+	// reported as its own thing rather than as one of the classified refusals.
+	skipped, why := generationSkipped(ctx,
+		FeasibilityDecision{Feasible: false, Reason: FeasibilityReason("brand_new")})
+	if !skipped {
+		t.Error("an unclassified state proceeded to generation")
+	}
+	if why != FeasibilityUnknown {
+		t.Errorf("unclassified reported as %q, want unknown", why)
+	}
+	// And a feasible-but-contradictory answer -- feasible true with a reason
+	// that is not closure_path_available -- skips rather than being trusted.
+	if skipped, _ := generationSkipped(ctx, FeasibilityDecision{
+		Feasible: true, Reason: FeasibilityNoTrustedSource}); !skipped {
+		t.Error("a contradictory answer was treated as a closure path")
 	}
 }
 

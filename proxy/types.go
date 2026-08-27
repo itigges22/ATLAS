@@ -893,6 +893,10 @@ type AgentContext struct {
 	grantSeq  int
 	grantsOff string
 
+	// FeasibilityMode is what this request does with the pre-generation
+	// feasibility answer. Defaults to observe, which is current behaviour.
+	FeasibilityMode FeasibilityMode
+
 	// settlements holds what each authorized delivery left behind, keyed by
 	// canonical target. Written only by the delivery owner, and only for a
 	// delivery whose exact authorized bytes were confirmed on disk. Guarded

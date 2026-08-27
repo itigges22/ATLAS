@@ -420,10 +420,14 @@ func TestALaterMutationAfterSettlementIsVisible(t *testing.T) {
 
 // --- feasibility stays out of it ---------------------------------------------------
 
-// TestFeasibilityStillSkipsNothing pins the boundary this slice did not cross.
-// The decision is observed before generation and read by nothing; a generation
-// that stopped happening because of it would be the next slice, not this one.
-func TestFeasibilityStillSkipsNothing(t *testing.T) {
+// TestFeasibilityIsReadAtExactlyOnePlace replaces the inertness statement that
+// stood here.
+//
+// The answer used to be computed and discarded. It now decides, under enforce
+// only, so what has to hold is different: one production call site, one reader
+// of that answer, and no other function anywhere reading a feasibility verdict
+// to decide something of its own.
+func TestFeasibilityIsReadAtExactlyOnePlace(t *testing.T) {
 	files := proxyFiles(t)
 	sites := callSites(files, "observeInvocationFeasibility")
 	if len(sites) != 1 {
@@ -432,29 +436,24 @@ func TestFeasibilityStillSkipsNothing(t *testing.T) {
 	if _, ok := sites["tools.go:writeFileWithV3"]; !ok {
 		t.Errorf("feasibility is observed from %v, not the generation site", sites)
 	}
-	// Its value is discarded: a bare statement, not an assignment or a branch.
-	src, err := os.ReadFile("tools.go")
-	if err != nil {
-		t.Fatal(err)
+	// Exactly one function turns the answer into an action, and it is the
+	// mode owner.
+	skipSites := callSites(files, "generationSkipped")
+	for site := range skipSites {
+		switch site {
+		case "tools.go:writeFileWithV3", "feasibility_decision.go:recordFeasibilityDecision":
+		default:
+			t.Errorf("%s acts on the feasibility answer", site)
+		}
 	}
-	body := string(src)
-	i := strings.Index(body, "observeInvocationFeasibility(")
-	if i < 0 {
-		t.Fatal("feasibility is no longer observed on the production path")
-	}
-	lineStart := strings.LastIndex(body[:i], "\n") + 1
-	if line := strings.TrimSpace(body[lineStart:i]); line != "" {
-		t.Errorf("the feasibility answer is captured: %q", line+"observeInvocationFeasibility(")
-	}
-	// And nothing reads a FeasibilityDecision field anywhere in production.
-	for name, f := range files {
-		if name == "feasibility_decision.go" {
+	// And nothing else reads a verdict field to decide anything.
+	for name := range files {
+		if name == "feasibility_decision.go" || name == "tools.go" {
 			continue
 		}
-		if strings.Contains(fileText(t, name), ".Feasible") && name != "feasibility_decision.go" {
+		if strings.Contains(fileText(t, name), ".Feasible") {
 			t.Errorf("%s reads a feasibility verdict", name)
 		}
-		_ = f
 	}
 }
 
