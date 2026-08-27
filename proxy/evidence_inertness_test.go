@@ -51,6 +51,10 @@ func TestEveryProductionConsumerOfProvenanceIsEnumerated(t *testing.T) {
 		// a record reaches private telemetry.
 		"evidence_wiring.go:observeDeliveredCandidateSyntax": true,
 		"evidence_wiring.go:observeCandidateVerification":    true,
+		// Minting re-checks declared-command coverage rather than taking the
+		// decision's word for it. It reads the answer and mints or refuses;
+		// it reaches no delivery, which the guards below pin.
+		"authorization_grant.go:mintAuthorizationGrant": true,
 		// The observe-only authorization owner reads evidence to reach a
 		// verdict nothing consults. Its own inertness is pinned separately.
 		"authorization_decision.go:decideAuthorization":           true,

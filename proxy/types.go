@@ -870,6 +870,18 @@ type AgentContext struct {
 	v3InvocationMu  sync.Mutex
 	v3InvocationSeq int
 
+	// grants holds the one-time authorization grants this request has
+	// minted, keyed by canonical grant id. A grant is spent exactly once at
+	// the delivery owner; nothing else may read or clear one.
+	//
+	// Guarded by grantMu, which is its own lock rather than LedgerMu: a
+	// consumption re-reads the ledger while it decides, and one mutex for
+	// both would be a self-deadlock the first time that happened.
+	grantMu   sync.Mutex
+	grants    map[string]*authorizationGrant
+	grantSeq  int
+	grantsOff string
+
 	// HumanTask is the CURRENT request's actual human instruction, captured
 	// once at the top of runAgentLoop before the loop appends anything.
 	// ATLAS represents internal correctives, manifests and re-injected file

@@ -801,9 +801,14 @@ func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
 	// obligations. evidence_wiring.go joins as the producer wiring, which
 	// reads the contract only to know whether a request HAS structured
 	// obligations at all -- it decides nothing and reaches no live path.
+	// authorization_grant.go joins for the same reason evidence_wiring.go
+	// did: minting asks whether the request HAS a contract at all, because a
+	// licence to replace an artifact nobody declared is the one thing no
+	// amount of evidence can justify. It reads no contract FIELD.
 	contractReaders := map[string]bool{
 		"agent.go:": true, "guardrails.go:": true, "obligations.go:": true,
 		"obligation_kinds.go:": true, "evidence_wiring.go:": true,
+		"authorization_grant.go:": true,
 	}
 	readerAllowed := func(r string) bool {
 		for prefix := range contractReaders {
@@ -2571,12 +2576,15 @@ var shadowGuardOwners = map[string]bool{
 	"recordEvidenceObservation":   true,
 	"recordAuthorizationDecision": true,
 	"recordFeasibilityDecision":   true,
-	"contractOutputs":             true,
-	"shadowCanonicalSet":          true,
-	"shadowHashes":                true,
-	"shadowCompareSets":           true,
-	"shadowHash":                  true,
-	"main":                        true,
+	// Grant transitions. Same shape: one record written per event, nothing
+	// read back, and the grant's own reachability pinned by name elsewhere.
+	"recordGrantEvent":   true,
+	"contractOutputs":    true,
+	"shadowCanonicalSet": true,
+	"shadowHashes":       true,
+	"shadowCompareSets":  true,
+	"shadowHash":         true,
+	"main":               true,
 }
 
 // funcIdentity renders a declaration the way shadowGuardOwners keys it.
