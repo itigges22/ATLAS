@@ -1,15 +1,17 @@
 # Candidate authorization: obligations, evidence, and candidate staging
 
-Everything here is **observe-only**. It computes whether a generated candidate
-*would* be authorized to land, and nothing reads the answer: delivery is still
-decided by `EvidenceSupportsProvenanceFor` and `v3DeliveryAuthorized`, exactly
-as [EVIDENCE_WIRE.md](EVIDENCE_WIRE.md) describes. Structural guards in
-`proxy/evidence_inertness_test.go` fail the build if any of it reaches a write,
-a ledger entry, a completion, a prompt or a generation decision.
+**For a request that declares structured obligations, this decides whether a
+generated candidate lands.** For a request that declares none it has nothing to
+say, and the existing decision in [EVIDENCE_WIRE.md](EVIDENCE_WIRE.md) keeps its
+exact previous behaviour.
 
-The point of computing an answer nobody consults is to find out whether the
-typed answer agrees with the live one *before* either is allowed to depend on
-the other.
+It was observe-only for three slices first — computed beside the live answer and
+discarded — so the two could be compared before either depended on the other.
+That comparison is `proxy/delivery_agreement_test.go`, and it is what this now
+rests on.
+
+Feasibility is still observe-only: `observeInvocationFeasibility` runs before
+generation, its value is discarded, and nothing is skipped.
 
 ## Obligations: what a task owes
 
@@ -166,6 +168,128 @@ Client authority to *request* verification is not authority to delete production
 files, bypass permissions, reach the network or escape the sandbox. Repository
 tests execute only inside the isolated candidate workspace.
 
+## The delivery route
+
+```
+V3 selects a winner            the envelope decides which bytes are a candidate
+        │
+        ▼
+final-byte observation         the exact bytes are fixed; both producers speak
+        │
+        ▼
+authorizeCandidateDelivery     the typed decision, and a grant if it authorizes
+        │
+        ├── contractless ──────► the existing decision delivers, unchanged
+        │
+        ├── refused ───────────► the caller's own content is restored
+        │
+        ▼
+deliverAuthorizedCandidate     re-check, spend the grant, write, read back
+        │
+        ▼
+post-delivery settlement       existence is discharged, or the run is incomplete
+```
+
+The two decisions are a **conjunction, not a race**. The envelope still chooses
+which bytes are a candidate at all; the grant decides whether that candidate may
+replace the caller's content. A typed refusal keeps the caller's own content and
+never falls through to the winner the envelope liked.
+
+`proxy/evidence_inertness_test.go` pins that exactly one function reaches the
+decision, exactly one spends the grant, and each is called from exactly one
+place.
+
+### One-time grants
+
+A decision is a statement about a moment. A grant is that decision made
+spendable, and it is spent exactly once.
+
+It binds request, invocation, candidate instance, candidate hash, canonical
+target, workspace generation and state, baseline identity and hash, the target's
+own ledger generation and tombstone state, obligation-set identity,
+evidence-set identity, the selected candidate, and its own decision generation.
+Consumption re-validates every one against a claim built from **live** state and
+refuses on the first that differs. It never re-decides: a decision recomputed
+under new state is a different decision wearing the old one's identity.
+
+- The check that a grant is live and the mark that it is spent happen under one
+  lock. Sixteen racing consumers get one success.
+- Alias spellings of one target share one canonical grant.
+- A later decision for the same target supersedes the earlier grant.
+- Cancellation, terminal emission and session end retire every live grant and
+  refuse further minting. Retirement sits at the **emission**, not the verdict:
+  `finalizeCompletion` is also reached on the debt-recovery bounce, which keeps
+  running.
+- Capacity is 64 per request, and overflow refuses before anything is stored.
+- Grants hold identities and hashes. The canonical target is one of them; no
+  command text, candidate byte, source fragment or prompt is, and the telemetry
+  record does not carry the path either.
+
+### The write
+
+Immediately before mutation, and in this order:
+
+1. the bytes must hash to the grant's candidate;
+2. the target must be the canonical one it was minted for;
+3. workspace and baseline are re-read;
+4. the grant is consumed, atomically and once, which re-validates every bound
+   identity including the target's ledger generation and tombstone state;
+5. the existing write path is handed the **exact** authorized bytes — no
+   normalisation, no repair, no appended newline;
+6. the existing validation runs on the bytes that landed;
+7. what landed is read back and compared with what was authorized.
+
+`ToolResult.AuthorizedDeliveryHash` is set only after step 7 succeeds. It is not
+the pool record's `delivered` field, which is the service describing what it
+selected before anything reached this filesystem — that is history; this is a
+statement about disk.
+
+| Failure | Result |
+| --- | --- |
+| mismatch before the write | nothing mutated, nothing spent, truthful refusal |
+| write failed | no delivery claimed, mutation debt stands |
+| validation failed after the write | never reported delivered; an eligible baseline is restored where one structurally exists |
+
+### When the structural gate is down
+
+A sandbox outage makes the gate report `not_run` — not a pass, not a failure,
+nothing checked. No syntax evidence exists, so a **structured request refuses
+the candidate and keeps the caller's content.** The previous behaviour delivered
+the winner on the envelope's word alone.
+
+This is fail-closed by design, and it is a real operational consequence: with the
+sandbox down, structured requests stop delivering candidates rather than
+delivering unchecked ones. Contractless traffic is unaffected.
+
+## Post-delivery settlement
+
+`artifact_exists` is the one obligation nothing can evidence in advance, which
+is why it is settlement rather than a prerequisite. It is discharged only when
+all of this holds at once:
+
+- a grant was validly consumed and the exact bytes were confirmed on disk (only
+  the delivery owner writes a settlement record, so a successful tool result, a
+  selection label, prose or a stale ledger row cannot manufacture one);
+- the exact candidate bytes are at the declared target **now**;
+- the ledger's current hash equals what is on disk;
+- the ledger generation has moved past what it was before this write — the
+  ledger observes through its own owner after the tool returns, and settlement
+  asks whether that happened rather than assuming it;
+- the structural verdict is current for these bytes;
+- every declared command the task states was covered by the delivery being
+  settled (one that appears afterwards is a stronger obligation than the
+  delivery answered);
+- the target is neither tombstoned nor moved;
+- the baseline the delivery replaced was one it was entitled to replace.
+
+Settlement waives nothing else. Mutation debt, verification debt, background
+hazards, deletion rules, action demand and unrelated outputs are owed by their
+existing owners. It is scoped to targets this run actually delivered to, so an
+output that was never produced stays `missingExpectedOutputs`' question.
+
+The terminal asks one question of one owner, after the owners ahead of it have
+spoken, and an unsettled delivery is `post_delivery_settlement_pending`.
+
 ## Authorization
 
 `decideAuthorization` matches evidence against the identity built from the
@@ -247,13 +371,22 @@ from what is available then.
 | `proxy/candidate_staging.go` | `stageCandidate` — the one thing that executes |
 | `proxy/evidence_wiring.go` | the producer inventory and the two production call paths |
 | `proxy/authorization_decision.go` | `decideAuthorization`, baseline-preservation derivation |
-| `proxy/feasibility_decision.go` | `decideInvocationFeasibility` |
+| `proxy/authorization_grant.go` | the one-time grant: minting, consumption, retirement |
+| `proxy/candidate_delivery.go` | the live authorization owner and the grant consumer |
+| `proxy/delivery_settlement.go` | post-delivery existence settlement |
+| `proxy/feasibility_decision.go` | `decideInvocationFeasibility` (still observe-only) |
 | `sandbox/executor_server.py` | `/shell` observation — facts, no conclusions |
 
 ## Telemetry
 
-Every decision and observation goes to the private shadow sink and nowhere else:
-no SSE event, no `ToolResult`, no model-visible text. Records carry
-`influences_live_decision: false`, which is a fact about the wiring rather than
-an intention. No command text, candidate bytes, source fragments, stdout, stderr,
-prompts or credentials enter any log or telemetry surface.
+Every decision, observation and grant transition goes to the private shadow sink
+and nowhere else: no SSE event, no model-visible text.
+
+`influences_live_decision` is **derived, not asserted**: true for a request with
+structured obligations, because there the decision owns delivery, and false for
+one without. It said false while nothing read the answer; leaving that in place
+once the typed path started deciding would have made every record a lie about
+its own weight.
+
+No command text, candidate bytes, source fragments, stdout, stderr, prompts or
+credentials enter any log or telemetry surface.

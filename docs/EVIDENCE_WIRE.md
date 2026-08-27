@@ -7,11 +7,17 @@ the proxy had no way to tell them apart. The envelope carries the evidence
 itself, versioned, so a consumer can read what happened instead of guessing
 from a boolean.
 
-The envelope is now **authoritative for delivery**. A generated candidate may
+The envelope decides which bytes are a **candidate**. A generated candidate may
 replace the caller's content, and carry V3 provenance, only when the envelope
 is available and self-consistent, its selection concluded a `verified_winner`,
 its record is closure-eligible, and its hash names the exact bytes Go would
-write. `passed`, `phase_solved`, `winning_score` and the verification-evidence
+write.
+
+For a request that declares structured obligations that is necessary and no
+longer sufficient: the typed authorization path also has to grant it, and a
+refusal there keeps the caller's own content. See
+[CANDIDATE_AUTHORIZATION.md](CANDIDATE_AUTHORIZATION.md). For a request that
+declares none, what follows is the whole rule and is unchanged. `passed`, `phase_solved`, `winning_score` and the verification-evidence
 strings authorize nothing; `passed` stays on the wire as a compatibility and
 telemetry field.
 
@@ -98,7 +104,11 @@ only place it is applied:
 | `candidate_content_hash` equals sha256 of the final bytes | the evidence is about what will be written |
 
 The producer's own `describes_delivered_candidate` flag is never trusted — the
-consumer hashes what it is delivering. Every other outcome (best-not-eligible,
+consumer hashes what it is delivering. `delivered` in a pool record is likewise
+the service describing what it selected, written before anything reached this
+filesystem: history, not a statement about disk. The live result is
+`ToolResult.AuthorizedDeliveryHash`, set only after a re-read of the target
+matched the bytes a one-time authorization was spent on. Every other outcome (best-not-eligible,
 tied, incomparable, ineligible, no winner, hash mismatch, absent, unknown
 version, malformed, contradictory) delivers the caller's baseline with no
 provenance.
