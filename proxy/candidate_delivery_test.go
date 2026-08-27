@@ -524,7 +524,7 @@ func TestOneCandidateGetsOneAuthorizationAnswer(t *testing.T) {
 	}
 	consumed := 0
 	for _, r := range recordsOfKind(recs, "authorization_grant_event") {
-		if r["event"] == "consumed" {
+		if r["event"] == string(grantConsumedAuthorized) {
 			consumed++
 		}
 	}

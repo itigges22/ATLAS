@@ -494,7 +494,7 @@ func TestGenerationStillHappensForEveryShape(t *testing.T) {
 func consumedGrants(recs []map[string]interface{}) int {
 	n := 0
 	for _, r := range recordsOfKind(recs, "authorization_grant_event") {
-		if r["event"] == "consumed" {
+		if r["event"] == string(grantConsumedAuthorized) {
 			n++
 		}
 	}

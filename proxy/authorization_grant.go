@@ -41,8 +41,12 @@ const grantCapacity = 64
 type grantRetirement string
 
 const (
-	grantLive       grantRetirement = ""
-	grantConsumed   grantRetirement = "already_consumed"
+	grantLive     grantRetirement = ""
+	grantConsumed grantRetirement = "already_consumed"
+	// grantAttempted: a consumer took it and its claim did not match. It is
+	// spent either way -- taking before validating is what stops a failed
+	// attempt from being a free probe.
+	grantAttempted  grantRetirement = "already_attempted"
 	grantCancelled  grantRetirement = "request_cancelled"
 	grantTerminal   grantRetirement = "terminal_emitted"
 	grantSuperseded grantRetirement = "superseded_by_a_later_decision"
@@ -234,7 +238,11 @@ func mintAuthorizationGrant(ctx *AgentContext, in authorizationInput,
 	}
 	// Overflow refuses BEFORE anything is stored. A capacity check that
 	// evicted would silently retire a grant somebody else is about to spend.
-	if _, exists := ctx.grants[g.ID]; !exists && len(ctx.grants) >= grantCapacity {
+	//
+	// Counts LIVE grants: a spent one holds no authority, so keeping it as a
+	// tombstone -- which is what distinguishes "already spent" from "never
+	// existed" -- must not consume the budget for the next one.
+	if _, exists := ctx.grants[g.ID]; !exists && liveGrantsLocked(ctx) >= grantCapacity {
 		return nil, false, "too many live authorizations for one request"
 	}
 	// A later decision for the same target supersedes the earlier grant. Two
@@ -271,74 +279,122 @@ type grantClaim struct {
 	EvidenceSetID       string
 }
 
-// consumeAuthorizationGrant spends a grant, exactly once.
+// grantAttemptOutcome is the closed vocabulary of what one consumption
+// attempt did. Telemetry writes these and nothing else: no path, no bytes.
+type grantAttemptOutcome string
+
+const (
+	grantConsumedAuthorized grantAttemptOutcome = "consumed_authorized"
+	grantConsumedRefused    grantAttemptOutcome = "consumed_refused"
+	grantAlreadySpent       grantAttemptOutcome = "already_spent"
+	grantNotFound           grantAttemptOutcome = "not_found"
+)
+
+// consumeAuthorizationGrant takes a grant, once, and then decides.
 //
-// Atomic under one lock: the check that it is live and the mark that it is
-// spent cannot be separated, or two concurrent deliveries both pass the check.
-// It re-validates every bound identity against the claim and refuses on the
-// first that differs -- and it never recomputes the decision, because a
-// decision recomputed under new state is a different decision wearing the old
-// one's identity.
+// The order is take-then-validate, and that is the whole point. Validating
+// first and spending only on success makes a failed attempt free, and a free
+// failed attempt is a probe: a caller can present claim after claim against a
+// live licence until one fits, and every near-miss costs it nothing. So the
+// first consumer to reach a live grant BURNS it, and then finds out whether
+// its claim was right.
+//
+// A retry is therefore not a retry. It needs a newly minted decision, with its
+// own decision generation, reached over whatever the state actually is now --
+// which is the honest thing anyway, because a claim that did not match was a
+// claim about a moment this grant was not about.
+//
+// Nothing restores, refreshes or unspends a grant. The only paths out of spent
+// are the ones that were already there: mint a new one, or do not deliver.
 func consumeAuthorizationGrant(ctx *AgentContext, claim grantClaim) (*authorizationGrant, string) {
 	if ctx == nil {
 		return nil, "no request"
 	}
 	target := resolveAgentPath(ctx, claim.TargetPath)
+	// The key is the address. A claim that names no live grant burns nothing,
+	// which is what stops a wrong path, request or invocation from reaching
+	// past its own candidate and exhausting somebody else's licence.
 	key := grantKey(claim.RequestID, claim.InvocationID, claim.CandidateInstanceID, target)
 
+	// --- take -------------------------------------------------------------
 	ctx.grantMu.Lock()
-	defer ctx.grantMu.Unlock()
 	g := ctx.grants[key]
 	if g == nil {
+		ctx.grantMu.Unlock()
 		return nil, "no authorization for this delivery"
 	}
 	if g.retired != grantLive {
-		return nil, string(g.retired)
+		prior := g.retired
+		recordGrantAttempt(ctx, g, grantAlreadySpent, string(prior))
+		ctx.grantMu.Unlock()
+		return nil, string(prior)
 	}
+	// Cancellation is settled here, inside the same critical section, so a
+	// cancel that lands mid-consumption cannot be raced past.
+	if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
+		g.retired = grantCancelled
+		recordGrantAttempt(ctx, g, grantConsumedRefused, string(grantCancelled))
+		ctx.grantMu.Unlock()
+		return nil, string(grantCancelled)
+	}
+	// Taken. From here every path leaves it spent.
+	g.retired = grantAttempted
+	held := *g
+	ctx.grantMu.Unlock()
+
+	// --- then validate ----------------------------------------------------
 	for _, f := range []struct {
 		name       string
 		held, want string
 	}{
-		{"request_id", g.RequestID, claim.RequestID},
-		{"invocation_id", g.InvocationID, claim.InvocationID},
-		{"candidate_instance_id", g.CandidateInstanceID, claim.CandidateInstanceID},
-		{"candidate_hash", g.CandidateHash, claim.CandidateHash},
-		{"target", g.TargetPath, target},
-		{"workspace_state_hash", g.WorkspaceStateHash, claim.WorkspaceStateHash},
-		{"baseline_identity", g.BaselineIdentity, claim.BaselineIdentity},
-		{"baseline_hash", g.BaselineHash, claim.BaselineHash},
-		{"obligation_set", g.ObligationSetID, claim.ObligationSetID},
-		{"evidence_set", g.EvidenceSetID, claim.EvidenceSetID},
+		{"request_id", held.RequestID, claim.RequestID},
+		{"invocation_id", held.InvocationID, claim.InvocationID},
+		{"candidate_instance_id", held.CandidateInstanceID, claim.CandidateInstanceID},
+		{"candidate_hash", held.CandidateHash, claim.CandidateHash},
+		{"target", held.TargetPath, target},
+		{"workspace_state_hash", held.WorkspaceStateHash, claim.WorkspaceStateHash},
+		{"baseline_identity", held.BaselineIdentity, claim.BaselineIdentity},
+		{"baseline_hash", held.BaselineHash, claim.BaselineHash},
+		{"obligation_set", held.ObligationSetID, claim.ObligationSetID},
+		{"evidence_set", held.EvidenceSetID, claim.EvidenceSetID},
 	} {
 		if f.held != f.want {
-			recordGrantEvent(ctx, g, "refused", f.name+"_differs")
-			return nil, f.name + " is not what the authorization was about"
+			return nil, grantRefused(ctx, key, f.name+"_differs",
+				f.name+" is not what the authorization was about")
 		}
 	}
-	if g.BaselineGeneration != claim.BaselineGeneration {
-		recordGrantEvent(ctx, g, "refused", "baseline_generation_differs")
-		return nil, "the target changed since the authorization"
+	if held.BaselineGeneration != claim.BaselineGeneration {
+		return nil, grantRefused(ctx, key, "baseline_generation_differs",
+			"the target changed since the authorization")
 	}
-	if g.BaselineTombstoned != claim.BaselineTombstoned || claim.BaselineTombstoned {
-		recordGrantEvent(ctx, g, "refused", "target_tombstoned")
-		return nil, "the target was deliberately removed"
+	if held.BaselineTombstoned != claim.BaselineTombstoned || claim.BaselineTombstoned {
+		return nil, grantRefused(ctx, key, "target_tombstoned",
+			"the target was deliberately removed")
 	}
-	if g.WorkspaceGeneration != claim.WorkspaceGeneration {
-		recordGrantEvent(ctx, g, "refused", "workspace_generation_differs")
-		return nil, "the workspace moved since the authorization"
-	}
-	// Cancellation is checked last and inside the lock, so a cancel that
-	// lands mid-consumption cannot be raced past.
-	if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
-		g.retired = grantCancelled
-		recordGrantEvent(ctx, g, "retired", string(grantCancelled))
-		return nil, string(grantCancelled)
+	if held.WorkspaceGeneration != claim.WorkspaceGeneration {
+		return nil, grantRefused(ctx, key, "workspace_generation_differs",
+			"the workspace moved since the authorization")
 	}
 
-	g.retired = grantConsumed
-	recordGrantEvent(ctx, g, "consumed", "")
-	spent := *g
-	return &spent, ""
+	ctx.grantMu.Lock()
+	if g := ctx.grants[key]; g != nil {
+		g.retired = grantConsumed
+		recordGrantAttempt(ctx, g, grantConsumedAuthorized, "")
+	}
+	ctx.grantMu.Unlock()
+	return &held, ""
+}
+
+// grantRefused records a mismatch on a grant that is already spent, and
+// returns the caller's reason. It never unspends: a failed attempt that gave
+// the licence back would make probing free.
+func grantRefused(ctx *AgentContext, key, detail, reason string) string {
+	ctx.grantMu.Lock()
+	if g := ctx.grants[key]; g != nil {
+		recordGrantAttempt(ctx, g, grantConsumedRefused, detail)
+	}
+	ctx.grantMu.Unlock()
+	return reason
 }
 
 // retireAuthorizationGrants ends every live grant and refuses future minting.
@@ -371,6 +427,11 @@ func liveGrantCount(ctx *AgentContext) int {
 	}
 	ctx.grantMu.Lock()
 	defer ctx.grantMu.Unlock()
+	return liveGrantsLocked(ctx)
+}
+
+// liveGrantsLocked counts spendable grants. Caller holds grantMu.
+func liveGrantsLocked(ctx *AgentContext) int {
 	n := 0
 	for _, g := range ctx.grants {
 		if g.retired == grantLive {
@@ -378,6 +439,13 @@ func liveGrantCount(ctx *AgentContext) int {
 		}
 	}
 	return n
+}
+
+// recordGrantAttempt writes one consumption attempt to the private shadow
+// sink, in a closed vocabulary. Caller holds grantMu.
+func recordGrantAttempt(ctx *AgentContext, g *authorizationGrant,
+	outcome grantAttemptOutcome, detail string) {
+	recordGrantEvent(ctx, g, string(outcome), detail)
 }
 
 // recordGrantEvent writes one grant transition to the private shadow sink.
