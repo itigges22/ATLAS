@@ -78,6 +78,23 @@ Full project build-command qualification still belongs to the container and
 release levels because it depends on the selected project's dependencies and
 toolchain state.
 
+Candidate staging is verified against a **real executor process**, not a stub,
+by the optional `staging-executor` gate. Isolation, `finally` teardown, and the
+before/after workspace observation are properties of the running executor, and
+a stub can only assert the contract was honoured rather than that it is:
+
+```bash
+python scripts/production-readiness.py --only staging-executor
+python scripts/staging-integration.py          # the same thing, directly
+python scripts/staging-integration.py --keep   # leave the executor running
+```
+
+The runner starts `sandbox/executor_server.py` on a free port against a
+throwaway workspace, points the proxy at the same directory (the alignment
+production requires), runs `proxy/staging_integration_test.go`, and tears it
+down. Without `ATLAS_STAGING_SANDBOX_URL` and `ATLAS_STAGING_SANDBOX_WORKSPACE`
+those Go tests skip with a reason naming what to set — they never pass silently.
+
 Optional checks run when their tools are installed. Missing optional tools are
 reported as `unavailable`, not as successful checks. A missing tool becomes a
 failure when its gate is selected explicitly:
