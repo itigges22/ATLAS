@@ -25,11 +25,21 @@ COPY v3-service/pipeline.py /app/pipeline.py
 # dies at import with the whole suite green. A DELETED one breaks the build
 # instead, which is how evidence.py's retirement surfaced here.
 COPY v3-service/contract.py /app/contract.py
+# obligations.py is the same story, one module later: adapters.py imports it
+# at module scope, the COPY list did not name it, and every image built since
+# died at import while the suite stayed green because the tests import from
+# the source tree. The import-smoke stage below is what stops the next one.
+COPY v3-service/obligations.py /app/obligations.py
 COPY v3-service/private_values.py /app/private_values.py
 COPY v3-service/structured_log.py /app/structured_log.py
 # Structural call-graph reasoning (issue #39): tree-sitter-backed call graph.
 # Pure stdlib + the tree-sitter grammars installed above; no extra deps.
 COPY v3-service/graph/ /app/graph/
+
+# Prove the image can import what it ships. A missing module is a build
+# failure here rather than a service that starts, fails at import and is
+# discovered by a container that will not come up.
+RUN cd /app && python -c "import main, adapters, pipeline, contract, obligations"
 
 # Non-root application account created inside this image. The V3 service
 # writes only to /data/telemetry (stage telemetry, fail-soft) and HOME
