@@ -63,7 +63,7 @@ func TestOnlyOneDeliveryDispositionMeansLanded(t *testing.T) {
 func TestARouteEntryEndsExactlyOnce(t *testing.T) {
 	ctx := lifeCtx(t, "req-disp")
 	entry := mintRouteEntry(ctx)
-	l := newRouteLifecycle(entry, "/w/solve.py")
+	l := newRouteLifecycle(entry)
 	recs := captureShadow(t, func() {
 		l.finish(ctx, routingBaselineRetained, contentSHA256("a"), "")
 		l.finish(ctx, routingCandidateAuthorized, contentSHA256("b"), "")
@@ -83,7 +83,7 @@ func TestARouteEntryEndsExactlyOnce(t *testing.T) {
 
 func TestAnUnclassifiedExitStillEnds(t *testing.T) {
 	ctx := lifeCtx(t, "req-disp")
-	l := newRouteLifecycle(mintRouteEntry(ctx), "/w/solve.py")
+	l := newRouteLifecycle(mintRouteEntry(ctx))
 	recs := captureShadow(t, func() { l.finalizeDefault(ctx) })
 	got := recordsOfKind(recs, "shadow_route_disposition")
 	if len(got) != 1 || got[0]["disposition"] != string(routingUnclassified) {
@@ -172,6 +172,9 @@ func TestGuardTheRouteHasADeferredBackstop(t *testing.T) {
 
 func TestGuardRoutingAndDeliveryAreNotCollapsed(t *testing.T) {
 	s := dispositionSource(t)
+	if strings.Contains(s, `"target_path"`) {
+		t.Error("a canonical path in a shadow record; identity is the join")
+	}
 	for _, want := range []string{"shadow_route_disposition", "shadow_delivery_disposition"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("%s is gone; routing and delivery would be one answer", want)

@@ -91,14 +91,16 @@ func deliveryDispositionLanded(d deliveryDisposition) bool {
 // The owner is created where the entry is minted and finalised by a deferred
 // default, so a branch that forgets to speak still produces a record — the
 // fail-closed one — rather than an entry that never ended.
+// The target is deliberately absent: a canonical path is content-adjacent, the
+// capture is path-free by design, and the route entry already says which
+// invocation this is. A reader joins on identity, never on a path.
 type routeLifecycle struct {
-	entry  routeEntry
-	target string
-	once   sync.Once
+	entry routeEntry
+	once  sync.Once
 }
 
-func newRouteLifecycle(entry routeEntry, target string) *routeLifecycle {
-	return &routeLifecycle{entry: entry, target: target}
+func newRouteLifecycle(entry routeEntry) *routeLifecycle {
+	return &routeLifecycle{entry: entry}
 }
 
 // finish records how this entry ended. The second call and every call after it
@@ -122,7 +124,6 @@ func (l *routeLifecycle) finish(ctx *AgentContext, d routingDisposition,
 			"record_kind":    "shadow_route_disposition",
 			"request_id":     requestIDOf(ctx),
 			"route_entry_id": l.entry.ID,
-			"target_path":    l.target,
 			"disposition":    string(d),
 			// A fact about telemetry, not about policy: this record is written
 			// after the decision it describes and changes nothing.
@@ -198,7 +199,6 @@ func recordDeliveryDisposition(ctx *AgentContext, g *authorizationGrant,
 		"candidate_instance_id":    g.CandidateInstanceID,
 		"candidate_hash":           g.CandidateHash,
 		"grant_id":                 g.ID,
-		"target_path":              g.TargetPath,
 		"disposition":              string(d),
 		"influences_live_decision": false,
 		"build_version":            APIVersion,

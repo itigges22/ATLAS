@@ -1733,7 +1733,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// One owner for how this entry ends, finalised exactly once. The deferred
 	// default means a branch that forgets to speak still records the
 	// fail-closed member instead of leaving an entry that never ended.
-	lifecycle := newRouteLifecycle(entry, resolveAgentPath(ctx, path))
+	lifecycle := newRouteLifecycle(entry)
 	defer lifecycle.finalizeDefault(ctx)
 	if skipped, why := generationSkipped(ctx, observeInvocationFeasibility(ctx, entry)); skipped {
 		// No candidate is generated. The run continues through the same

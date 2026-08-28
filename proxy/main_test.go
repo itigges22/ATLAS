@@ -2583,13 +2583,17 @@ var shadowGuardOwners = map[string]bool{
 	"recordFeasibilityDecision":   true,
 	// Grant transitions. Same shape: one record written per event, nothing
 	// read back, and the grant's own reachability pinned by name elsewhere.
-	"recordGrantEvent":   true,
-	"contractOutputs":    true,
-	"shadowCanonicalSet": true,
-	"shadowHashes":       true,
-	"shadowCompareSets":  true,
-	"shadowHash":         true,
-	"main":               true,
+	"recordGrantEvent": true,
+	// Route and delivery endings. One record per ending, nothing read back,
+	// and both declare themselves inert in the record they write.
+	"(*routeLifecycle).finish":  true,
+	"recordDeliveryDisposition": true,
+	"contractOutputs":           true,
+	"shadowCanonicalSet":        true,
+	"shadowHashes":              true,
+	"shadowCompareSets":         true,
+	"shadowHash":                true,
+	"main":                      true,
 }
 
 // funcIdentity renders a declaration the way shadowGuardOwners keys it.
