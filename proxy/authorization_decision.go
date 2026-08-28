@@ -140,6 +140,13 @@ type authorizationInput struct {
 	CandidateHash string
 	// Identity is what the evidence must bind to.
 	Identity V3EvidenceProvenance
+	// RouteEntry names the entry of the candidate-generation route this
+	// decision answers for. It is separate from Identity on purpose: a
+	// refusal reached before any candidate evidence exists has no invocation
+	// and no candidate instance, and inventing them to have something to
+	// record would be a fabricated identity. The route entry always exists by
+	// the time a decision is made, so a refusal can still be attributed.
+	RouteEntry routeEntry
 	// Evidence is what was actually observed about this candidate.
 	Evidence []proxyEvidence
 	// Envelope is the service's own record, consulted only for adapter
@@ -480,6 +487,7 @@ func recordAuthorizationDecision(ctx *AgentContext, in authorizationInput,
 		"schema_version":        shadowSchemaVersionAuthorization,
 		"record_kind":           "candidate_authorization_decision",
 		"request_id":            in.Identity.RequestID,
+		"route_entry_id":        in.RouteEntry.ID,
 		"invocation_id":         in.Identity.InvocationID,
 		"candidate_instance_id": in.Identity.CandidateInstanceID,
 		"candidate_hash":        in.CandidateHash,

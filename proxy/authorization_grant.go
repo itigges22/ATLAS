@@ -62,7 +62,12 @@ type authorizationGrant struct {
 	// ID is canonical, so two spellings of the same delivery are one grant.
 	ID string
 
-	RequestID           string
+	RequestID string
+	// RouteEntryID is the entry of the candidate-generation route this grant
+	// belongs to. InvocationID is derived from the same entry, and holding it
+	// explicitly keeps a grant attributable even where an invocation identity
+	// was never minted.
+	RouteEntryID        string
 	InvocationID        string
 	CandidateInstanceID string
 	CandidateHash       string
@@ -213,6 +218,7 @@ func mintAuthorizationGrant(ctx *AgentContext, in authorizationInput,
 	g := &authorizationGrant{
 		ID:                  grantKey(id.RequestID, id.InvocationID, id.CandidateInstanceID, target),
 		RequestID:           id.RequestID,
+		RouteEntryID:        in.RouteEntry.ID,
 		InvocationID:        id.InvocationID,
 		CandidateInstanceID: id.CandidateInstanceID,
 		CandidateHash:       id.CandidateHash,
@@ -485,6 +491,7 @@ func recordGrantEvent(ctx *AgentContext, g *authorizationGrant, event, detail st
 		"detail":                detail,
 		"grant_id":              g.ID,
 		"request_id":            g.RequestID,
+		"route_entry_id":        g.RouteEntryID,
 		"invocation_id":         g.InvocationID,
 		"candidate_instance_id": g.CandidateInstanceID,
 		"candidate_hash":        g.CandidateHash,

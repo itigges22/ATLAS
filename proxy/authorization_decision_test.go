@@ -57,7 +57,7 @@ func authorizeCandidateDeliveryDecision(ctx *AgentContext, path, code string,
 	id candidateEvidenceIdentity, envelope *V3EvidenceEnvelope,
 	evidence []proxyEvidence) AuthorizationDecision {
 	observed := fallbackSyntaxOutcomeFor(ctx, path, code).aggregate()
-	return authorizeCandidateDelivery(ctx, path, code, id, envelope,
+	return authorizeCandidateDelivery(ctx, mintRouteEntry(ctx), path, code, id, envelope,
 		evidence, "selected", nil, observed).Decision
 }
 
@@ -68,7 +68,7 @@ func (w *authWorld) authorize(id candidateEvidenceIdentity,
 	// The real observation, so a row that refuses is refused for the reason
 	// production would give rather than for a zero value.
 	observed := fallbackSyntaxOutcomeFor(w.ctx, w.path, w.code).aggregate()
-	return authorizeCandidateDelivery(w.ctx, w.path, w.code, id, envelope,
+	return authorizeCandidateDelivery(w.ctx, mintRouteEntry(w.ctx), w.path, w.code, id, envelope,
 		evidence, "selected", nil, observed)
 }
 

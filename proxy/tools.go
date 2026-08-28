@@ -2023,7 +2023,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// mean exactly those two cases fell through to the legacy decision -- a
 	// candidate landing on a structured request because nothing could speak
 	// for it. The owner handles an empty evidence set: it refuses.
-	delivery := authorizeCandidateDelivery(ctx, path, code, evID,
+	delivery := authorizeCandidateDelivery(ctx, entry, path, code, evID,
 		v3Result.Evidence, observed, selected, unmet, deliveredCheck)
 	// A typed refusal withdraws the candidate. The caller's own content is the
 	// alternative, and it is checked before being restored -- the same rule

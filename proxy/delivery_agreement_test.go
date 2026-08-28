@@ -389,7 +389,7 @@ func TestARepairCandidateIsJudgedOnItsOwnBytes(t *testing.T) {
 	if evID.CandidateInstanceID == first.CandidateInstanceID {
 		t.Error("a repair reused the first delivery's candidate identity")
 	}
-	a := authorizeCandidateDelivery(w.ctx, w.path, repaired, evID, nil,
+	a := authorizeCandidateDelivery(w.ctx, mintRouteEntry(w.ctx), w.path, repaired, evID, nil,
 		[]proxyEvidence{ev}, "selected-repair", nil,
 		fallbackSyntaxOutcomeFor(w.ctx, w.path, repaired).aggregate())
 	if a.Grant != nil && a.Grant.CandidateHash != contentSHA256(repaired) {

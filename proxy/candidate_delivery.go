@@ -73,7 +73,7 @@ func (a deliveryAuthorization) mayDeliver() bool {
 // refused, another timed out. Reporting all of that as "evidence missing" says
 // the candidate had nothing to show for itself, when in truth nothing was
 // checked -- and that is the wrong thing to go and fix.
-func authorizeCandidateDelivery(ctx *AgentContext, path, code string,
+func authorizeCandidateDelivery(ctx *AgentContext, entry routeEntry, path, code string,
 	id candidateEvidenceIdentity, envelope *V3EvidenceEnvelope,
 	evidence []proxyEvidence, selectedCandidateID string,
 	unmet map[string]AuthorizationReason, observed checkOutcome) deliveryAuthorization {
@@ -107,6 +107,7 @@ func authorizeCandidateDelivery(ctx *AgentContext, path, code string,
 		BaselineWitnessCommand:  witness,
 		Unmet:                   unmet,
 		OutputKnowledgeDeclared: declared,
+		RouteEntry:              entry,
 	}
 	d := decideAuthorization(ctx, in)
 	recordAuthorizationDecision(ctx, in, d)
