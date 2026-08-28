@@ -891,6 +891,12 @@ type AgentContext struct {
 	// to, and those are exactly what makes a staged execution worth trusting.
 	StagedCommands []stagedCommandFulfillment
 
+	// routeEntrySeq numbers the entries this request has made into the
+	// candidate-generation route. One write_file call that reaches the route
+	// is one entry, and a retry is a new one -- see routeEntry.
+	routeEntryMu  sync.Mutex
+	routeEntrySeq int
+
 	// v3InvocationSeq numbers the candidate generations this request has
 	// made. One V3 call is one invocation, and evidence about a candidate
 	// from one invocation must never bind to a candidate from another --

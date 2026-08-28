@@ -70,9 +70,9 @@ func TestTheObserversRunAndRecordAttributably(t *testing.T) {
 		"solve.py", secret, true)
 
 	recs := captureShadow(t, func() {
-		observeInvocationFeasibility(w.ctx)
+		observeInvocationFeasibility(w.ctx, mintRouteEntry(w.ctx))
 		outcome := fallbackSyntaxOutcomeFor(w.ctx, w.path, w.code).aggregate()
-		if ev, id, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, w.code, outcome); ok {
+		if ev, id, ok := observeDeliveredCandidateSyntax(w.ctx, mintRouteEntry(w.ctx), w.path, w.code, outcome); ok {
 			authorizeCandidateDelivery(w.ctx, w.path, w.code, id, nil,
 				[]proxyEvidence{ev}, "selected", nil, checkOutcome{Status: ValidationPassed})
 		} else {
@@ -211,12 +211,12 @@ func TestTheObserversAreSilentWithNoSink(t *testing.T) {
 	w := newAuthWorld(t,
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
 		"solve.py", authPy, true)
-	f := observeInvocationFeasibility(w.ctx)
+	f := observeInvocationFeasibility(w.ctx, mintRouteEntry(w.ctx))
 	if !f.Feasible {
 		t.Errorf("feasibility changed with the sink off: %q", f.Reason)
 	}
 	outcome := fallbackSyntaxOutcomeFor(w.ctx, w.path, w.code).aggregate()
-	ev, id, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, w.code, outcome)
+	ev, id, ok := observeDeliveredCandidateSyntax(w.ctx, mintRouteEntry(w.ctx), w.path, w.code, outcome)
 	if !ok {
 		t.Fatal("the producer went silent with the sink off")
 	}

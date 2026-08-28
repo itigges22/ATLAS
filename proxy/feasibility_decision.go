@@ -240,7 +240,8 @@ func anyAdapterMeasures(kind string) bool {
 }
 
 // recordFeasibilityDecision writes the answer to private telemetry.
-func recordFeasibilityDecision(ctx *AgentContext, d FeasibilityDecision, targets int) {
+func recordFeasibilityDecision(ctx *AgentContext, entry routeEntry,
+	d FeasibilityDecision, targets int) {
 	skipped, _ := generationSkipped(ctx, d)
 	sink := activeShadowSink.Load()
 	if !sink.enabled() {
@@ -251,9 +252,13 @@ func recordFeasibilityDecision(ctx *AgentContext, d FeasibilityDecision, targets
 		reason = FeasibilityUnknown
 	}
 	sink.submit(map[string]interface{}{
-		"schema_version":          shadowSchemaVersionFeasibility,
-		"record_kind":             "shadow_invocation_feasibility",
-		"request_id":              requestIDOf(ctx),
+		"schema_version": shadowSchemaVersionFeasibility,
+		"record_kind":    "shadow_invocation_feasibility",
+		"request_id":     requestIDOf(ctx),
+		// Which entry of the candidate-generation route this answers for. A
+		// request may enter it several times; without this the decisions pile
+		// up under one request id and none of them is attributable.
+		"route_entry_id":          entry.ID,
 		"feasible":                d.Feasible,
 		"reason":                  string(reason),
 		"unreachable_obligations": d.Unreachable,
@@ -289,7 +294,7 @@ func sandboxConfigured(ctx *AgentContext) bool {
 	return ctx != nil && strings.TrimSpace(ctx.SandboxURL) != ""
 }
 
-func observeInvocationFeasibility(ctx *AgentContext) FeasibilityDecision {
+func observeInvocationFeasibility(ctx *AgentContext, entry routeEntry) FeasibilityDecision {
 	obs := requestObligations(ctx)
 	targets := authorizedTargets(obs)
 	d := decideInvocationFeasibility(feasibilityInput{
@@ -297,7 +302,7 @@ func observeInvocationFeasibility(ctx *AgentContext) FeasibilityDecision {
 		AuthorizedTargets: targets,
 		Producible:        producibleStrengthsWith(sandboxConfigured(ctx)),
 	})
-	recordFeasibilityDecision(ctx, d, len(targets))
+	recordFeasibilityDecision(ctx, entry, d, len(targets))
 	return d
 }
 

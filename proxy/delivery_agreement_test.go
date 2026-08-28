@@ -381,7 +381,7 @@ func TestARepairCandidateIsJudgedOnItsOwnBytes(t *testing.T) {
 		t.Fatal("the fixture did not deliver")
 	}
 	const repaired = "def solve(values):\n    return sum(values)  # repaired\n"
-	ev, evID, ok := observeDeliveredCandidateSyntax(w.ctx, w.path, repaired,
+	ev, evID, ok := observeDeliveredCandidateSyntax(w.ctx, mintRouteEntry(w.ctx), w.path, repaired,
 		fallbackSyntaxOutcomeFor(w.ctx, w.path, repaired).aggregate())
 	if !ok {
 		t.Fatal("the producer did not observe the repair")
@@ -525,7 +525,7 @@ func TestAnUnavailableStructuralGateRefusesRatherThanDelivers(t *testing.T) {
 	if out.Status != ValidationNotRun {
 		t.Fatalf("gate reported %q with the sandbox down, want not_run", out.Status)
 	}
-	if _, _, produced := observeDeliveredCandidateSyntax(w.ctx, w.path, routeWinner, out); produced {
+	if _, _, produced := observeDeliveredCandidateSyntax(w.ctx, mintRouteEntry(w.ctx), w.path, routeWinner, out); produced {
 		t.Error("a check that did not run produced evidence")
 	}
 

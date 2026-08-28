@@ -1726,7 +1726,11 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// a skipped invocation must not first tell the user a pipeline is running.
 	// Under observe the answer is recorded and generation proceeds exactly as
 	// it did at e8fefe8, whatever it concludes.
-	if skipped, why := generationSkipped(ctx, observeInvocationFeasibility(ctx)); skipped {
+	// One entry of the candidate-generation route, named before anything is
+	// decided about it. Every record this attempt produces carries it, so a
+	// retry's work can never be mistaken for this one's.
+	entry := mintRouteEntry(ctx)
+	if skipped, why := generationSkipped(ctx, observeInvocationFeasibility(ctx, entry)); skipped {
 		// No candidate is generated. The run continues through the same
 		// direct-write path a V3 outage takes, so nothing about the plan, the
 		// prompt, recovery, the terminal rules, permissions or the completion
@@ -1749,6 +1753,11 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	}
 	Emit(NewEnvelope(EvtStageStart, "v3", map[string]interface{}{
 		"detail": fmt.Sprintf("file=%s", filepath.Base(path)),
+		// Additive: an existing consumer sees the field it always saw. This
+		// one names which entry of the route generated, so an observer can
+		// pair a generation with its own feasibility decision instead of
+		// counting events.
+		"route_entry": entry.ID,
 	}))
 	v3Start := time.Now()
 
@@ -1993,7 +2002,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	var observed []proxyEvidence
 	var evID candidateEvidenceIdentity
 	var unmet map[string]AuthorizationReason
-	if ev, id, seen := observeDeliveredCandidateSyntax(ctx, path, code, deliveredCheck); seen {
+	if ev, id, seen := observeDeliveredCandidateSyntax(ctx, entry, path, code, deliveredCheck); seen {
 		observed, evID = []proxyEvidence{ev}, id
 		// THE production call path for the client-declared verification
 		// producer. It stages these exact bytes in a workspace that is not the

@@ -34,7 +34,7 @@ func newAuthWorld(t *testing.T, contract, filename, code string, valid bool) *au
 func (w *authWorld) observe(t *testing.T) (proxyEvidence, candidateEvidenceIdentity, bool) {
 	t.Helper()
 	outcome := fallbackSyntaxOutcomeFor(w.ctx, w.path, w.code).aggregate()
-	return observeDeliveredCandidateSyntax(w.ctx, w.path, w.code, outcome)
+	return observeDeliveredCandidateSyntax(w.ctx, mintRouteEntry(w.ctx), w.path, w.code, outcome)
 }
 
 // stage runs the client-declared producer through the real staging wiring
@@ -472,7 +472,7 @@ func TestAuthorizationMatrix(t *testing.T) {
 		}
 		// A second invocation of the same request. Its identity is different,
 		// and the earlier record may not stand in for it.
-		other := nextInvocationIdentity(w.ctx, w.hash)
+		other := nextInvocationIdentity(w.ctx, mintRouteEntry(w.ctx), w.hash)
 		d := w.decide(other, append([]proxyEvidence{ev}, behavioral...)...)
 		expectReason(t, "another invocation", d, false, ReasonRequestOrInvocationMismatch)
 	})

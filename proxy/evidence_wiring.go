@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"strings"
 )
 
@@ -65,25 +64,22 @@ type candidateEvidenceIdentity struct {
 // two invocations for the same bytes differ by sequence. Neither can be
 // mistaken for the other, which is what stops one candidate's evidence binding
 // to another's.
-func nextInvocationIdentity(ctx *AgentContext, candidateHash string) candidateEvidenceIdentity {
+func nextInvocationIdentity(ctx *AgentContext, entry routeEntry,
+	candidateHash string) candidateEvidenceIdentity {
 	if ctx == nil || strings.TrimSpace(candidateHash) == "" {
 		return candidateEvidenceIdentity{}
 	}
-	ctx.v3InvocationMu.Lock()
-	ctx.v3InvocationSeq++
-	seq := ctx.v3InvocationSeq
-	ctx.v3InvocationMu.Unlock()
-
-	request := requestIDOf(ctx)
-	if strings.TrimSpace(request) == "" {
-		// Without a request there is nothing to bind to, and an identity that
-		// binds to nothing is worse than none.
+	// The invocation IS the route entry that produced it. Minting a second
+	// identity here would leave the feasibility decision on one side of the
+	// chain and every downstream record on the other, which is the join the
+	// route entry exists to close. An entry that could not be named produces
+	// no invocation rather than an unattributable one.
+	if !entry.valid() {
 		return candidateEvidenceIdentity{}
 	}
-	invocation := fmt.Sprintf("%s:inv:%d", request, seq)
 	return candidateEvidenceIdentity{
-		InvocationID:        invocation,
-		CandidateInstanceID: invocation + ":" + candidateHash[:16],
+		InvocationID:        entry.ID,
+		CandidateInstanceID: entry.ID + ":" + candidateHash[:16],
 	}
 }
 
@@ -98,7 +94,7 @@ func nextInvocationIdentity(ctx *AgentContext, candidateHash string) candidateEv
 // Returns the evidence for the caller's own inspection in tests. Production
 // ignores the return value: the record goes to private telemetry and the
 // delivery decision above is unchanged.
-func observeDeliveredCandidateSyntax(ctx *AgentContext, path, code string,
+func observeDeliveredCandidateSyntax(ctx *AgentContext, entry routeEntry, path, code string,
 	outcome checkOutcome) (proxyEvidence, candidateEvidenceIdentity, bool) {
 	if ctx == nil || ctx.TaskContract == nil {
 		return proxyEvidence{}, candidateEvidenceIdentity{}, false
@@ -128,7 +124,7 @@ func observeDeliveredCandidateSyntax(ctx *AgentContext, path, code string,
 	}
 
 	hash := contentSHA256(code)
-	id := nextInvocationIdentity(ctx, hash)
+	id := nextInvocationIdentity(ctx, entry, hash)
 	ev, ok := produceSyntaxEvidence(ctx, syntaxEvidenceRequest{
 		Obligation:          syntax,
 		Path:                path,
