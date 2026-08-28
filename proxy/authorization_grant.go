@@ -254,11 +254,7 @@ func mintAuthorizationGrant(ctx *AgentContext, in authorizationInput,
 	// A later decision for the same target supersedes the earlier grant. Two
 	// live licences for one delivery is the state this whole type exists to
 	// make impossible.
-	for _, other := range ctx.grants {
-		if other.retired == grantLive && other.TargetPath == g.TargetPath && other.ID != g.ID {
-			other.retired = grantSuperseded
-		}
-	}
+	supersedeGrantsForTarget(ctx, g)
 	ctx.grantSeq++
 	g.DecisionGeneration = ctx.grantSeq
 	ctx.grants[g.ID] = g
@@ -411,6 +407,37 @@ func grantConsumedForCandidate(ctx *AgentContext, requestID, invocationID,
 		g.RequestID == requestID && g.InvocationID == invocationID &&
 		g.CandidateInstanceID == candidateInstanceID &&
 		g.TargetPath == canonicalTarget && g.CandidateHash == candidateHash
+}
+
+// supersedeGrantsForTarget retires every live grant for the same target.
+//
+// It records the retirement. Before, the state changed and nothing was
+// written, so a superseded grant simply stopped appearing: three of the seven
+// grants in the v6 acquisition ended that way, and "minted, never seen again"
+// was indistinguishable from a dropped record.
+//
+// The caller already holds ctx.grantMu.
+func supersedeGrantsForTarget(ctx *AgentContext, g *authorizationGrant) {
+	if ctx == nil || g == nil {
+		return
+	}
+	for _, other := range ctx.grants {
+		if other.retired == grantLive && other.TargetPath == g.TargetPath && other.ID != g.ID {
+			other.retired = grantSuperseded
+			recordGrantEvent(ctx, other, "retired", string(grantSuperseded))
+		}
+	}
+}
+
+// knownGrantRetirement is the closed set of endings a grant may have. A cause
+// outside it is a cause nothing can reconcile.
+func knownGrantRetirement(r grantRetirement) bool {
+	switch r {
+	case grantConsumed, grantAttempted, grantCancelled, grantTerminal,
+		grantSuperseded, grantSessionEnd:
+		return true
+	}
+	return false
 }
 
 // grantRefused records a mismatch on a grant that is already spent, and
