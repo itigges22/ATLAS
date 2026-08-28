@@ -3833,6 +3833,9 @@ const (
 	shadowSchemaVersionAuthorization = 1
 	// One observe-only invocation feasibility answer.
 	shadowSchemaVersionFeasibility = 1
+	// How one route entry ended, and what became of the licence it minted.
+	shadowSchemaVersionRouteDisposition    = 1
+	shadowSchemaVersionDeliveryDisposition = 1
 )
 
 // canonicalSource keeps an unknown decision source out of the record. The

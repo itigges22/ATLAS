@@ -268,6 +268,7 @@ func deliverAuthorizedCandidate(ctx *AgentContext, path, code string,
 	}
 	if out.Delivered {
 		result.AuthorizedDeliveryHash = g.CandidateHash
+		markGrantDelivery(ctx, spent.ID, deliveryConsumedAndLanded)
 		// The only writer of a settlement record, and only for a delivery
 		// whose exact authorized bytes were just confirmed on disk. Nothing
 		// else can produce one, which is what stops a successful tool result
@@ -292,6 +293,7 @@ func deliverAuthorizedCandidate(ctx *AgentContext, path, code string,
 	// valid to return to.
 	log.Printf("[write_file] authorized delivery for %s did not settle (%s)",
 		logPath(path), out.Reason)
+	markGrantDelivery(ctx, spent.ID, deliveryConsumedDidNotSettle)
 	if dec := restoreDeliverable(ctx, ledgerKey(ctx, resolved)); dec.Restored {
 		out.Restored = true
 	}

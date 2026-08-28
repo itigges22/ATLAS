@@ -86,6 +86,9 @@ type authorizationGrant struct {
 	// thing that was authorized.
 	BaselineGeneration int
 	BaselineTombstoned bool
+	// baselineRetained marks a grant the route minted over the caller's own
+	// bytes and then kept: no delivery was ever attempted and none was owed.
+	baselineRetained bool
 
 	// ObligationSetID and EvidenceSetID name the exact sets the decision was
 	// reached over. A grant minted against one set may not be spent after
@@ -104,6 +107,8 @@ type authorizationGrant struct {
 	DecisionGeneration int
 
 	retired grantRetirement
+	// deliveryRecorded keeps the delivery lifecycle to exactly one ending.
+	deliveryRecorded bool
 }
 
 // grantKey is the canonical identity of a grant.
@@ -336,6 +341,7 @@ func consumeAuthorizationGrant(ctx *AgentContext, claim grantClaim) (*authorizat
 	if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
 		g.retired = grantCancelled
 		recordGrantAttempt(ctx, g, grantConsumedRefused, string(grantCancelled))
+		recordDeliveryDisposition(ctx, g, deliveryCancelled)
 		ctx.grantMu.Unlock()
 		return nil, string(grantCancelled)
 	}
@@ -425,6 +431,7 @@ func supersedeGrantsForTarget(ctx *AgentContext, g *authorizationGrant) {
 		if other.retired == grantLive && other.TargetPath == g.TargetPath && other.ID != g.ID {
 			other.retired = grantSuperseded
 			recordGrantEvent(ctx, other, "retired", string(grantSuperseded))
+			recordDeliveryDisposition(ctx, other, deliveryNotAttemptedSuperseded)
 		}
 	}
 }
@@ -447,6 +454,7 @@ func grantRefused(ctx *AgentContext, key, detail, reason string) string {
 	ctx.grantMu.Lock()
 	if g := ctx.grants[key]; g != nil {
 		recordGrantAttempt(ctx, g, grantConsumedRefused, detail)
+		recordDeliveryDisposition(ctx, g, deliveryRefusedAtConsumption)
 	}
 	ctx.grantMu.Unlock()
 	return reason
@@ -468,6 +476,18 @@ func retireAuthorizationGrants(ctx *AgentContext, reason grantRetirement) int {
 		if g.retired == grantLive {
 			g.retired = reason
 			recordGrantEvent(ctx, g, "retired", string(reason))
+			end := deliveryRetiredAtTerminal
+			switch reason {
+			case grantCancelled:
+				end = deliveryCancelled
+			case grantTerminal:
+				// The route kept the caller's own bytes and never attempted a
+				// delivery, so say that rather than only naming the sweep.
+				if g.baselineRetained {
+					end = deliveryNotAttemptedBaseline
+				}
+			}
+			recordDeliveryDisposition(ctx, g, end)
 			n++
 		}
 	}

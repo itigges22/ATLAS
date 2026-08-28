@@ -1730,6 +1730,11 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// decided about it. Every record this attempt produces carries it, so a
 	// retry's work can never be mistaken for this one's.
 	entry := mintRouteEntry(ctx)
+	// One owner for how this entry ends, finalised exactly once. The deferred
+	// default means a branch that forgets to speak still records the
+	// fail-closed member instead of leaving an entry that never ended.
+	lifecycle := newRouteLifecycle(entry, resolveAgentPath(ctx, path))
+	defer lifecycle.finalizeDefault(ctx)
 	if skipped, why := generationSkipped(ctx, observeInvocationFeasibility(ctx, entry)); skipped {
 		// No candidate is generated. The run continues through the same
 		// direct-write path a V3 outage takes, so nothing about the plan, the
@@ -1738,6 +1743,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		// is invented for a pipeline that never ran.
 		log.Printf("[write_file] no closure path for %s (%s) — writing directly",
 			logPath(path), why)
+		lifecycle.finish(ctx, routingSkippedInfeasible, "", AuthorizationReason(why))
 		return writeWithoutCandidate(ctx, path, baselineContent,
 			"  \u2514\u2500 no structured closure path — writing your version")
 	}
@@ -1910,6 +1916,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		// so nothing should land on disk.
 		if errors.Is(err, context.Canceled) || (ctx.Ctx != nil && ctx.Ctx.Err() != nil) {
 			log.Printf("[write_file] V3 aborted by cancellation — not writing %s", path)
+			lifecycle.finish(ctx, routingCancelled, "", "")
 			return &ToolResult{
 				Success: false,
 				Error:   "write_file cancelled — no content was written",
@@ -1920,6 +1927,11 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		// call writing a SyntaxError to disk with success=true is how the
 		// mini-bench got its two broken files (t06/t09).
 		log.Printf("[write_file] V3 failed: %s — falling back to direct write", err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			lifecycle.finish(ctx, routingProducerTimedOut, "", "")
+		} else {
+			lifecycle.finish(ctx, routingProducerUnavailable, "", "")
+		}
 		msg := "  \u2514\u2500 V3 unavailable, writing directly"
 		if errors.Is(err, context.DeadlineExceeded) {
 			msg = fmt.Sprintf("  \u2514\u2500 V3 exceeded %s cap, writing your version", v3CallTimeout())
@@ -2029,6 +2041,8 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// alternative, and it is checked before being restored -- the same rule
 	// every other gate on this path follows.
 	if authorizedV3 && !delivery.mayDeliver() {
+		lifecycle.finish(ctx, routingAuthorizationRefused, contentSHA256(code),
+			AuthorizationReason(delivery.Refusal))
 		baseCheck := fallbackSyntaxOutcomeFor(ctx, path, baselineContent).aggregate()
 		if baseCheck.Status == ValidationFailed {
 			return &ToolResult{Success: false,
@@ -2233,6 +2247,11 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	}
 
 	if fellBack || !authorizedV3 {
+		// The caller's own bytes are what lands. Any grant minted over them was
+		// never owed a delivery, and says so through its own lifecycle.
+		markBaselineRetainedGrant(ctx, delivery)
+		lifecycle.finish(ctx, routingBaselineRetained, contentSHA256(code),
+			AuthorizationReason(delivery.Refusal))
 		// Authorization governs METADATA as well as bytes: reporting
 		// V3Used/score/phase/evidence over content V3 did not author is the
 		// same false claim in a different field, and it fires the agent's
@@ -2253,6 +2272,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// route that a typed request can reach. Everything it needs is re-read
 	// from disk inside it: the grant froze a moment and this is a later one.
 	if delivery.Typed {
+		lifecycle.finish(ctx, routingCandidateAuthorized, contentSHA256(code), "")
 		result, outcome, err := deliverAuthorizedCandidate(ctx, path, code,
 			delivery.Grant, final, delivery.MetCommands, delivery.BaselinePreserved)
 		if err != nil {
