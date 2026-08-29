@@ -1999,6 +1999,25 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// rather than a discipline each branch below has to remember.
 	deliveredCheck := fallbackSyntaxOutcomeFor(ctx, path, code).aggregate()
 	checkedFor := code
+
+	// A RETAINED BASELINE IS NOT A CANDIDATE.
+	//
+	// When nothing the evidence authorizes came back, `code` is the caller's
+	// own proposal. Staging it, taking an authorization decision over it and
+	// minting a one-time licence for it describes a delivery that is not going
+	// to happen: the branch below writes those same bytes directly and the
+	// licence retires unused. Measured live: nine grants minted, zero delivery
+	// attempts, and a reader could not tell a retained baseline from an
+	// undelivered candidate.
+	//
+	// The route is still recorded as contemplated -- the feasibility decision
+	// and the routing ending both stand -- and the bytes, the ledger effect,
+	// the validation and the terminal outcome are exactly what they were.
+	if !authorizedV3 && code == baselineContent {
+		lifecycle.finish(ctx, routingBaselineRetained, "", "")
+		fbRes, fbErr := writeFileRecorded(path, code, ctx)
+		return applyRouteObservation(fbRes, fbErr, deliveredCheck)
+	}
 	// THE production call path for the proxy-owned syntax producer. It sits
 	// here because this is the one moment the bytes are fixed and the gate has
 	// just reported on exactly those bytes: the verdict is handed over, never
