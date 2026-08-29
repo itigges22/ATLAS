@@ -856,12 +856,16 @@ func TestEveryEditToolObeysTheAuthorizationBoundary(t *testing.T) {
 				onDisk, _ := os.ReadFile(path)
 
 				if mode.authorized {
-					if string(onDisk) != candidate {
-						t.Fatalf("authorized candidate did not land:\n got %q\nwant %q",
-							onDisk, candidate)
-					}
-					if !res.V3Used || res.PhaseSolved != "phase1" {
-						t.Errorf("authorized delivery lost its provenance: %+v", res)
+					// The envelope is a proposal, not proxy authority. This
+					// request states no output knowledge, so no typed
+					// authorization exists to license a replacement and the
+					// caller's own edit is what stays -- the same rule the
+					// new-file route has always applied to a contractless
+					// request, now applied to the edit routes as well.
+					if string(onDisk) != tool.edited {
+						t.Fatalf("a service envelope landed bytes for a request that "+
+							"declared no outputs:\n got %q\nwant the caller's edit %q",
+							onDisk, tool.edited)
 					}
 					return
 				}

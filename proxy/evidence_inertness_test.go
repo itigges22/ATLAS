@@ -60,6 +60,14 @@ func TestEveryProductionConsumerOfProvenanceIsEnumerated(t *testing.T) {
 		// mints. Exactly one of each, pinned by name below.
 		"candidate_delivery.go:authorizeCandidateDelivery": true,
 		"candidate_delivery.go:deliverAuthorizedCandidate": true,
+		// THE shared delivery owner: it spends the grant a route minted and
+		// is the only implementation of the exact-byte write, the post-write
+		// check, settlement and restoration.
+		"candidate_delivery.go:deliverCandidateBytes": true,
+		// The protected edit route. It asks the same owners the write route
+		// asks, and observes feasibility without consulting the answer --
+		// pinned separately by the feasibility guard.
+		"edit_route_delivery.go:deliverEditCandidate": true,
 		// The decision's own refusal classifier, called from the decision.
 		"authorization_decision.go:decideAuthorization": true,
 		// The one site that computes the shadow decision beside the live one,
@@ -146,12 +154,15 @@ func TestNoProducerReachesTheDeliveryGraph(t *testing.T) {
 // paths for one candidate is the state this pins against.
 func TestExactlyOneLiveAuthorizationOwnerAnswersForACandidate(t *testing.T) {
 	files := proxyFiles(t)
+	// One owner each, whatever the route. There are now two protected routes
+	// -- the new file and the edit -- and they share every owner below rather
+	// than each keeping a copy: two grant implementations or two settlement
+	// writers is the state this pins against.
 	for _, c := range []struct{ fn, site string }{
-		{"authorizeCandidateDelivery", "tools.go:writeFileWithV3"},
-		{"deliverAuthorizedCandidate", "tools.go:writeFileWithV3"},
-		{"consumeAuthorizationGrant", "candidate_delivery.go:deliverAuthorizedCandidate"},
+		{"consumeAuthorizationGrant", "candidate_delivery.go:deliverCandidateBytes"},
 		{"mintAuthorizationGrant", "candidate_delivery.go:authorizeCandidateDelivery"},
 		{"decideAuthorization", "candidate_delivery.go:authorizeCandidateDelivery"},
+		{"recordDeliverySettlement", "candidate_delivery.go:deliverCandidateBytes"},
 	} {
 		sites := callSites(files, c.fn)
 		if len(sites) != 1 {
@@ -160,6 +171,16 @@ func TestExactlyOneLiveAuthorizationOwnerAnswersForACandidate(t *testing.T) {
 		}
 		if _, ok := sites[c.site]; !ok {
 			t.Errorf("%s is called from %v, want %s", c.fn, sites, c.site)
+		}
+	}
+	// The routes that may ask for authorization at all are exactly the
+	// registered V3 byte-delivery routes. A new caller is a new way for
+	// service bytes to reach disk and has to be registered to exist.
+	for _, fn := range []string{"authorizeCandidateDelivery", "deliverCandidateBytes"} {
+		for site := range callSites(files, fn) {
+			if !registeredV3DeliveryRoute(site) {
+				t.Errorf("%s is called from unregistered route %s", fn, site)
+			}
 		}
 	}
 	// And the superseded observe-only owner is gone rather than left beside

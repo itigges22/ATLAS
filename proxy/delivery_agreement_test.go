@@ -430,11 +430,28 @@ func TestALaterMutationAfterSettlementIsVisible(t *testing.T) {
 func TestFeasibilityIsReadAtExactlyOnePlace(t *testing.T) {
 	files := proxyFiles(t)
 	sites := callSites(files, "observeInvocationFeasibility")
-	if len(sites) != 1 {
-		t.Fatalf("feasibility is observed from %v, want exactly one place", sites)
+	// Two routes observe it, and only one may act on it. The edit route
+	// records the answer and never consults it: adding protection there must
+	// not quietly start skipping generation, and any compute saving on that
+	// route needs its own measurement and its own authorization.
+	want := map[string]bool{
+		"tools.go:writeFileWithV3":                    true,
+		"edit_route_delivery.go:deliverEditCandidate": true,
 	}
-	if _, ok := sites["tools.go:writeFileWithV3"]; !ok {
-		t.Errorf("feasibility is observed from %v, not the generation site", sites)
+	for site := range sites {
+		if !want[site] {
+			t.Errorf("feasibility is observed from unexpected %s", site)
+		}
+	}
+	for site := range want {
+		if _, ok := sites[site]; !ok {
+			t.Errorf("%s no longer observes feasibility", site)
+		}
+	}
+	// The edit route observes and does not act: it never turns the answer
+	// into a decision.
+	if _, acts := callSites(files, "generationSkipped")["edit_route_delivery.go:deliverEditCandidate"]; acts {
+		t.Error("the edit route consults the feasibility answer; that is a policy change")
 	}
 	// Exactly one function turns the answer into an action, and it is the
 	// mode owner.

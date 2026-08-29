@@ -184,9 +184,50 @@ type deliveryOutcome struct {
 // delivery and leaves the mutation debt standing. A validation failure after
 // the write never reports delivered, and restores an eligible baseline where
 // one structurally exists.
+// candidateDeliveryRequest is one delivery, described by the route that owns
+// it. Everything tool-specific arrives here as a parameter so the owner below
+// stays the only implementation of grant consumption, the exact-byte write,
+// the post-write hash check, settlement and restoration.
+//
+// Write is the originating tool's own write, because the result a caller
+// returns has to be that tool's result: an edit must not answer with a
+// write_file payload, or the loop's tool-call accounting and mutation debt
+// describe a call that never happened.
+type candidateDeliveryRequest struct {
+	Tool              string
+	Path              string
+	Code              string
+	Grant             *authorizationGrant
+	Observed          checkOutcome
+	MetCommands       []string
+	BaselinePreserved bool
+	Write             func(path, code string, ctx *AgentContext) (*ToolResult, error)
+}
+
+// deliverAuthorizedCandidate is the new-file route's spelling of the owner.
 func deliverAuthorizedCandidate(ctx *AgentContext, path, code string,
 	g *authorizationGrant, observed checkOutcome, met []string,
 	baselinePreserved bool) (*ToolResult, deliveryOutcome, error) {
+	return deliverCandidateBytes(ctx, candidateDeliveryRequest{
+		Tool: "write_file", Path: path, Code: code, Grant: g,
+		Observed: observed, MetCommands: met,
+		BaselinePreserved: baselinePreserved, Write: writeFileRecorded,
+	})
+}
+
+// deliverCandidateBytes is THE owner of candidate delivery, for every route.
+func deliverCandidateBytes(ctx *AgentContext,
+	req candidateDeliveryRequest) (*ToolResult, deliveryOutcome, error) {
+	path, code, g := req.Path, req.Code, req.Grant
+	observed, met, baselinePreserved := req.Observed, req.MetCommands, req.BaselinePreserved
+	tool := req.Tool
+	if tool == "" {
+		tool = "write_file"
+	}
+	write := req.Write
+	if write == nil {
+		write = writeFileRecorded
+	}
 	out := deliveryOutcome{}
 	if ctx == nil || g == nil {
 		out.Reason = "no authorization"
@@ -228,7 +269,7 @@ func deliverAuthorizedCandidate(ctx *AgentContext, path, code string,
 	spent, why := consumeAuthorizationGrant(ctx, claim)
 	if spent == nil {
 		out.Reason = why
-		log.Printf("[write_file] authorization not spendable for %s (%s)", logPath(path), why)
+		log.Printf("[%s] authorization not spendable for %s (%s)", tool, logPath(path), why)
 		return nil, out, errNoMutation(errDeliveryUnauthorized)
 	}
 
@@ -237,7 +278,7 @@ func deliverAuthorizedCandidate(ctx *AgentContext, path, code string,
 	priorGeneration := targetGeneration(ctx, resolved)
 
 	// (7) and (8): the existing write path, handed the exact authorized bytes.
-	result, err := writeFileRecorded(path, code, ctx)
+	result, err := write(path, code, ctx)
 	if err != nil {
 		// The candidate never became an artifact. No delivery is claimed and
 		// the mutation debt the write path recorded stands.
@@ -291,8 +332,8 @@ func deliverAuthorizedCandidate(ctx *AgentContext, path, code string,
 	// baseline where one structurally exists -- restoration rehashes disk and
 	// the ledger for itself, and declines when there is nothing demonstrably
 	// valid to return to.
-	log.Printf("[write_file] authorized delivery for %s did not settle (%s)",
-		logPath(path), out.Reason)
+	log.Printf("[%s] authorized delivery for %s did not settle (%s)",
+		tool, logPath(path), out.Reason)
 	markGrantDelivery(ctx, spent.ID, deliveryConsumedDidNotSettle)
 	if dec := restoreDeliverable(ctx, ledgerKey(ctx, resolved)); dec.Restored {
 		out.Restored = true

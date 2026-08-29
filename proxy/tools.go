@@ -2000,24 +2000,6 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	deliveredCheck := fallbackSyntaxOutcomeFor(ctx, path, code).aggregate()
 	checkedFor := code
 
-	// A RETAINED BASELINE IS NOT A CANDIDATE.
-	//
-	// When nothing the evidence authorizes came back, `code` is the caller's
-	// own proposal. Staging it, taking an authorization decision over it and
-	// minting a one-time licence for it describes a delivery that is not going
-	// to happen: the branch below writes those same bytes directly and the
-	// licence retires unused. Measured live: nine grants minted, zero delivery
-	// attempts, and a reader could not tell a retained baseline from an
-	// undelivered candidate.
-	//
-	// The route is still recorded as contemplated -- the feasibility decision
-	// and the routing ending both stand -- and the bytes, the ledger effect,
-	// the validation and the terminal outcome are exactly what they were.
-	if !authorizedV3 && code == baselineContent {
-		lifecycle.finish(ctx, routingBaselineRetained, "", "")
-		fbRes, fbErr := writeFileRecorded(path, code, ctx)
-		return applyRouteObservation(fbRes, fbErr, deliveredCheck)
-	}
 	// THE production call path for the proxy-owned syntax producer. It sits
 	// here because this is the one moment the bytes are fixed and the gate has
 	// just reported on exactly those bytes: the verdict is handed over, never
@@ -2030,10 +2012,25 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// falling through to a candidate the envelope happened to like. For a
 	// request that declared nothing there is no typed answer to give, so
 	// `authorizedV3` stands exactly as it did.
+	// A RETAINED BASELINE IS NOT A CANDIDATE.
+	//
+	// When nothing the evidence authorizes came back, `code` is the caller's
+	// own proposal. Staging it, taking an authorization decision over it and
+	// minting a one-time licence for it describes a delivery that is not going
+	// to happen: the fallback below writes those same bytes directly and the
+	// licence retires unused. Measured live: nine grants minted, zero delivery
+	// attempts, and a reader could not tell a retained baseline from an
+	// undelivered candidate.
+	//
+	// Everything else on the route is untouched -- the structural gate, the
+	// cancellation window, the final-byte invariant and the fallback write all
+	// still run, and the route is still recorded as contemplated.
+	candidateProposed := authorizedV3 || code != baselineContent
+
 	var observed []proxyEvidence
 	var evID candidateEvidenceIdentity
 	var unmet map[string]AuthorizationReason
-	if ev, id, seen := observeDeliveredCandidateSyntax(ctx, entry, path, code, deliveredCheck); seen {
+	if ev, id, seen := observeDeliveredCandidateSyntax(ctx, entry, path, code, deliveredCheck); seen && candidateProposed {
 		observed, evID = []proxyEvidence{ev}, id
 		// THE production call path for the client-declared verification
 		// producer. It stages these exact bytes in a workspace that is not the
@@ -2054,8 +2051,11 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// mean exactly those two cases fell through to the legacy decision -- a
 	// candidate landing on a structured request because nothing could speak
 	// for it. The owner handles an empty evidence set: it refuses.
-	delivery := authorizeCandidateDelivery(ctx, entry, path, code, evID,
-		v3Result.Evidence, observed, selected, unmet, deliveredCheck)
+	var delivery deliveryAuthorization
+	if candidateProposed {
+		delivery = authorizeCandidateDelivery(ctx, entry, path, code, evID,
+			v3Result.Evidence, observed, selected, unmet, deliveredCheck)
+	}
 	// A typed refusal withdraws the candidate. The caller's own content is the
 	// alternative, and it is checked before being restored -- the same rule
 	// every other gate on this path follows.
@@ -2710,11 +2710,18 @@ func editFileTool() *ToolDef {
 			// AND-gate) — having two separate tier checks meant V3 only
 			// Same pipeline entry every content edit uses; see
 			// runEditPipeline for why it is shared rather than inlined.
-			piped, v3Out, cancelled := runEditPipeline(ctx, "edit_file", path, input.Path, content, newContent)
-			if cancelled != nil {
-				return cancelled, nil
+			route := runEditPipeline(ctx, "edit_file", path, input.Path, content, newContent)
+			if route.Cancelled != nil {
+				return route.Cancelled, nil
 			}
-			newContent = piped
+			if route.Delivered {
+				// The candidate landed through the protected chain. Writing the
+				// caller's own edit now would undo a delivery that settlement
+				// and restoration already decided about.
+				return attachV3(route.Result, route.Meta), nil
+			}
+			v3Out := route.Meta
+			newContent = route.Content
 
 			// Syntax gate on the composed result. A truncated new_str (or a
 			// string-level edit that broke the file) must not land when V3
@@ -3053,23 +3060,24 @@ func structuralEditTool() *ToolDef {
 			if fileTier >= Tier2Medium && editWarrantsV3(finalContent, cc, ccOK) && ctx.V3URL != "" && ctx.V3GenerationEnabled() &&
 				!isActiveDebugIteration(ctx, input.Path) {
 				log.Printf("[structural_edit] V3 pipeline activating for %s (oldTier=%d newTier=%d max=%d, req_tier=%d, cc=%d) post-structural-edit", input.Path, oldTier, newTier, fileTier, ctx.Tier, cc)
-				improved, meta, err := improveContentWithV3(path, finalContent, ctx)
-				if err != nil {
-					// User cancellation is not a fallback case — the turn
-					// was aborted, so nothing should land on disk.
-					if errors.Is(err, context.Canceled) || (ctx.Ctx != nil && ctx.Ctx.Err() != nil) {
-						log.Printf("[structural_edit] V3 aborted by cancellation — not writing %s", input.Path)
-						return noMutation("structural_edit cancelled — no content was written"), nil
-					}
-					log.Printf("[structural_edit] V3 failed: %v — falling back to structurally edited content", err)
-				} else if drift := v3RewroteBeyondTheEdit(source, finalContent, improved); drift != "" {
-					log.Printf("[structural_edit] discarding V3 candidate for %s — %s; keeping the caller's content", logPath(input.Path), drift)
-				} else if swapped := v3SwappedTheLanguage(input.Path, finalContent, improved); swapped != "" {
-					log.Printf("[structural_edit] discarding V3 candidate for %s — %s; keeping the caller's content", logPath(input.Path), swapped)
-				} else if improved != "" {
-					finalContent = improved
-					v3Out = meta
+				// THE protected edit route, same owner as the other three edit
+				// tools: a service proposal reaches disk only through the
+				// evidence, authorization, one-time grant, exact-byte delivery,
+				// ledger, validation and settlement chain, and otherwise the
+				// caller's own structurally edited content is what stays.
+				route := deliverEditCandidate(ctx, "structural_edit", path,
+					input.Path, source, finalContent)
+				if route.Cancelled != nil {
+					return noMutation("structural_edit cancelled — no content was written"), nil
 				}
+				if route.Delivered {
+					// The candidate landed through the protected chain.
+					// Writing the caller's own content now would undo a
+					// delivery settlement and restoration already decided.
+					return attachV3(route.Result, route.Meta), nil
+				}
+				finalContent = route.Content
+				v3Out = route.Meta
 			}
 
 			// Structural gate (#147): the structural splice guarantees the result
@@ -3620,11 +3628,18 @@ func insertAfterTool() *ToolDef {
 			// producing one greedy sample with no candidate generation and no
 			// lens scoring, which is exactly what the tier system exists to
 			// prevent.
-			piped, v3Out, cancelled := runEditPipeline(ctx, "insert_after", path, in.Path, original, updated)
-			if cancelled != nil {
-				return cancelled, nil
+			route := runEditPipeline(ctx, "insert_after", path, in.Path, original, updated)
+			if route.Cancelled != nil {
+				return route.Cancelled, nil
 			}
-			updated = piped
+			if route.Delivered {
+				// The candidate landed through the protected chain. Writing the
+				// caller's own edit now would undo a delivery that settlement
+				// and restoration already decided about.
+				return attachV3(route.Result, route.Meta), nil
+			}
+			v3Out := route.Meta
+			updated = route.Content
 
 			observed, refusal := editSyntaxObservation(ctx, "insert_after", in.Path, in.Path,
 				original, updated, func(detail string) string {
@@ -3877,11 +3892,18 @@ func replaceLinesTool() *ToolDef {
 			// producing one greedy sample with no candidate generation and no
 			// lens scoring, which is exactly what the tier system exists to
 			// prevent.
-			piped, v3Out, cancelled := runEditPipeline(ctx, "replace_lines", path, in.Path, original, updated)
-			if cancelled != nil {
-				return cancelled, nil
+			route := runEditPipeline(ctx, "replace_lines", path, in.Path, original, updated)
+			if route.Cancelled != nil {
+				return route.Cancelled, nil
 			}
-			updated = piped
+			if route.Delivered {
+				// The candidate landed through the protected chain. Writing the
+				// caller's own edit now would undo a delivery that settlement
+				// and restoration already decided about.
+				return attachV3(route.Result, route.Meta), nil
+			}
+			v3Out := route.Meta
+			updated = route.Content
 
 			observed, refusal := editSyntaxObservation(ctx, "replace_lines", in.Path, in.Path,
 				original, updated, func(detail string) string {
@@ -5715,8 +5737,9 @@ func editWriteFailure(path string, err error, observed checkOutcome) error {
 // Returns the content to write, the V3 metadata to report, and a non-nil
 // ToolResult only when the turn was cancelled mid-pipeline (nothing may land
 // on disk in that case).
-func runEditPipeline(ctx *AgentContext, tool, path, relPath, original, edited string) (string, V3EditMetadata, *ToolResult) {
-	var meta V3EditMetadata
+func runEditPipeline(ctx *AgentContext, tool, path, relPath, original,
+	edited string) editRouteOutcome {
+	keep := editRouteOutcome{Content: edited}
 	// Classify on max(old, new): a destructive edit that shrinks a T2+ file
 	// into a T1 stub is exactly the edit that most needs checking, and
 	// classifying on the result alone let it bypass the pipeline.
@@ -5732,38 +5755,21 @@ func runEditPipeline(ctx *AgentContext, tool, path, relPath, original, edited st
 		}
 	}
 	if fileTier < Tier2Medium || !editWarrantsV3(edited, cc, ccOK) || ctx.V3URL == "" || !ctx.V3GenerationEnabled() {
-		return edited, meta, nil
+		return keep
 	}
 	// Same debug fast-track the write path has: mid-iteration edits skip the
 	// V3 toll so the session's clock goes to executions, not candidates.
 	if isActiveDebugIteration(ctx, relPath) {
 		log.Printf("[%s] %s mid-debug iteration — skipping V3, execution is the feedback", tool, relPath)
-		return edited, meta, nil
+		return keep
 	}
 
 	log.Printf("[%s] V3 pipeline activating for %s (file_tier=%d, req_tier=%d)", tool, relPath, fileTier, ctx.Tier)
-	improved, m, err := improveContentWithV3(path, edited, ctx)
-	if err != nil {
-		if errors.Is(err, context.Canceled) || (ctx.Ctx != nil && ctx.Ctx.Err() != nil) {
-			log.Printf("[%s] V3 aborted by cancellation — not writing %s", tool, relPath)
-			return "", meta, &ToolResult{Success: false,
-				Error: tool + " cancelled — no content was written"}
-		}
-		log.Printf("[%s] V3 failed: %v — falling back to the caller's content", tool, err)
-		return edited, meta, nil
-	}
-	if drift := v3RewroteBeyondTheEdit(original, edited, improved); drift != "" {
-		log.Printf("[%s] discarding V3 candidate for %s — %s; keeping the caller's content", tool, logPath(relPath), drift)
-		return edited, meta, nil
-	}
-	if swapped := v3SwappedTheLanguage(relPath, edited, improved); swapped != "" {
-		log.Printf("[%s] discarding V3 candidate for %s — %s; keeping the caller's content", tool, logPath(relPath), swapped)
-		return edited, meta, nil
-	}
-	if improved == "" {
-		return edited, meta, nil
-	}
-	return improved, m, nil
+	// THE protected edit route. A service proposal reaches disk only through
+	// the same evidence, authorization, one-time grant, exact-byte delivery,
+	// ledger, validation and settlement chain the new-file route uses; when it
+	// does not earn that, the caller's own edit is what stays.
+	return deliverEditCandidate(ctx, tool, path, relPath, original, edited)
 }
 
 // attachV3 copies pipeline metadata onto a successful tool result, so a
