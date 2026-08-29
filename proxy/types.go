@@ -1610,7 +1610,15 @@ type V3EvidenceProvenance struct {
 
 	// What the evidence is about. Every one must match before the evidence
 	// may be used for the thing being asked about.
-	RequestID           string `json:"request_id"`
+	RequestID string `json:"request_id"`
+	// RouteEntryID is the entry of the candidate-generation route this
+	// evidence belongs to, and it is what a reader groups on. InvocationID
+	// answers a different question -- which candidate evidence was minted --
+	// and is never a substitute: a record that has the first and honestly
+	// lacks the second is still attributable.
+	// Deliberately untagged: it is written into telemetry by name and never
+	// decoded from any inbound payload, so nothing off the wire can supply it.
+	RouteEntryID        string `json:"-"`
 	InvocationID        string `json:"invocation_id"`
 	CandidateInstanceID string `json:"candidate_instance_id"`
 	CandidateHash       string `json:"candidate_hash"`

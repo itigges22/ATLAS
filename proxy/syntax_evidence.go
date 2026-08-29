@@ -79,6 +79,7 @@ type syntaxEvidenceRequest struct {
 	// hands it an outcome the gate actually reached.
 	Outcome checkOutcome
 
+	RouteEntryID        string
 	InvocationID        string
 	CandidateInstanceID string
 	// BaselineIdentity names the validated baseline this candidate would
@@ -143,6 +144,7 @@ func produceSyntaxEvidence(ctx *AgentContext, req syntaxEvidenceRequest) (proxyE
 	p := V3EvidenceProvenance{
 		Source:              ProvenanceProxyOwnedValidation,
 		RequestID:           requestID,
+		RouteEntryID:        req.RouteEntryID,
 		InvocationID:        req.InvocationID,
 		CandidateInstanceID: req.CandidateInstanceID,
 		CandidateHash:       actual,

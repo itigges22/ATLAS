@@ -82,7 +82,11 @@ var stagingCommandOutcomes = map[stagingCommandOutcome]bool{
 // invocation may not borrow another's, and a result about a workspace two
 // mutations ago is about a workspace that no longer exists.
 type stagingIdentity struct {
-	RequestID           string `json:"request_id"`
+	RequestID string `json:"request_id"`
+	// RouteEntryID is the entry of the candidate-generation route this
+	// staging run belongs to. Carried so evidence produced from it stays
+	// attributable to the attempt rather than only to the candidate.
+	RouteEntryID        string `json:"-"`
 	InvocationID        string `json:"invocation_id"`
 	CandidateInstanceID string `json:"candidate_instance_id"`
 	CandidateHash       string `json:"candidate_hash"`

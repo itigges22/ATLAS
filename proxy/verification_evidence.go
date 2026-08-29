@@ -113,6 +113,7 @@ func produceDeclaredVerificationEvidence(ctx *AgentContext, req verificationEvid
 	p := V3EvidenceProvenance{
 		Source:              ProvenanceClientDeclaredVerification,
 		RequestID:           requestID,
+		RouteEntryID:        req.Identity.RouteEntryID,
 		InvocationID:        req.Identity.InvocationID,
 		CandidateInstanceID: req.Identity.CandidateInstanceID,
 		CandidateHash:       req.Identity.CandidateHash,
