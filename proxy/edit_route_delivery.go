@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"path/filepath"
 )
 
 // Trusted candidate delivery for the edit routes.
@@ -54,6 +55,15 @@ func deliverEditCandidate(ctx *AgentContext, tool, path, relPath,
 	// generation happens exactly as often as it did before, and any future
 	// compute saving here needs its own measurement and its own authorization.
 	observeInvocationFeasibility(ctx, entry)
+
+	// The same additive stage envelope the new-file route emits, carrying this
+	// entry. The edit route genuinely starts a V3 stage, and an observer
+	// watching the event stream could otherwise see a decision that said
+	// generation proceeded with nothing on the stream to match it.
+	Emit(NewEnvelope(EvtStageStart, "v3", map[string]interface{}{
+		"detail":      "file=" + filepath.Base(path),
+		"route_entry": entry.ID,
+	}))
 
 	improved, meta, err := improveContentWithV3(path, edited, ctx)
 	if err != nil {
