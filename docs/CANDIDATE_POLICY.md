@@ -54,11 +54,47 @@ merging them is what made the trusted producer unreachable.
   bytes, and decides.
 - A rejected candidate leaves the model's own proposal exactly as it was.
 
-The one place a service verdict still decides anything is a request that
-declared **no output knowledge**: it states no target and no obligation, so
-there is nothing to authorize against and its delivery rule is the one it has
-always had. That rule is named `serviceCertifiedCandidate` rather than left
-looking like an authorization.
+**There is no service-certification path at all.** A request that declared no
+output knowledge used to deliver on the service's own closure verdict — the
+producer of a candidate certifying that candidate. It read as a compatibility
+rule and it was a self-certification bypass: no target the client named, no
+obligation, no floor, and an authority that came from the side being checked.
+It is gone, and nothing replaced it. Such a request retains the model's own
+bytes under strict.
+
+## Structured mutation scope
+
+Removing that bypass would make the pipeline useless for the interactive case
+if nothing else changed: the normal TUI knows neither an output path nor a
+command. Inferring a contract from the prose is the wrong answer — a
+seventy-character window before a filename is how an input file once became a
+deliverable.
+
+The model's own tool call is the third option, and it is structured rather than
+inferred. `write_file`, `edit_file`, `insert_after`, `replace_lines` and
+`structural_edit` each name a canonical target and bound a mutation in fields.
+`deriveMutationScope` reads that off the call: the tool, the canonical target,
+the pre-call bytes and the caller's own result, plus the workspace and target
+generations.
+
+What a scope is not is evidence. It says WHERE a candidate may act and nothing
+about whether it is any good:
+
+- it cannot expand a path, change a target, authorize a deletion or weaken a
+  permission;
+- it mints nothing — `mintAuthorizationGrant` refuses without one, which is the
+  only direction it acts in, and every other condition still has to hold;
+- a candidate outside the boundary its own call defined fires the
+  `outside_structured_mutation_scope` veto.
+
+It fails closed on an unknown tool, a path that does not resolve inside the
+workspace, a spelling the two resolvers disagree about, a missing identity, a
+deletion, a moved target, a moved workspace, and a request that has ended.
+Every grant now carries the `MutationScopeID` of the call it came from.
+
+A calibrated advisory decision may one day mint a one-time grant for candidate
+bytes constrained to exactly that scope; confirm may do the same after an
+exact-byte approval. Neither delivers today.
 
 Hard proposal requirements survive unchanged, because they are about bytes being
 usable rather than proven: materially different, valid identity, correct file
@@ -122,16 +158,39 @@ shadow form: the policy computes its decision, records it with its signals, and
 delivers nothing on it. The records are what a calibration will be computed
 from.
 
-### Candidate Confidence Policy Validation
+### Candidate Confidence Calibration
 
-The measurement that has to exist before advisory may change what lands:
-planner-only against full V3 with advisory acting, reported separately for
-new-file versus edit, new-source versus historical-mechanism, trusted
-verification versus no oracle, and per model family and size. It must show a
-credible positive net improvement, a regression rate under a pre-registered
-ceiling, no increase in unbounded or dishonest terminals, no permission, path,
-identity or delivery regression, reproduced on Gemma and then evaluated
-independently on Qwen.
+The measurement that has to exist before advisory may change what lands, frozen
+and awaiting authorization under `redteam/runs/candidate-confidence-calibration`.
+Planner-only against full V3 with the advisory decision still shadow-only, so
+candidate bytes never reach a live task workspace. One feature, one direction,
+one threshold, derived on a calibration subset that shares no task family with
+the holdout, frozen, and evaluated on that holdout exactly once. Gemma first;
+Qwen later as an independent replication that is never pooled and never used to
+select the threshold.
+
+Its pre-registered sample size is thirty candidate-eligible pairs per subset,
+and the derivation refuses rather than fitting when the corpus is short. It is
+short: the existing frozen corpus is sixteen paired cases and produced zero
+candidate-eligible proposals, so a corpus has to be built before a threshold
+can honestly be derived.
+
+## Pre-registered product policy
+
+Recorded before any calibration is run, so the result cannot be read backwards
+into the decision:
+
+- The intended eventual interactive TUI default is **advisory, and only after
+  calibration and independent validation**.
+- Until then **strict remains the default**.
+- **Confirm is an explicit user-selected fallback**, not a prompt on every
+  normal edit.
+- **Destructive operations keep their existing explicit permission flow.**
+  Advisory confidence is not a permission.
+- **Human review of the final diff remains part of the product.** ATLAS does
+  not claim a universal correctness oracle.
+- No advisory confidence value may be described as a probability of
+  correctness unless a calibration supports that interpretation.
 
 ## What the user sees
 
