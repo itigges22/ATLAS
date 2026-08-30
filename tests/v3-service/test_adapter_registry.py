@@ -161,7 +161,8 @@ def test_a_behavioral_obligation_on_a_syntax_only_adapter_is_never_complete():
     criteria, so every record was incomplete for a reason that had nothing to
     do with the obligation in front of it.
     """
-    command = O.obligation(kind=O.KIND_DECLARED_COMMAND, subject="pytest -q")
+    command = O.obligation(kind=O.KIND_DECLARED_COMMAND, subject="pytest -q",
+                           baseline_strength=C.BEHAVIORAL)
     rec = A.contract_record(
         adapter=A.ADAPTER_PYTHON_COMPILE, accepted=True, probe=None,
         contract_id="c.v1", contract_version="1", artifact_scope="s",

@@ -53,8 +53,17 @@ def test_a_declared_command_is_behavioral_and_not_an_oracle():
     """Exit zero says the command ran and succeeded against these bytes. It
     does not say an answer was checked against a reference, and calling an
     arbitrary exit-zero command an oracle is how "it ran" became "it is right".
+
+    How strongly it counts is the kind the CLIENT typed for that exact command,
+    so the floor comes from the obligation rather than from the kind -- and
+    oracle is not among the kinds a client may type.
     """
-    assert O.required_strength(O.KIND_DECLARED_COMMAND) == C.BEHAVIORAL
+    for kind in (C.SYNTAX, C.RUNTIME, C.BEHAVIORAL):
+        assert O.required_strength(O.KIND_DECLARED_COMMAND, kind) == kind
+    with pytest.raises(O.ObligationError):
+        O.required_strength(O.KIND_DECLARED_COMMAND, C.ORACLE)
+    with pytest.raises(O.ObligationError):
+        O.required_strength(O.KIND_DECLARED_COMMAND)
     assert O.required_strength(O.KIND_DECLARED_EXAMPLE) == C.ORACLE
 
 
@@ -78,7 +87,8 @@ def test_an_obligation_never_carries_its_subject_text():
     """A declared command is a subject, and a command string in a log is a
     content leak. The rule is uniform so no exception can leak one."""
     secret = "pytest --token=hunter2 -q"
-    o = O.obligation(kind=O.KIND_DECLARED_COMMAND, subject=secret)
+    o = O.obligation(kind=O.KIND_DECLARED_COMMAND, subject=secret,
+                     baseline_strength=C.RUNTIME)
     rendered = repr(o)
     assert secret not in rendered
     assert "hunter2" not in rendered
@@ -95,7 +105,8 @@ def test_obligation_ids_are_deterministic_and_kind_scoped():
 
 def test_the_closure_floor_is_the_strongest_required_obligation():
     obs = [O.obligation(kind=O.KIND_ARTIFACT_EXISTS, subject="solve.py"),
-           O.obligation(kind=O.KIND_DECLARED_COMMAND, subject="pytest -q")]
+           O.obligation(kind=O.KIND_DECLARED_COMMAND, subject="pytest -q",
+                        baseline_strength=C.BEHAVIORAL)]
     assert O.closure_floor(obs) == C.BEHAVIORAL
 
 
@@ -111,7 +122,8 @@ def test_an_unsupported_required_obligation_puts_closure_out_of_reach():
 # --- capability is an upper bound, never a substitute ------------------------
 
 def test_a_behavioral_obligation_presented_to_a_syntax_only_adapter_stays_incomplete():
-    command = O.obligation(kind=O.KIND_DECLARED_COMMAND, subject="pytest -q")
+    command = O.obligation(kind=O.KIND_DECLARED_COMMAND, subject="pytest -q",
+                           baseline_strength=C.BEHAVIORAL)
     rec = _record(A.ADAPTER_PYTHON_COMPILE, [command])
     assert rec["requirements_complete"] is False
     assert rec["closure_eligible"] is False
@@ -146,7 +158,8 @@ def test_behavioral_capability_does_not_satisfy_an_unrelated_command():
     probe never executed it."""
     probe = {"supported": True, "runtime_clean": True,
              **{c: True for c in A.BROWSER_REQUIRED + A.BROWSER_OPTIONAL}}
-    command = O.obligation(kind=O.KIND_DECLARED_COMMAND, subject="npm test")
+    command = O.obligation(kind=O.KIND_DECLARED_COMMAND, subject="npm test",
+                           baseline_strength=C.BEHAVIORAL)
     syntax = O.obligation(kind=O.KIND_SYNTACTIC_VALIDITY, subject="game.js")
     rec = _record(A.ADAPTER_BROWSER_CANVAS_JS, [syntax, command], probe=probe)
     assert rec["evidence_strength"] == C.BEHAVIORAL
