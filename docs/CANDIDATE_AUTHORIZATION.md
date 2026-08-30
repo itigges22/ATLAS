@@ -22,7 +22,7 @@ in Go and Python with a divergence contract test:
 | --- | --- | --- |
 | `artifact_exists` | canonical path | each declared output |
 | `syntactic_validity` | canonical path | a declared output the proxy's own gate governs |
-| `declared_command` | the exact command string | each declared verification command |
+| `declared_command` | the exact command string | each declared verification command, at the strength its typed declaration states |
 | `declared_example` | an opaque case id | a declared example |
 | `baseline_preserved` | canonical path | a declared output that already carries current evidence |
 | `unsupported` | — | a class nothing can measure |
@@ -37,6 +37,45 @@ premise that an artifact had to exist before it could be authorized to exist:
 - **`post_delivery_settlement`** — owed *after* delivery. `artifact_exists` is
   one: nothing can evidence a file's existence before it is written, so
   requiring it up front made every task unclosable.
+
+### Typed verification requirements
+
+A bare command string carries no semantics. `python3 -c "import ast; ..."` and
+`pytest -q tests/` are the same shape to a parser and demonstrate very different
+things, and nothing can tell them apart honestly by reading them — a filename,
+the word pytest and the presence of assertions are all things a caller can write
+over anything at all.
+
+So strength comes from a typed declaration and from nowhere else:
+
+```jsonc
+"verification_requirements_version": 1,
+"verification_requirements": [{
+  "command": "pytest -q tests/test_report.py",   // exact bytes; identity is its hash
+  "kind": "behavioral",                          // syntax | runtime | behavioral
+  "expects": "exit_zero",                        // closed vocabulary
+  "assets": ["tests/test_report.py"],            // what it runs against
+  "asset_authority": "client_supplied"           // client_supplied | workspace_observed
+}]
+```
+
+Rules:
+
+- The `kind` is the required strength. Nothing infers it from command text,
+  filename, `pytest`, assertions or prose.
+- A command declared in the older `verification` list and not typed here maps to
+  **`runtime`, never `behavioral`**: it ran against these bytes and exited zero,
+  which is what such a command actually shows.
+- `client_supplied` assets can support behavioral evidence. `workspace_observed`
+  ones cap the observation at runtime — and an asset **this session wrote** is
+  workspace-observed whatever the contract claims, because the ledger records
+  that it did. A request may not write its own oracle.
+- A behavioral requirement whose assets cap it at runtime does not reach its own
+  floor, so it does not authorize. The requirement is not quietly downgraded.
+- Every required command must pass. Timeout, cancellation, refusal, mutation,
+  stale state or a changed asset produces no authority at all.
+- An unreadable version, kind, expectation or asset authority is refused at the
+  request boundary rather than defaulted.
 
 ## Evidence: what was actually observed
 
@@ -291,6 +330,10 @@ The terminal asks one question of one owner, after the owners ahead of it have
 spoken, and an unsettled delivery is `post_delivery_settlement_pending`.
 
 ## Authorization
+
+Authorization decides whether trusted evidence meets the declared floor. What
+happens to a candidate that does not reach it — and which rule owns that answer
+— is [CANDIDATE_POLICY.md](CANDIDATE_POLICY.md).
 
 `decideAuthorization` matches evidence against the identity built from the
 **live** request — never copied off the record being checked, or every record
