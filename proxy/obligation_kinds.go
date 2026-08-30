@@ -65,10 +65,11 @@ var obligationKinds = []string{
 // obligationKindRequiredStrength is how strong the evidence closing each kind
 // must be.
 //
-// A declared command is behavioral, not oracle: exit zero says the command the
-// client asked for ran and succeeded against these bytes. It does not say the
-// answer was checked against a reference, and calling an arbitrary exit-zero
-// command an oracle is how "it ran" became "it is right".
+// ObligationDeclaredCommand is absent because its floor is not a constant
+// either: it is the kind the client typed for that exact command, and runtime
+// for a command declared without a type. No declared command reaches oracle --
+// exit zero says the command ran and succeeded against these bytes, never that
+// an answer was compared with a reference.
 //
 // ObligationBaselinePreserved is absent because its floor is not a constant:
 // it is whatever the evidence currently describing that baseline already
@@ -76,7 +77,6 @@ var obligationKinds = []string{
 var obligationKindRequiredStrength = map[string]string{
 	ObligationArtifactExists:    "syntax",
 	ObligationSyntacticValidity: "syntax",
-	ObligationDeclaredCommand:   "behavioral",
 	ObligationDeclaredExample:   "oracle",
 }
 
@@ -136,8 +136,14 @@ func obligationRole(kind string) (string, bool) {
 
 // obligationDynamicStrengthKinds take their floor from the obligation rather
 // than from the kind.
+//
+// A declared command is here because its floor is what the CLIENT typed about
+// it. The kind says "a command the client required ran"; how strongly that
+// counts is a statement only the client can make, and a build that read it off
+// the kind would give every caller the strongest floor for saying nothing.
 var obligationDynamicStrengthKinds = map[string]bool{
 	ObligationBaselinePreserved: true,
+	ObligationDeclaredCommand:   true,
 }
 
 // obligationUnsatisfiableKinds can be closed by nothing.
@@ -177,6 +183,14 @@ func obligationRequiredStrength(kind, baselineStrength string) (string, bool) {
 	}
 	if obligationDynamicStrengthKinds[kind] {
 		if strengthRank(baselineStrength) < 0 {
+			return "", false
+		}
+		// A declared command carries what the client typed about it, and the
+		// vocabulary a client may type stops below oracle: exit zero says the
+		// command ran and succeeded, never that an answer was compared with a
+		// reference. A caller asking for oracle here is asking for an
+		// authority no command can produce.
+		if kind == ObligationDeclaredCommand && !verificationKinds[baselineStrength] {
 			return "", false
 		}
 		return baselineStrength, true
@@ -460,7 +474,14 @@ func deriveTaskObligations(ctx *AgentContext, outputs, verification obligationDe
 			if strings.TrimSpace(cmd) == "" {
 				continue
 			}
-			add(ObligationDeclaredCommand, cmd, "")
+			// The floor is the client's typed declaration for this exact
+			// command, and the legacy answer -- runtime -- for one declared
+			// without a type. Nothing here reads the command's text.
+			req, ok := verification.Typed[cmd]
+			if !ok {
+				req = legacyVerificationRequirement(cmd)
+			}
+			add(ObligationDeclaredCommand, cmd, req.declaredStrength())
 		}
 	}
 

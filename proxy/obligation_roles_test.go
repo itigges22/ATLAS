@@ -130,8 +130,8 @@ func TestANewDocumentOutputOwesNoFabricatedSyntax(t *testing.T) {
 	_, withCmd := rolesFixture(t,
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["notes.md"],`+
 			`"verification_knowledge":"declared","verification":["mdl notes.md"]}`, nil)
-	if got := authorizationFloor(withCmd); got != "behavioral" {
-		t.Errorf("a declared command gave the document floor %q, want behavioral", got)
+	if got := authorizationFloor(withCmd); got != VerificationKindRuntime {
+		t.Errorf("a declared command gave the document floor %q, want runtime", got)
 	}
 }
 
@@ -305,9 +305,11 @@ func TestDeclaredEmptyOutputsAuthorizeNoTarget(t *testing.T) {
 	if targetIsAuthorized(obs, resolveAgentPath(ctx, "anything.py")) {
 		t.Error("authoritative none authorized a target")
 	}
-	// The declared command is still owed: the classes are independent.
-	if got := authorizationFloor(obs); got != "behavioral" {
-		t.Errorf("floor %q, want the declared command's behavioral", got)
+	// The declared command is still owed: the classes are independent. Its
+	// floor is runtime, because the client declared the command without
+	// saying what it demonstrates.
+	if got := authorizationFloor(obs); got != VerificationKindRuntime {
+		t.Errorf("floor %q, want the declared command's runtime", got)
 	}
 }
 

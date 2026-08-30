@@ -489,9 +489,18 @@ func TestAuthorizedV3ReplacementIsTheOnlyGate(t *testing.T) {
 		{"nil result falls back", nil, baseline, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := authorizedV3Replacement(tc.result, baseline)
-			if got != tc.want || ok != tc.authorized {
-				t.Fatalf("got (%q, %v), want (%q, %v)", got, ok, tc.want, tc.authorized)
+			// The contractless delivery rule, which is what this table has
+			// always been about: a request that declared nothing delivers on
+			// the service's own verdict and on nothing else.
+			if got := serviceCertifiedCandidate(tc.result, codeOf(tc.result)); got != tc.authorized {
+				t.Fatalf("serviceCertifiedCandidate = %v, want %v", got, tc.authorized)
+			}
+			// And the bytes a refused verdict leaves behind are the caller's.
+			if !tc.authorized {
+				if got, _ := proposedV3Candidate(tc.result, baseline); tc.want == baseline &&
+					got != baseline && codeOf(tc.result) == "" {
+					t.Fatalf("a refusal returned %q, not the baseline", got)
+				}
 			}
 		})
 	}
@@ -554,8 +563,8 @@ func TestBothDeliveryPathsUseTheSharedAuthorization(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(src)
-	if strings.Count(body, "authorizedV3Replacement(") < 3 {
-		t.Fatal("expected the helper definition plus both call sites")
+	if strings.Count(body, "proposedV3Candidate(") < 3 {
+		t.Fatal("expected the proposal boundary plus both call sites")
 	}
 	for _, unsafe := range []string{"chosen := v3Result.Code", "code := v3Result.Code"} {
 		if strings.Contains(body, unsafe) {
@@ -695,21 +704,24 @@ func TestEditPathDeliversOnlyAuthorizedCandidates(t *testing.T) {
 			if err != nil {
 				t.Fatalf("improveContentWithV3: %v", err)
 			}
-			if c.delivered {
-				if out != candidate {
-					t.Fatalf("authorized candidate was not delivered: %q", out)
-				}
-				if !meta.Used || meta.PhaseSolved != "phase1" {
-					t.Errorf("authorized delivery lost its provenance: %+v", meta)
-				}
-				return
+			// Materially different bytes are a PROPOSAL in every row: the
+			// service offers them and the route decides. What the envelope
+			// state changes is the certification that travels with them, which
+			// is the delivery rule for a request that declared nothing.
+			if out != candidate {
+				t.Fatalf("the proposal was not carried: %q", out)
 			}
-			if out != editBaseline {
-				t.Fatalf("unauthorized bytes were delivered: %q", out)
+			if !meta.Used {
+				t.Error("a proposal lost the pipeline that produced it")
 			}
-			if meta.Used || meta.CandidatesTested != 0 || meta.WinningScore != 0 ||
-				meta.PhaseSolved != "" || len(meta.VerificationEvidence) != 0 {
-				t.Errorf("unauthorized delivery carries provenance: %+v", meta)
+			if meta.ServiceCertified != c.delivered {
+				t.Errorf("service certification %v, want %v",
+					meta.ServiceCertified, c.delivered)
+			}
+			// And the contractless delivery rule agrees with it, over the same
+			// bytes, so the two cannot drift apart.
+			if got := editCandidateAuthorized(deliveryAuthorization{}, meta); got != c.delivered {
+				t.Errorf("the contractless rule said %v, want %v", got, c.delivered)
 			}
 		})
 	}
@@ -736,11 +748,16 @@ func TestEditPathRevokesWhenSanitisationChangesTheBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("improveContentWithV3: %v", err)
 	}
-	if out != editBaseline {
-		t.Fatalf("sanitised bytes no evidence describes were delivered: %q", out)
+	// The unwrapped bytes are carried as a proposal; what the service verified
+	// was the fenced text, so it certifies nothing about them.
+	if out != inner {
+		t.Fatalf("the sanitised proposal was not carried: %q", out)
 	}
-	if meta.Used {
-		t.Error("provenance survived a hash that no longer matches the bytes")
+	if meta.ServiceCertified {
+		t.Error("certification survived a hash that no longer matches the bytes")
+	}
+	if editCandidateAuthorized(deliveryAuthorization{}, meta) {
+		t.Error("a contractless request delivered bytes no evidence describes")
 	}
 	// The same bytes, returned unwrapped and verified as such, ARE delivered:
 	// this is authorization against what will be written, not a blanket
@@ -930,16 +947,27 @@ func TestEditPathAuthorizesOnlyThroughTheSharedGate(t *testing.T) {
 	}
 	// One positive gate, and the post-sanitisation recheck that keeps it
 	// honest. Nothing else may hand back a candidate.
-	if strings.Count(improve, "authorizedV3Replacement(") != 1 {
-		t.Errorf("improveContentWithV3 must authorize exactly once, found %d",
-			strings.Count(improve, "authorizedV3Replacement("))
+	if strings.Count(improve, "proposedV3Candidate(") != 1 {
+		t.Errorf("improveContentWithV3 must take the proposal exactly once, found %d",
+			strings.Count(improve, "proposedV3Candidate("))
 	}
-	if !strings.Contains(improve, "v3DeliveryAuthorized(v3Result, chosen)") {
-		t.Error("improveContentWithV3 does not re-authorize the sanitised bytes")
+	// It authorizes nothing at all: the route that receives the proposal
+	// stages it and applies the policy.
+	if strings.Contains(improve, "v3DeliveryAuthorized(") {
+		t.Error("improveContentWithV3 authorizes instead of proposing")
 	}
 	// And the callers never build provenance of their own.
 	if strings.Contains(pipeline, "V3EditMetadata{\n\t\tUsed: true") ||
 		strings.Contains(pipeline, "Used:                 true") {
 		t.Error("runEditPipeline manufactures provenance instead of carrying it")
 	}
+}
+
+
+// codeOf is the bytes a response offered, or "" for none.
+func codeOf(result *V3GenerateResponse) string {
+	if result == nil {
+		return ""
+	}
+	return result.Code
 }

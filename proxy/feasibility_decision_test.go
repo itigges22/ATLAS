@@ -283,7 +283,10 @@ func TestTheStageARequestShapeHasNoClosurePath(t *testing.T) {
 	// unreachable then is feasible now.
 	structured := feasibilityFor(t,
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
-			`"verification_knowledge":"declared","verification":["python3 solve.py"]}`, nil)
+			`"verification_knowledge":"declared","verification":["python3 solve.py"],`+
+			`"verification_requirements_version":1,"verification_requirements":[`+
+			`{"command":"python3 solve.py","kind":"behavioral","expects":"exit_zero",`+
+			`"asset_authority":"client_supplied"}]}`, nil)
 	if structured.Floor != "behavioral" {
 		t.Errorf("floor %q, want behavioral", structured.Floor)
 	}
@@ -348,7 +351,7 @@ func TestFeasibilityCallsNothingThatGenerates(t *testing.T) {
 	banned := map[string]bool{
 		"callV3Generate": true, "callV3GenerateStreaming": true,
 		"writeFileWithV3": true, "improveContentWithV3": true,
-		"authorizedV3Replacement": true, "v3DeliveryAuthorized": true,
+		"proposedV3Candidate": true, "serviceCertifiedCandidate": true, "v3DeliveryAuthorized": true,
 		"writeFileRecorded": true, "finalizeCompletion": true,
 		"WriteFile": true, "StreamFn": true,
 	}

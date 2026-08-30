@@ -292,6 +292,14 @@ type ToolResult struct {
 	WinningScore         float64                  `json:"winning_score,omitempty"`
 	PhaseSolved          string                   `json:"phase_solved,omitempty"`
 	VerificationEvidence []V3VerificationEvidence `json:"verification_evidence,omitempty"`
+
+	// DeliveryProvenance says WHERE the bytes that landed came from, from the
+	// closed vocabulary in candidate_provenance.go. It is a server-side fact
+	// for the terminal, not part of modelFacingResult: the user needs to know
+	// whether they are reading the model's own work, a candidate a declared
+	// check passed, or one they approved themselves, and the model does not
+	// get to argue with the answer.
+	DeliveryProvenance string `json:"delivery_provenance,omitempty"`
 }
 
 // modelFacingResult is the shape a tool result has in the MODEL's context.
@@ -1852,6 +1860,34 @@ type TaskContract struct {
 	// commands verbatim, so binding a requirement to an execution later needs
 	// no parsing. Declaring one here does not run anything.
 	Verification *[]string `json:"verification,omitempty"`
+
+	// VerificationRequirements is the typed form of the same thing: the exact
+	// command, what the client declares it demonstrates, what result counts,
+	// and the assets it runs against. It is the only source of a required
+	// strength above runtime.
+	//
+	// Additive and independent. A client may send neither, either, or both;
+	// a command that appears in both is answered by its typed declaration,
+	// and one that appears only in the older list keeps the legacy answer.
+	VerificationRequirements *[]VerificationRequirement `json:"verification_requirements,omitempty"`
+	// VerificationRequirementsVersion is stated by the client and checked
+	// exactly. A version this build does not read is refused rather than
+	// interpreted under today's rules.
+	VerificationRequirementsVersion int `json:"verification_requirements_version,omitempty"`
+
+	// CandidatePolicy is which evidence rule this request wants applied to a
+	// V3 candidate: strict, advisory or confirm. Empty is the deployment's
+	// answer, and the deployment's answer is strict unless an operator changed
+	// it. A client states it; the model and the V3 service have no path to it.
+	CandidatePolicy string `json:"candidate_policy,omitempty"`
+}
+
+// TypedVerificationRequirements is the declared typed set, or nil.
+func (tc *TaskContract) TypedVerificationRequirements() []VerificationRequirement {
+	if tc == nil || tc.VerificationRequirements == nil {
+		return nil
+	}
+	return *tc.VerificationRequirements
 }
 
 // OutputPaths is the declared output list, or nil when none arrived. Safe on a
@@ -1877,8 +1913,15 @@ func (tc *TaskContract) VerificationCommands() []string {
 }
 
 // VerificationPresent reports whether a list ARRIVED, which an empty one did.
+//
+// Either list arriving is a list arriving: a client that sends only typed
+// requirements has stated its verification knowledge as surely as one that
+// sends only command strings.
 func (tc *TaskContract) VerificationPresent() bool {
-	return tc != nil && tc.Verification != nil
+	if tc == nil {
+		return false
+	}
+	return tc.Verification != nil || tc.VerificationRequirements != nil
 }
 
 type PermissionRequest struct {

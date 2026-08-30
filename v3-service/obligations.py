@@ -63,10 +63,11 @@ KINDS = (
 
 # How strong the evidence closing each kind must be.
 #
-# A declared command is BEHAVIORAL, not ORACLE: exit zero says the command the
-# client asked for ran and succeeded against these bytes. It does not say the
-# answer was checked against a reference, and calling an arbitrary exit-zero
-# command an oracle is how "it ran" became "it is right".
+# KIND_DECLARED_COMMAND is absent because its floor is not a constant: it is
+# the kind the CLIENT typed for that exact command, and RUNTIME for a command
+# declared without a type. No declared command reaches ORACLE -- exit zero says
+# the command ran and succeeded against these bytes, never that an answer was
+# compared with a reference.
 #
 # KIND_BASELINE_PRESERVED is absent because its floor is not a constant: it is
 # whatever the evidence currently describing that baseline already reached.
@@ -74,9 +75,13 @@ KINDS = (
 _KIND_REQUIRED_STRENGTH = {
     KIND_ARTIFACT_EXISTS: contract.SYNTAX,
     KIND_SYNTACTIC_VALIDITY: contract.SYNTAX,
-    KIND_DECLARED_COMMAND: contract.BEHAVIORAL,
     KIND_DECLARED_EXAMPLE: contract.ORACLE,
 }
+
+# The strengths a client may declare for a command. Oracle is absent: a
+# comparison against a reference is not something an exit status can be.
+_DECLARABLE_VERIFICATION_KINDS = (contract.SYNTAX, contract.RUNTIME,
+                                  contract.BEHAVIORAL)
 
 # --- when an obligation can be answered -------------------------------------
 #
@@ -117,7 +122,7 @@ _KIND_ROLE = {
 _KIND_NAMES_TARGET = {KIND_ARTIFACT_EXISTS}
 
 # Kinds whose floor is supplied per obligation rather than by the kind.
-_DYNAMIC_STRENGTH_KINDS = (KIND_BASELINE_PRESERVED,)
+_DYNAMIC_STRENGTH_KINDS = (KIND_BASELINE_PRESERVED, KIND_DECLARED_COMMAND)
 
 # Kinds nothing can close.
 _UNSATISFIABLE_KINDS = (KIND_UNSUPPORTED,)
@@ -159,6 +164,11 @@ def required_strength(kind: str, baseline_strength: Optional[str] = None) -> str
             raise ObligationError(
                 f"{kind} needs the baseline's own strength, got "
                 f"{baseline_strength!r}")
+        if (kind == KIND_DECLARED_COMMAND
+                and baseline_strength not in _DECLARABLE_VERIFICATION_KINDS):
+            raise ObligationError(
+                f"{kind} cannot carry {baseline_strength!r}: a command's exit "
+                f"status is not a comparison against a reference")
         return baseline_strength
     if baseline_strength is not None:
         raise ObligationError(

@@ -50,6 +50,23 @@ func agreementRows() []agreementRow {
 		return `{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],` +
 			`"verification_knowledge":"declared","verification":[` + strings.Join(quoted, ",") + `]}`
 	}
+	// The same commands, typed behavioral over assets the client owns. A
+	// behavioral baseline can only be re-established by evidence that reaches
+	// behavioral, and only a typed declaration does.
+	withBehavioralCommands := func(cmds ...string) string {
+		typed := make([]string, 0, len(cmds))
+		quoted := make([]string, 0, len(cmds))
+		for _, c := range cmds {
+			b, _ := json.Marshal(c)
+			quoted = append(quoted, string(b))
+			typed = append(typed, `{"command":`+string(b)+`,"kind":"behavioral",`+
+				`"expects":"exit_zero","asset_authority":"client_supplied"}`)
+		}
+		return `{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],` +
+			`"verification_knowledge":"declared","verification":[` + strings.Join(quoted, ",") + `],` +
+			`"verification_requirements_version":1,"verification_requirements":[` +
+			strings.Join(typed, ",") + `]}`
+	}
 	pass := map[string]stubEffect{"pytest -q": {ExitCode: 0}}
 
 	return []agreementRow{
@@ -107,7 +124,7 @@ func agreementRows() []agreementRow {
 			}},
 
 		{name: "existing behavioral baseline re-established by the same command",
-			contract:   withCommands("python3 solve.py"),
+			contract:   withBehavioralCommands("python3 solve.py"),
 			commands:   map[string]stubEffect{"python3 solve.py": {ExitCode: 0}},
 			wantWinner: true,
 			before: func(t *testing.T, w *routeWorld) {

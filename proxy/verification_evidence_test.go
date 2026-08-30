@@ -55,7 +55,7 @@ func newVerificationFixture(t *testing.T, commands ...string) *verificationFixtu
 	if hash == "" {
 		t.Fatal("no hash for the candidate on disk")
 	}
-	obl, ok := newTaskObligation(ObligationDeclaredCommand, commands[0], "", true)
+	obl, ok := newTaskObligation(ObligationDeclaredCommand, commands[0], VerificationKindRuntime, true)
 	if !ok {
 		t.Fatal("declared command obligation refused")
 	}
@@ -124,8 +124,12 @@ func TestAnExactDeclaredCommandAgainstExactCandidateBytesIsBehavioral(t *testing
 	if p.Source != ProvenanceClientDeclaredVerification {
 		t.Errorf("source %q, want client_declared_verification", p.Source)
 	}
-	if p.ObservedStrength != "behavioral" || p.RequiredStrength != "behavioral" {
-		t.Errorf("strengths %q/%q, want behavioral/behavioral",
+	// The fixture declares the command without a type, so what it demands and
+	// what it demonstrates are both runtime: it ran against these exact bytes
+	// and exited zero.
+	if p.ObservedStrength != VerificationKindRuntime ||
+		p.RequiredStrength != VerificationKindRuntime {
+		t.Errorf("strengths %q/%q, want runtime/runtime",
 			p.RequiredStrength, p.ObservedStrength)
 	}
 	if p.CandidateHash != f.hash {
@@ -178,7 +182,7 @@ func TestTheSameTextFromTheModelRemainsUntrusted(t *testing.T) {
 
 	resolved := resolveAgentPath(ctx, "solve.py")
 	hash := fileSHA256(ctx, resolved)
-	obl, _ := newTaskObligation(ObligationDeclaredCommand, declaredCmd, "", true)
+	obl, _ := newTaskObligation(ObligationDeclaredCommand, declaredCmd, VerificationKindRuntime, true)
 	generation, stateHash := workspaceIdentity(ctx)
 	req := verificationEvidenceRequest{
 		Obligation: obl,
@@ -454,7 +458,7 @@ func TestTheProducerRefusesAnyOtherObligationKind(t *testing.T) {
 
 func TestOneOfTwoCommandsPassingDoesNotCompleteBoth(t *testing.T) {
 	f := newVerificationFixture(t, declaredCmd, "ruff check .")
-	second, ok := newTaskObligation(ObligationDeclaredCommand, "ruff check .", "", true)
+	second, ok := newTaskObligation(ObligationDeclaredCommand, "ruff check .", VerificationKindRuntime, true)
 	if !ok {
 		t.Fatal("second obligation refused")
 	}
@@ -474,7 +478,7 @@ func TestOneOfTwoCommandsPassingDoesNotCompleteBoth(t *testing.T) {
 
 func TestAllRequiredCommandsMustBeRepresented(t *testing.T) {
 	f := newVerificationFixture(t, declaredCmd, "ruff check .")
-	second, _ := newTaskObligation(ObligationDeclaredCommand, "ruff check .", "", true)
+	second, _ := newTaskObligation(ObligationDeclaredCommand, "ruff check .", VerificationKindRuntime, true)
 
 	secondReq := f.request()
 	secondReq.Obligation = second

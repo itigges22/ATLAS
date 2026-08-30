@@ -624,11 +624,19 @@ func TestUnauthorizedCandidateNeverInfluencesAnything(t *testing.T) {
 	if got.disk != auBaselinePy {
 		t.Fatalf("unauthorized candidate influenced the delivered bytes: %q", got.disk)
 	}
-	candHash := shortHash(auCandidateUnresolved)
+	// The candidate IS examined -- that is how the machine learns it is
+	// unusable, and the structural verdict on it is what refuses it. What must
+	// never happen is that it lands, or that the baseline is restored without
+	// being checked itself.
+	baseHash := shortHash(auBaselinePy)
+	checkedBaseline := false
 	for _, ch := range got.checks {
-		if ch.hash == candHash {
-			t.Errorf("a %s check examined the unauthorized candidate", ch.kind)
+		if ch.hash == baseHash {
+			checkedBaseline = true
 		}
+	}
+	if !checkedBaseline {
+		t.Error("the restored baseline was written without being checked")
 	}
 	if got.res.V3Used {
 		t.Error("unauthorized delivery carries V3 provenance")
@@ -745,13 +753,13 @@ func TestFinalByteInvariantTransitions(t *testing.T) {
 		byName[c.name] = c
 	}
 	for _, w := range []transitionWant{
-		// Unauthorized code: the baseline is the delivery, and the check that
-		// covers it is the preflight's -- the bytes never changed after it.
+		// Uncertified code: the candidate IS checked -- that is how the route
+		// learns what it has -- and the contractless delivery rule then keeps
+		// the caller's content, which is checked again before it is restored.
 		{name: "01_unauthorized_code_retained_baseline",
-			// Two syntax requests on the same bytes, deliberately: the preflight
-			// before generation, and the common final-byte check every delivery
-			// passes through -- including the ones that never used a candidate.
-			checks:  []string{"syntax:BASE", "syntax:BASE", "structural:BASE"},
+			// The preflight, the candidate's own final-byte check, and the
+			// baseline's check before it is restored.
+			checks:  []string{"syntax:BASE", "syntax:CAND", "syntax:BASE", "structural:BASE"},
 			disk:    "BASE",
 			success: true, mutation: MutationApplied,
 			kind: ValidationKindSyntax, status: ValidationPassed,
@@ -767,10 +775,11 @@ func TestFinalByteInvariantTransitions(t *testing.T) {
 			v3Used: true, sse: []string{"v3_progress", "v3_progress"}},
 
 		// Sanitised candidate: the evidence described the PRE-sanitised bytes,
-		// so it describes nothing that would be written. Authorization is
-		// withdrawn and the caller's own content is delivered instead.
+		// so it certifies nothing that would be written. The sanitised bytes
+		// are still checked as a proposal, and the caller's own content is
+		// delivered instead.
 		{name: "04_sanitization_rewrites_candidate",
-			checks:  []string{"syntax:BASE", "syntax:BASE", "structural:BASE"},
+			checks:  []string{"syntax:BASE", "syntax:SANI", "syntax:BASE", "structural:BASE"},
 			disk:    "BASE",
 			success: true, mutation: MutationApplied,
 			kind: ValidationKindSyntax, status: ValidationPassed,
@@ -876,7 +885,7 @@ func TestFinalByteInvariantTransitions(t *testing.T) {
 
 		// Baseline fallback that fails to land: same, for the model's bytes.
 		{name: "12_baseline_write_fails",
-			checks:  []string{"syntax:BASE", "syntax:BASE", "structural:BASE"},
+			checks:  []string{"syntax:BASE", "syntax:CAND", "syntax:BASE", "structural:BASE"},
 			disk:    "",
 			success: false, mutation: MutationFailed,
 			kind: ValidationKindSyntax, status: ValidationPassed,

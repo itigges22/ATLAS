@@ -632,17 +632,23 @@ func TestOnlyAVerifiedEnvelopeAuthorizesDelivery(t *testing.T) {
 			if !c.authorized && c.reason != "" && why != c.reason {
 				t.Errorf("reason = %q, want %q", why, c.reason)
 			}
-			// The shared helper must reach the same verdict, and never fall
-			// back to the candidate's bytes when it refuses.
-			delivered, authorized := authorizedV3Replacement(res, authBaseline)
-			if authorized != c.authorized {
-				t.Errorf("authorizedV3Replacement = %v, want %v", authorized, c.authorized)
+			// The legacy contractless rule reaches the same verdict about the
+			// same bytes: for a request that declared nothing, this IS the
+			// delivery rule and it must not have drifted.
+			if got := serviceCertifiedCandidate(res, res.Code); got != c.authorized {
+				t.Errorf("serviceCertifiedCandidate = %v, want %v", got, c.authorized)
 			}
-			if !c.authorized && delivered != authBaseline {
-				t.Errorf("refused delivery returned %q, not the baseline", delivered)
-			}
-			if c.authorized && delivered != code {
-				t.Errorf("authorized delivery returned %q, not the candidate", delivered)
+			// The PROPOSAL boundary is a different question, and answers it
+			// differently on purpose: bytes materially different from the
+			// caller's own are a proposal whatever the service concluded, and
+			// what happens to them is decided after they have been staged.
+			proposal, proposed := proposedV3Candidate(res, authBaseline)
+			if strings.TrimSpace(code) == "" || code == authBaseline {
+				if proposed {
+					t.Errorf("empty or identical bytes were proposed")
+				}
+			} else if !proposed || proposal != code {
+				t.Errorf("proposal = %q/%v, want the candidate offered", proposal, proposed)
 			}
 		})
 	}
@@ -654,9 +660,12 @@ func TestEmptyCandidateIsNeverAuthorized(t *testing.T) {
 	if ok, why := v3DeliveryAuthorized(res, res.Code); ok {
 		t.Fatalf("empty code was authorized: %s", why)
 	}
-	delivered, authorized := authorizedV3Replacement(res, authBaseline)
-	if authorized || delivered != authBaseline {
-		t.Fatal("empty code replaced the caller's content")
+	if serviceCertifiedCandidate(res, res.Code) {
+		t.Fatal("empty code was certified")
+	}
+	delivered, proposed := proposedV3Candidate(res, authBaseline)
+	if proposed || delivered != authBaseline {
+		t.Fatal("empty code was proposed as a candidate")
 	}
 }
 
@@ -683,11 +692,19 @@ func TestPassedNoLongerAuthorizesDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	helper := string(tools)[strings.Index(string(tools), "func authorizedV3Replacement("):]
+	helper := string(tools)[strings.Index(string(tools), "func serviceCertifiedCandidate("):]
 	helper = helper[:strings.Index(helper, "\n}")]
 	for _, banned := range []string{"result.Passed", "!result.Passed"} {
 		if strings.Contains(helper, banned) {
-			t.Errorf("the shared authorization helper still reads %s", banned)
+			t.Errorf("the contractless delivery rule still reads %s", banned)
+		}
+	}
+	// And the proposal boundary reads no verdict at all: it compares bytes.
+	proposal := string(tools)[strings.Index(string(tools), "func proposedV3Candidate("):]
+	proposal = proposal[:strings.Index(proposal, "\n}")]
+	for _, banned := range []string{"Passed", "Evidence", "ClosureEligible", "Selection"} {
+		if strings.Contains(proposal, banned) {
+			t.Errorf("the proposal boundary reads the service verdict field %s", banned)
 		}
 	}
 	// The field itself stays on the wire for compatibility and telemetry.
@@ -816,9 +833,12 @@ print(json.dumps({
 	if ok, why := v3DeliveryAuthorized(got, got.Code); !ok {
 		t.Fatalf("live verified winner refused: %s", why)
 	}
-	delivered, authorized := authorizedV3Replacement(got, "x = 1\n")
-	if !authorized || delivered != code {
-		t.Fatalf("live winner not delivered: %q authorized=%v", delivered, authorized)
+	if !serviceCertifiedCandidate(got, got.Code) {
+		t.Fatal("the live verified winner was not certified by the contractless rule")
+	}
+	delivered, proposed := proposedV3Candidate(got, "x = 1\n")
+	if !proposed || delivered != code {
+		t.Fatalf("live winner not proposed: %q proposed=%v", delivered, proposed)
 	}
 }
 

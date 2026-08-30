@@ -38,7 +38,12 @@ type obligationDecision struct {
 	// Items are the canonical obligations: paths for outputs, exact command
 	// strings for verification. Empty from a declared source is authoritative
 	// none; empty from legacy is "the heuristic found nothing".
-	Items  []string
+	Items []string
+	// Typed is the verification class's per-command declaration, keyed by the
+	// exact command in Items. Every command has an entry: a typed one where
+	// the client declared it, the legacy one otherwise. Empty for the output
+	// class, which declares paths and not commands.
+	Typed  map[string]VerificationRequirement
 	Source ObligationSource
 	// KnowledgeSpecified is true only when the caller stated `declared`. It is
 	// what separates "no obligations" from "no knowledge of obligations", and
@@ -131,9 +136,13 @@ func resolveVerificationObligation(ctx *AgentContext) obligationDecision {
 		tc = ctx.TaskContract
 	}
 	if tc != nil {
+		// Both lists, merged by exact command identity before the knowledge
+		// rule is applied. A client that sent only typed requirements declared
+		// its commands, and one that sent both declared their union.
 		if items, ok := declaredItems(tc.VerificationKnowledge, tc.VerificationPresent(),
-			tc.VerificationCommands()); ok {
+			verificationCommandsOf(tc)); ok {
 			d.Items = items
+			d.Typed = verificationRequirementsFor(tc)
 			d.Source = ObligationSourceContractDeclared
 			d.KnowledgeSpecified = true
 			return d
@@ -143,6 +152,22 @@ func resolveVerificationObligation(ctx *AgentContext) obligationDecision {
 	// from what the run actually produced, which decideVerificationDemand
 	// already computes from the deliverables.
 	return d
+}
+
+// requestVerificationRequirement is the client's typed declaration for one
+// exact command, or the legacy form for a command it declared without a type.
+//
+// It lives here, with the other obligation-source decisions, so the contract is
+// read in one place: a producer that decoded the contract for itself would be a
+// second reader able to disagree with the derivation about what the client
+// asked for.
+func requestVerificationRequirement(ctx *AgentContext, command string) (VerificationRequirement, bool) {
+	decision := resolveVerificationObligation(ctx)
+	if !decision.KnowledgeSpecified {
+		return VerificationRequirement{}, false
+	}
+	req, ok := decision.Typed[command]
+	return req, ok
 }
 
 // outputKnowledgeDeclared reports whether this request STATED what it produces.

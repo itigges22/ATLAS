@@ -116,21 +116,38 @@ func deliverEditCandidate(ctx *AgentContext, tool, path, relPath,
 	evidence, evID, seen := observeDeliveredCandidateSyntax(ctx, entry, path, improved, observed)
 	var pool []proxyEvidence
 	var unmet map[string]AuthorizationReason
+	mutatedAssets := false
 	if seen {
 		pool = []proxyEvidence{evidence}
-		behavioral, why := observeCandidateVerification(ctx, path, improved, evID)
-		pool, unmet = append(pool, behavioral...), why
+		behavioral, why, mutated := observeCandidateVerification(ctx, path, improved, evID)
+		pool, unmet, mutatedAssets = append(pool, behavioral...), why, mutated
 	}
 
 	delivery := authorizeCandidateDelivery(ctx, entry, path, improved, evID,
 		nil, pool, "", unmet, observed)
-	if !delivery.mayDeliver() {
+	// The same policy owner the new-file route asks, over the same kinds of
+	// fact. An edit route that decided this for itself is how the two paths
+	// disagreed about what a candidate had to show before it could land.
+	policy := decideCandidatePolicy(ctx, advisoryInput{
+		Observed:               observed,
+		TargetDeclared:         outputKnowledgeDeclared(ctx),
+		TargetAuthorized:       targetIsAuthorized(requestObligations(ctx), resolveAgentPath(ctx, path)),
+		Unmet:                  unmet,
+		Decision:               delivery.Decision,
+		Evidence:               pool,
+		Envelope:               meta.Envelope,
+		Cancelled:              ctx.Ctx != nil && ctx.Ctx.Err() != nil,
+		MutatedProtectedAssets: mutatedAssets,
+	}, editCandidateAuthorized(delivery, meta))
+	recordCandidatePolicyDecision(ctx, entry, contentSHA256(improved), policy)
+	if !policy.mayDeliverUnderPolicy() {
 		// An honest refusal. The model's own edit is the alternative, and
 		// nothing has been written yet, so the caller simply proceeds.
 		lifecycle.finish(ctx, routingAuthorizationRefused, contentSHA256(improved),
 			AuthorizationReason(delivery.Refusal))
-		log.Printf("[%s] the authorization refused the candidate (%s) — keeping the caller's content",
-			tool, delivery.Refusal)
+		log.Printf("[%s] the policy refused the candidate (%s) — keeping the caller's content",
+			tool, policy.Decision)
+		emitDeliveryProvenance(ctx, path, DeliveryFromModelProposal, policy)
 		return keep
 	}
 
@@ -152,11 +169,28 @@ func deliverEditCandidate(ctx *AgentContext, tool, path, relPath,
 	// write its own edit afterwards: restoration and settlement own what
 	// happens next, and a second write would undo a decision they made.
 	keep.Delivered = true
-	keep.Result, keep.Meta = result, meta
+	provenance := deliveryProvenanceFor(policy)
+	emitDeliveryProvenance(ctx, path, provenance, policy)
+	keep.Result, keep.Meta = withDeliveryProvenance(result, provenance), meta
 	if derr != nil {
 		keep.Result = result
 	}
 	return keep
+}
+
+// editCandidateAuthorized is whether this edit candidate has cleared the rule
+// that owns it.
+//
+// A request that declared its outputs is owned by the typed decision: trusted
+// evidence about these exact bytes, meeting the floor the client declared. A
+// request that declared nothing has no obligation to be measured against, so
+// its rule is the one it has always had -- the service's own closure verdict --
+// and it is named here rather than left looking like an authorization.
+func editCandidateAuthorized(delivery deliveryAuthorization, meta V3EditMetadata) bool {
+	if delivery.Typed {
+		return delivery.mayDeliver()
+	}
+	return meta.ServiceCertified
 }
 
 // editResultPayload is the originating tool's own result body.

@@ -3687,13 +3687,29 @@ func validateTaskContract(in *TaskContract, workingDir string) (*TaskContract, e
 		len(in.VerificationCommands()) > maxTaskContractEntries {
 		return nil, fmt.Errorf("task_contract exceeds %d entries", maxTaskContractEntries)
 	}
+	// The typed requirements are checked before knowledge is normalised,
+	// because they are part of what the caller declared about verification and
+	// a refusal here must not depend on how the older list was spelled.
+	typedReqs, err := validateVerificationRequirements(in)
+	if err != nil {
+		return nil, err
+	}
+	// The candidate policy is refused rather than defaulted, for the same
+	// reason every other mode on this boundary is: a mode nobody registered is
+	// a state nobody has reasoned about, and a typo must not silently deliver
+	// under a rule the caller did not ask for.
+	if _, ok := ParseCandidatePolicy(in.CandidatePolicy); !ok {
+		return nil, fmt.Errorf(
+			"task_contract.candidate_policy %q is not supported (want strict, advisory or confirm)",
+			in.CandidatePolicy)
+	}
 	outKnow, err := normalizeKnowledge("output_knowledge", in.OutputKnowledge,
 		in.OutputsPresent(), len(in.OutputPaths()))
 	if err != nil {
 		return nil, err
 	}
 	verKnow, err := normalizeKnowledge("verification_knowledge", in.VerificationKnowledge,
-		in.VerificationPresent(), len(in.VerificationCommands()))
+		in.VerificationPresent(), len(verificationCommandsOf(in)))
 	if err != nil {
 		return nil, err
 	}
@@ -3715,7 +3731,8 @@ func validateTaskContract(in *TaskContract, workingDir string) (*TaskContract, e
 	probe := &AgentContext{WorkingDir: workingDir}
 	seen := map[string]bool{}
 	out := &TaskContract{TaskMode: in.TaskMode,
-		OutputKnowledge: outKnow, VerificationKnowledge: verKnow}
+		OutputKnowledge: outKnow, VerificationKnowledge: verKnow,
+		CandidatePolicy: strings.TrimSpace(in.CandidatePolicy)}
 	var paths []string
 	for _, p := range in.OutputPaths() {
 		if strings.TrimSpace(p) == "" {
@@ -3760,6 +3777,10 @@ func validateTaskContract(in *TaskContract, workingDir string) (*TaskContract, e
 			cmds = []string{}
 		}
 		out.Verification = &cmds
+		if typedReqs != nil {
+			out.VerificationRequirements = &typedReqs
+			out.VerificationRequirementsVersion = in.VerificationRequirementsVersion
+		}
 	}
 	return out, nil
 }
@@ -3836,6 +3857,9 @@ const (
 	// How one route entry ended, and what became of the licence it minted.
 	shadowSchemaVersionRouteDisposition    = 1
 	shadowSchemaVersionDeliveryDisposition = 1
+	// One candidate policy answer: which rule owned the decision, what
+	// disqualified the candidate, and what was observed in its favour.
+	shadowSchemaVersionCandidatePolicy = 1
 )
 
 // canonicalSource keeps an unknown decision source out of the record. The

@@ -167,21 +167,21 @@ func observeDeliveredCandidateSyntax(ctx *AgentContext, entry routeEntry, path, 
 // one that ran and failed are four different facts, and only the last is a
 // fact about the candidate.
 func observeCandidateVerification(ctx *AgentContext, path, code string,
-	id candidateEvidenceIdentity) ([]proxyEvidence, map[string]AuthorizationReason) {
+	id candidateEvidenceIdentity) ([]proxyEvidence, map[string]AuthorizationReason, bool) {
 	if ctx == nil || ctx.TaskContract == nil {
-		return nil, nil
+		return nil, nil, false
 	}
 	if strings.TrimSpace(id.InvocationID) == "" ||
 		strings.TrimSpace(id.CandidateInstanceID) == "" {
-		return nil, nil
+		return nil, nil, false
 	}
 	obs := requestObligations(ctx)
 	if len(obs) == 0 {
-		return nil, nil
+		return nil, nil, false
 	}
 	resolved := resolveAgentPath(ctx, path)
 	if !targetIsAuthorized(obs, resolved) {
-		return nil, nil
+		return nil, nil, false
 	}
 
 	// The declared commands, from the proxy's own derivation of the validated
@@ -193,7 +193,7 @@ func observeCandidateVerification(ctx *AgentContext, path, code string,
 		}
 	}
 	if len(declared) == 0 {
-		return nil, nil
+		return nil, nil, false
 	}
 
 	hash := contentSHA256(code)
@@ -226,17 +226,17 @@ func observeCandidateVerification(ctx *AgentContext, path, code string,
 	if ok, _ := req.validate(); !ok {
 		// A declared set the staging budget cannot hold whole. Nothing runs:
 		// a partial set is not a smaller obligation.
-		return nil, unmetForAll(declared, ReasonEvidenceTimedOut)
+		return nil, unmetForAll(declared, ReasonEvidenceTimedOut), false
 	}
 
 	result, ok := stageCandidate(ctx, req)
 	if !ok {
-		return nil, unmetForAll(declared, ReasonProducerUnavailable)
+		return nil, unmetForAll(declared, ReasonProducerUnavailable), false
 	}
 	if valid, _ := result.validateAgainst(req); !valid {
 		// The result contradicted the request it answers. Refusing here is
 		// what makes a malformed or forged result worth nothing.
-		return nil, unmetForAll(declared, ReasonEvidenceExecutionFailed)
+		return nil, unmetForAll(declared, ReasonEvidenceExecutionFailed), false
 	}
 
 	byID := map[string]taskObligation{}
@@ -244,11 +244,19 @@ func observeCandidateVerification(ctx *AgentContext, path, code string,
 		byID[o.ID] = o
 	}
 	var out []proxyEvidence
+	// Whether any staged run changed what it was measuring. The unmet reason
+	// cannot say: a non-zero exit and a mutation are the same reason there,
+	// and they are different facts -- one is a candidate that failed its own
+	// command, the other is a candidate that rewrote the thing checking it.
+	mutated := false
 	unmet := map[string]AuthorizationReason{}
 	for _, r := range result.Commands {
 		o, known := byID[r.ObligationID]
 		if !known {
 			continue
+		}
+		if r.MutatedTarget || r.MutatedWorkspace {
+			mutated = true
 		}
 		if r.Outcome != stagingExitedZero || r.MutatedTarget || r.MutatedWorkspace {
 			unmet[o.ID] = stagingUnmetReason(r)
@@ -270,7 +278,7 @@ func observeCandidateVerification(ctx *AgentContext, path, code string,
 		recordEvidenceObservation(ctx, ev)
 		out = append(out, ev)
 	}
-	return out, unmet
+	return out, unmet, mutated
 }
 
 // stagingUnmetReason turns one staged outcome into the truthful reason its

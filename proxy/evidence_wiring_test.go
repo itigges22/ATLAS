@@ -286,7 +286,7 @@ func TestStagingRunsOnlyForARequestThatDeclaredCommands(t *testing.T) {
 	} {
 		w := wiringWorld(t, contract, "solve.py", "print(7)\n", true)
 		id := nextInvocationIdentity(w.ctx, mintRouteEntry(w.ctx), contentSHA256("print(7)\n"))
-		evidence, unmet := observeCandidateVerification(w.ctx, w.path, "print(7)\n", id)
+		evidence, unmet, _ := observeCandidateVerification(w.ctx, w.path, "print(7)\n", id)
 		if len(evidence) != 0 || len(unmet) != 0 {
 			t.Errorf("a request declaring no commands staged one: %s", contract)
 		}
@@ -300,7 +300,7 @@ func TestAResultNamingAnUndeclaredObligationProducesNothing(t *testing.T) {
 	w := wiringWorld(t,
 		`{"task_mode":"work","verification_knowledge":"declared","verification":["python3 solve.py"]}`,
 		"solve.py", "print(7)\n", true)
-	obl, ok := newTaskObligation(ObligationDeclaredCommand, "python3 solve.py", "", true)
+	obl, ok := newTaskObligation(ObligationDeclaredCommand, "python3 solve.py", VerificationKindRuntime, true)
 	if !ok {
 		t.Fatal("obligation refused")
 	}

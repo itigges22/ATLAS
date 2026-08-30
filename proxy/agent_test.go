@@ -1948,12 +1948,19 @@ func TestImproveContentV3RevokesAFencedCandidateItMustRewrite(t *testing.T) {
 	if strings.Contains(out, "```") || strings.Contains(out, "Looking at the task") {
 		t.Errorf("the wrapper must never reach the caller, got %q", out)
 	}
-	if out != modelEdit {
-		t.Errorf("evidence for the fenced bytes cannot authorize the stripped "+
-			"ones, so the caller's content stands; got %q", out)
+	// The stripped bytes are a proposal -- they are materially different from
+	// the caller's edit -- but the service's evidence describes the FENCED
+	// text, so it certifies nothing about what would be delivered. For a
+	// request that declared nothing, that certification IS the delivery rule,
+	// so the caller's content is what stands.
+	if out != code {
+		t.Errorf("the sanitised proposal was not carried; got %q", out)
 	}
-	if meta.Used {
-		t.Error("provenance survived bytes the evidence does not describe")
+	if meta.ServiceCertified {
+		t.Error("the service certified bytes its evidence does not describe")
+	}
+	if editCandidateAuthorized(deliveryAuthorization{}, meta) {
+		t.Error("a contractless request delivered uncertified bytes")
 	}
 	// The same code, returned in the form it is delivered in, IS adopted --
 	// this is authorization against the final bytes, not a refusal of fences.

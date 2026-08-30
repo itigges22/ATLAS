@@ -41,7 +41,7 @@ func newStagedCmdWorld(t *testing.T) *stagedCmdWorld {
 	hash := contentSHA256(body)
 	observeDeliverable(ctx, "solve.py", []byte(body), ValidationKindSyntax, ValidationPassed, "")
 
-	ob, ok := newTaskObligation(ObligationDeclaredCommand, stagedDeclaredCommand, "", true)
+	ob, ok := newTaskObligation(ObligationDeclaredCommand, stagedDeclaredCommand, VerificationKindRuntime, true)
 	if !ok {
 		t.Fatal("obligation")
 	}
@@ -256,7 +256,7 @@ func TestALedgerThatDoesNotValidateTheseBytesFailsClosed(t *testing.T) {
 func TestAModelCommandNotInTheContractCannotSatisfyCommandDemand(t *testing.T) {
 	w := newStagedCmdWorld(t)
 	// The model runs something plausible of its own invention, staged and green.
-	invented, ok := newTaskObligation(ObligationDeclaredCommand, "python3 -m pytest -q", "", true)
+	invented, ok := newTaskObligation(ObligationDeclaredCommand, "python3 -m pytest -q", VerificationKindRuntime, true)
 	if !ok {
 		t.Fatal("obligation")
 	}

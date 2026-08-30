@@ -40,7 +40,7 @@ func (w *authWorld) observe(t *testing.T) (proxyEvidence, candidateEvidenceIdent
 // stage runs the client-declared producer through the real staging wiring
 // against the world's executor, exactly as production does.
 func (w *authWorld) stage(id candidateEvidenceIdentity) []proxyEvidence {
-	behavioral, _ := observeCandidateVerification(w.ctx, w.path, w.code, id)
+	behavioral, _, _ := observeCandidateVerification(w.ctx, w.path, w.code, id)
 	return behavioral
 }
 
@@ -246,7 +246,7 @@ func TestAuthorizationMatrix(t *testing.T) {
 			t.Errorf("the executor ran %d times, want once per declared command",
 				w.shellRuns)
 		}
-		if got := behavioral[0].Provenance.ObservedStrength; got != "behavioral" {
+		if got := behavioral[0].Provenance.ObservedStrength; got != VerificationKindRuntime {
 			t.Errorf("strength %q, want behavioral", got)
 		}
 		d := w.decide(evID, append([]proxyEvidence{ev}, behavioral...)...)
@@ -527,9 +527,16 @@ func TestAuthorizationMatrix(t *testing.T) {
 	})
 
 	t.Run("existing behavioral baseline re-established by its own command", func(t *testing.T) {
+		// The baseline is behavioral, so re-establishing it takes a command
+		// the client typed as behavioral over assets it owns. The same command
+		// declared untyped is a runtime fact and cannot preserve it.
 		w := newAuthWorld(t,
 			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
-				`"verification_knowledge":"declared","verification":["python3 solve.py"]}`,
+				`"verification_knowledge":"declared","verification":["python3 solve.py"],`+
+				`"verification_requirements_version":1,`+
+				`"verification_requirements":[{"command":"python3 solve.py",`+
+				`"kind":"behavioral","expects":"exit_zero",`+
+				`"asset_authority":"client_supplied"}]}`,
 			"solve.py", authPy, true)
 		w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, VerificationRecord{
 			Command: "python3 solve.py",
@@ -856,7 +863,7 @@ func TestTheDecisionReachesNoLiveWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	banned := map[string]bool{
-		"authorizedV3Replacement": true, "v3DeliveryAuthorized": true,
+		"proposedV3Candidate": true, "serviceCertifiedCandidate": true, "v3DeliveryAuthorized": true,
 		"writeFileRecorded": true, "finalizeCompletion": true,
 		"terminalCompletionAllowed": true, "callV3Generate": true,
 		"callV3GenerateStreaming": true, "revokeV3": true,

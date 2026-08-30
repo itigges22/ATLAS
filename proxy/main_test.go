@@ -814,6 +814,11 @@ func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
 		// nothing has no existence obligation to discharge. It reads no
 		// contract FIELD and reaches no decision of its own.
 		"delivery_settlement.go:": true,
+		// candidate_policy.go joins as THE candidate policy owner. It reads
+		// exactly one field -- the mode the client declared -- and it is the
+		// only place that field is read, which is what keeps the model and the
+		// V3 service off a decision only a client or an operator may make.
+		"candidate_policy.go:": true,
 	}
 	readerAllowed := func(r string) bool {
 		for prefix := range contractReaders {
@@ -2588,6 +2593,11 @@ var shadowGuardOwners = map[string]bool{
 	// and both declare themselves inert in the record they write.
 	"(*routeLifecycle).finish":  true,
 	"recordDeliveryDisposition": true,
+	// The candidate policy's own record: one answer per decided candidate,
+	// with the vetoes that fired and the signals that were observed. It reads
+	// nothing back, and whether the decision it describes delivered is a field
+	// on the record rather than something the sink is asked about.
+	"recordCandidatePolicyDecision": true,
 	"contractOutputs":           true,
 	"shadowCanonicalSet":        true,
 	"shadowHashes":              true,

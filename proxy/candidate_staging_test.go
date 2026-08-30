@@ -53,11 +53,35 @@ type stubSandbox struct {
 	// otherState is the non-candidate part of the workspace, shared across
 	// commands within one staging run and reset per request.
 	perRequestOther string
+	// staged is the overlay bytes each command was handed, keyed by command.
+	// It is what proves a run happened against the candidate rather than
+	// against whatever was on disk.
+	staged map[string]string
+}
+
+// runsOf is how many times the executor was asked to run this exact command.
+func (s *stubSandbox) runsOf(command string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, seen := range s.seen {
+		if seen == command {
+			n++
+		}
+	}
+	return n
+}
+
+// stagedBytes is the overlay content this command last ran against.
+func (s *stubSandbox) stagedBytes(command string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.staged[command]
 }
 
 func newStubSandbox(t *testing.T) *stubSandbox {
 	t.Helper()
-	s := &stubSandbox{effects: map[string]stubEffect{}}
+	s := &stubSandbox{effects: map[string]stubEffect{}, staged: map[string]string{}}
 	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/shell") {
 			http.NotFound(w, r)
@@ -91,6 +115,9 @@ func newStubSandbox(t *testing.T) *stubSandbox {
 		}
 		observed := in.ObservePaths[0]
 		staged := in.Files[observed]
+		s.mu.Lock()
+		s.staged[in.Command] = staged
+		s.mu.Unlock()
 		if effect.StagedAs != "" {
 			staged = effect.StagedAs
 		}

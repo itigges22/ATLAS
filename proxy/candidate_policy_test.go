@@ -1,0 +1,532 @@
+package main
+
+import (
+	"encoding/json"
+	"os"
+	"strings"
+	"testing"
+)
+
+// The policy foundation, exercised through the real write path.
+//
+// Two questions run through every case here and they are deliberately never
+// the same question: whether a candidate may be PROPOSED, which is about bytes,
+// and whether it may LAND, which is about evidence this machine produced about
+// those bytes.
+
+const policyDeclaredOutputs = `{"task_mode":"work","output_knowledge":"declared",` +
+	`"expected_outputs":["solve.py"]}`
+
+// A candidate the service declined to certify still reaches staging. This is
+// the ordering the audit found closed: the trusted producer runs against the
+// candidate, so a candidate discarded before staging can never be measured.
+func TestAnUncertifiedProposalReachesStaging(t *testing.T) {
+	w := newRouteWorldWithClosure(t,
+		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
+			`"verification_knowledge":"declared","verification":["pytest -q"]}`,
+		map[string]stubEffect{"pytest -q": {}}, false)
+	if _, err := w.write(t); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	ran := w.shell.runsOf("pytest -q")
+	if ran == 0 {
+		t.Fatal("the declared command never ran against the candidate")
+	}
+	// And it ran against the CANDIDATE, not the caller's own content.
+	if got := w.shell.stagedBytes("pytest -q"); got != routeWinner {
+		t.Errorf("staged %q, want the candidate", got)
+	}
+}
+
+// The service's own metadata is not a permission. An uncertified proposal that
+// nothing trusted spoke for keeps the caller's content.
+func TestServiceMetadataCannotAuthorizeADelivery(t *testing.T) {
+	for _, closure := range []bool{true, false} {
+		w := newRouteWorldWithClosure(t,
+			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
+				`"verification_knowledge":"declared","verification":["pytest -q"]}`,
+			map[string]stubEffect{"pytest -q": {ExitCode: 1}}, closure)
+		res, err := w.write(t)
+		if err != nil {
+			t.Fatalf("closure=%v: write failed: %v", closure, err)
+		}
+		if got := w.disk(t); got != routeBaseline {
+			t.Errorf("closure=%v: disk holds %q, want the caller's content", closure, got)
+		}
+		if res.V3Used {
+			t.Errorf("closure=%v: a failing command still reported V3 provenance", closure)
+		}
+		if res.DeliveryProvenance != DeliveryFromModelProposal {
+			t.Errorf("closure=%v: provenance %q, want the model's own proposal",
+				closure, res.DeliveryProvenance)
+		}
+	}
+}
+
+// Strict is the default, and it refuses a candidate nothing trusted spoke for.
+func TestStrictRefusesWithoutTrustedEvidence(t *testing.T) {
+	w := newRouteWorldWithClosure(t,
+		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
+			`"verification_knowledge":"declared","verification":["pytest -q"]}`,
+		map[string]stubEffect{"pytest -q": {HTTPStatus: 503}}, true)
+	mode, source := candidatePolicyOf(w.ctx)
+	if mode != CandidatePolicyStrict || source != CandidatePolicySourceDefault {
+		t.Fatalf("default policy is %q from %q, want strict from default", mode, source)
+	}
+	if _, err := w.write(t); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	if got := w.disk(t); got != routeBaseline {
+		t.Errorf("disk holds %q, want the caller's content", got)
+	}
+}
+
+// A typed behavioral declaration that passes authorizes exactly these bytes,
+// and the delivery carries every safety property it always did.
+func TestTypedBehavioralVerificationAuthorizesTheExactBytes(t *testing.T) {
+	w := newRouteWorldWithClosure(t,
+		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
+			`"verification_knowledge":"declared",`+
+			`"verification_requirements_version":1,"verification_requirements":[`+
+			`{"command":"pytest -q","kind":"behavioral","expects":"exit_zero",`+
+			`"asset_authority":"client_supplied"}]}`,
+		map[string]stubEffect{"pytest -q": {}}, false)
+	res, err := w.write(t)
+	if err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	if got := w.disk(t); got != routeWinner {
+		t.Fatalf("disk holds %q, want the candidate", got)
+	}
+	if res.AuthorizedDeliveryHash != contentSHA256(routeWinner) {
+		t.Error("the delivery did not name the exact bytes it was authorized for")
+	}
+	if res.DeliveryProvenance != DeliveryFromStrictCandidate {
+		t.Errorf("provenance %q, want the strict candidate", res.DeliveryProvenance)
+	}
+	if liveGrantCount(w.ctx) != 0 {
+		t.Error("the one-time grant was not spent")
+	}
+}
+
+// The same command, declared untyped, cannot reach behavioral authority --
+// and a task that needs behavioral therefore keeps the baseline.
+func TestLegacyVerificationCannotProduceBehavioralAuthority(t *testing.T) {
+	w := newRouteWorldWithClosure(t,
+		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
+			`"verification_knowledge":"declared","verification":["pytest -q"]}`,
+		map[string]stubEffect{"pytest -q": {}}, false)
+	obs := requestObligations(w.ctx)
+	for _, o := range obs {
+		if o.Kind == ObligationDeclaredCommand && o.RequiredStrength == VerificationKindBehavioral {
+			t.Fatal("an untyped command declared behavioral strength")
+		}
+	}
+	if got := authorizationFloor(obs); got == VerificationKindBehavioral {
+		t.Fatal("an untyped command raised the floor to behavioral")
+	}
+}
+
+// Advisory prefers a candidate only when every hard veto passes, and even then
+// it does not deliver in this build.
+func TestAdvisoryPrefersOnlyWithNoVetoAndDeliversNothing(t *testing.T) {
+	ctx := policyContext(t, CandidatePolicyAdvisory)
+	clean := advisoryInput{
+		Observed:         checkOutcome{Status: ValidationPassed},
+		TargetDeclared:   true,
+		TargetAuthorized: true,
+		Evidence: []proxyEvidence{{
+			Provenance: V3EvidenceProvenance{Source: ProvenanceClientDeclaredVerification},
+			Outcome:    ValidationPassed,
+		}},
+	}
+	out := decideCandidatePolicy(ctx, clean, false)
+	if out.Decision != PolicyCandidatePreferredAdvisory {
+		t.Fatalf("decision %q, want candidate_preferred_advisory", out.Decision)
+	}
+	if out.Delivers || out.mayDeliverUnderPolicy() {
+		t.Fatal("advisory preference delivered without a measured policy")
+	}
+	// One veto is enough, whatever else was observed.
+	vetoed := clean
+	vetoed.Observed = checkOutcome{Status: ValidationFailed}
+	if out := decideCandidatePolicy(ctx, vetoed, false); out.Decision != PolicyCandidateRejectedHardVeto {
+		t.Fatalf("a failing gate produced %q", out.Decision)
+	}
+}
+
+// Nothing observed either way is its own answer, not a preference.
+func TestWeakEvidenceRetainsTheBaseline(t *testing.T) {
+	advisory := policyContext(t, CandidatePolicyAdvisory)
+	nothing := advisoryInput{
+		Observed:         checkOutcome{Status: ValidationNotRun},
+		TargetDeclared:   true,
+		TargetAuthorized: true,
+	}
+	if out := decideCandidatePolicy(advisory, nothing, false); out.Decision != PolicyInsufficientConfidence {
+		t.Errorf("advisory with nothing observed said %q", out.Decision)
+	}
+	strict := policyContext(t, CandidatePolicyStrict)
+	if out := decideCandidatePolicy(strict, nothing, false); out.Decision != PolicyBaselineRetained {
+		t.Errorf("strict with nothing observed said %q", out.Decision)
+	}
+	// Conflicting: a trusted pass alongside an unmet declared command. The
+	// unmet obligation is a fact and it decides.
+	conflicting := advisoryInput{
+		Observed:         checkOutcome{Status: ValidationPassed},
+		TargetDeclared:   true,
+		TargetAuthorized: true,
+		Unmet:            map[string]AuthorizationReason{"cmd": ReasonEvidenceExecutionFailed},
+		Evidence: []proxyEvidence{{
+			Provenance: V3EvidenceProvenance{Source: ProvenanceProxyOwnedValidation},
+			Outcome:    ValidationPassed,
+		}},
+	}
+	out := decideCandidatePolicy(advisory, conflicting, false)
+	if out.Decision != PolicyCandidateRejectedHardVeto {
+		t.Errorf("conflicting evidence said %q", out.Decision)
+	}
+	if !hasVeto(out.Vetoes, VetoDeclaredVerificationFailed) {
+		t.Errorf("vetoes %v do not name the failed command", out.Vetoes)
+	}
+}
+
+// Every hard veto is reachable, and each is named for the fact that fired it.
+func TestEveryHardVetoIsReachable(t *testing.T) {
+	ctx := policyContext(t, CandidatePolicyAdvisory)
+	base := advisoryInput{Observed: checkOutcome{Status: ValidationPassed},
+		TargetDeclared: true, TargetAuthorized: true}
+	for _, tc := range []struct {
+		name  string
+		mutate func(*advisoryInput)
+		want  string
+	}{
+		{"syntax or structural", func(in *advisoryInput) {
+			in.Observed = checkOutcome{Status: ValidationFailed}
+		}, VetoSyntaxOrStructural},
+		{"language or target", func(in *advisoryInput) {
+			in.LanguageOrBoundaryViolation = true
+		}, VetoLanguageOrTargetMismatch},
+		{"path expansion", func(in *advisoryInput) {
+			in.TargetAuthorized = false
+		}, VetoUnauthorizedPathExpansion},
+		{"cancelled", func(in *advisoryInput) { in.Cancelled = true }, VetoCancelledOrTimedOut},
+		{"destructive without permission", func(in *advisoryInput) {
+			in.DestructiveImplied, in.DestructivePermitted = true, false
+		}, VetoDestructiveWithoutPermission},
+		{"mutated protected assets", func(in *advisoryInput) {
+			in.MutatedProtectedAssets = true
+		}, VetoMutatedProtectedAssets},
+		{"declared verification failed", func(in *advisoryInput) {
+			in.Unmet = map[string]AuthorizationReason{"c": ReasonEvidenceExecutionFailed}
+		}, VetoDeclaredVerificationFailed},
+		{"execution unavailable", func(in *advisoryInput) {
+			in.Unmet = map[string]AuthorizationReason{"c": ReasonProducerUnavailable}
+		}, VetoExecutionUnavailable},
+		{"timed out", func(in *advisoryInput) {
+			in.Unmet = map[string]AuthorizationReason{"c": ReasonEvidenceTimedOut}
+		}, VetoCancelledOrTimedOut},
+		{"incomplete evidence", func(in *advisoryInput) {
+			in.Unmet = map[string]AuthorizationReason{"c": ReasonEvidenceMissing}
+		}, VetoIncompleteEvidence},
+		{"weaker than baseline", func(in *advisoryInput) {
+			in.Decision = AuthorizationDecision{Reason: ReasonBaselineNotPreserved}
+		}, VetoWeakerThanBaseline},
+		{"stale identity", func(in *advisoryInput) {
+			in.Decision = AuthorizationDecision{Reason: ReasonWorkspaceStale}
+		}, VetoStaleIdentity},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := base
+			tc.mutate(&in)
+			out := decideCandidatePolicy(ctx, in, false)
+			if !hasVeto(out.Vetoes, tc.want) {
+				t.Fatalf("vetoes %v do not include %q", out.Vetoes, tc.want)
+			}
+			if out.Decision != PolicyCandidateRejectedHardVeto {
+				t.Fatalf("decision %q, want the veto rejection", out.Decision)
+			}
+			if out.Delivers {
+				t.Fatal("a vetoed candidate was cleared to deliver")
+			}
+		})
+	}
+}
+
+// A veto outranks a strict authorization: the disqualifying fact wins.
+func TestAVetoOutranksStrictAuthorization(t *testing.T) {
+	ctx := policyContext(t, CandidatePolicyStrict)
+	in := advisoryInput{
+		Observed:         checkOutcome{Status: ValidationFailed},
+		TargetDeclared:   true,
+		TargetAuthorized: true,
+	}
+	out := decideCandidatePolicy(ctx, in, true)
+	if out.Decision != PolicyCandidateRejectedHardVeto || out.Delivers {
+		t.Fatalf("decision %q delivers=%v, want a refusal", out.Decision, out.Delivers)
+	}
+}
+
+// A candidate weaker than the artifact already on disk is rejected, through
+// the real route.
+func TestCandidateWeakerThanBaselineIsRejected(t *testing.T) {
+	w := newRouteWorldWithClosure(t,
+		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
+			`"verification_knowledge":"declared","verification":["pytest -q"]}`,
+		map[string]stubEffect{"pytest -q": {}}, true)
+	// The baseline on disk already carries a green behavioural record.
+	if err := os.WriteFile(w.path, []byte(routeBaseline), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w.ctx.VerificationEvidence = append(w.ctx.VerificationEvidence, VerificationRecord{
+		Command: "pytest -q",
+		Covered: map[string]string{w.path: contentSHA256(routeBaseline)}, Turn: 1,
+	})
+	obs := requestObligations(w.ctx)
+	var preserved bool
+	for _, o := range obs {
+		if o.Kind == ObligationBaselinePreserved && o.RequiredStrength == "behavioral" {
+			preserved = true
+		}
+	}
+	if !preserved {
+		t.Skip("no behavioural baseline was derived for this fixture")
+	}
+	if _, err := w.write(t); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	// The untyped command reaches runtime, which is weaker than the baseline
+	// the artifact already holds, so the candidate does not displace it.
+	if got := w.disk(t); got != routeBaseline {
+		t.Errorf("disk holds %q, want the preserved baseline", got)
+	}
+}
+
+// The hidden evaluator has no representation anywhere the policy can reach.
+func TestHiddenEvaluatorCannotInfluenceThePolicy(t *testing.T) {
+	for _, f := range []string{"candidate_policy.go", "advisory_policy.go",
+		"candidate_provenance.go", "verification_requirements.go"} {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Comments may DISCUSS it; code may not reach it. The check is about
+		// what the build can execute, so the prose is stripped first.
+		for _, banned := range []string{"evaluator", "benchmark", "held_out", "ground_truth"} {
+			if strings.Contains(strings.ToLower(codeWithoutComments(string(src))), banned) {
+				t.Errorf("%s names %q in code", f, banned)
+			}
+		}
+	}
+	// And no provenance source exists that a hidden grader could claim.
+	for source := range provenanceSources {
+		if strings.Contains(source, "evaluator") || strings.Contains(source, "benchmark") {
+			t.Errorf("provenance source %q exists", source)
+		}
+	}
+}
+
+// Advisory lowers the evidence bar for PREFERRING a candidate. It lowers
+// nothing about identity, permission or delivery.
+func TestAdvisoryCannotAuthorizeDestructiveActions(t *testing.T) {
+	ctx := policyContext(t, CandidatePolicyAdvisory)
+	in := advisoryInput{
+		Observed:           checkOutcome{Status: ValidationPassed},
+		TargetDeclared:     true,
+		TargetAuthorized:   true,
+		DestructiveImplied: true,
+		Evidence: []proxyEvidence{{
+			Provenance: V3EvidenceProvenance{Source: ProvenanceClientDeclaredVerification},
+			Outcome:    ValidationPassed,
+		}},
+	}
+	out := decideCandidatePolicy(ctx, in, false)
+	if out.Decision != PolicyCandidateRejectedHardVeto {
+		t.Fatalf("decision %q, want a refusal", out.Decision)
+	}
+	if !hasVeto(out.Vetoes, VetoDestructiveWithoutPermission) {
+		t.Errorf("vetoes %v do not name the permission", out.Vetoes)
+	}
+}
+
+// Neither the model nor the service can select the mode.
+func TestOnlyTheClientOrTheOperatorSelectsTheMode(t *testing.T) {
+	// Source-level: the resolver reads the validated contract and the process
+	// environment, and nothing else.
+	src, err := os.ReadFile("candidate_policy.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	resolver := body[strings.Index(body, "func candidatePolicyOf("):]
+	resolver = resolver[:strings.Index(resolver, "\n}")]
+	for _, banned := range []string{"V3GenerateResponse", "Evidence", "Envelope",
+		"Selection", "model", "Message"} {
+		if strings.Contains(resolver, banned) {
+			t.Errorf("the mode resolver reads %q", banned)
+		}
+	}
+	// A contract carrying a mode the build does not know is refused at the
+	// boundary rather than defaulted.
+	var in TaskContract
+	if err := json.Unmarshal([]byte(`{"task_mode":"work","candidate_policy":"yolo"}`),
+		&in); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validateTaskContract(&in, t.TempDir()); err == nil {
+		t.Fatal("an unknown candidate policy was accepted")
+	}
+	// The client's own statement wins over the deployment's.
+	ctx := policyContext(t, CandidatePolicyConfirm)
+	if mode, source := candidatePolicyOf(ctx); mode != CandidatePolicyConfirm ||
+		source != CandidatePolicySourceClient {
+		t.Errorf("client mode resolved to %q from %q", mode, source)
+	}
+}
+
+// The operator's setting answers for requests that said nothing, and the
+// shipped default is unchanged.
+func TestOperatorConfigurationAnswersForSilentRequests(t *testing.T) {
+	t.Setenv("ATLAS_CANDIDATE_POLICY", string(CandidatePolicyAdvisory))
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	if mode, source := candidatePolicyOf(ctx); mode != CandidatePolicyAdvisory ||
+		source != CandidatePolicySourceOperator {
+		t.Errorf("operator mode resolved to %q from %q", mode, source)
+	}
+	t.Setenv("ATLAS_CANDIDATE_POLICY", "nonsense")
+	if mode, _ := candidatePolicyOf(ctx); mode != CandidatePolicyStrict {
+		t.Errorf("an unreadable operator value resolved to %q, want strict", mode)
+	}
+	t.Setenv("ATLAS_CANDIDATE_POLICY", "")
+	if mode, source := candidatePolicyOf(ctx); mode != CandidatePolicyStrict ||
+		source != CandidatePolicySourceDefault {
+		t.Errorf("the shipped default is %q from %q", mode, source)
+	}
+}
+
+// Advisory is not the shipped default, and nothing in the build makes it one.
+func TestAdvisoryIsNotTheShippedDefault(t *testing.T) {
+	if defaultCandidatePolicy() != CandidatePolicyStrict {
+		t.Fatal("the default policy is not strict")
+	}
+	for _, f := range []string{"main.go", "agent.go", "tools.go", "edit_route_delivery.go"} {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		if strings.Contains(string(src), "CandidatePolicyAdvisory") {
+			t.Errorf("%s names the advisory mode; it must be reached only through configuration", f)
+		}
+	}
+}
+
+// Delivered bytes always say where they came from, and only a delivering
+// decision may claim a candidate origin.
+func TestDeliveryProvenanceNamesTheOrigin(t *testing.T) {
+	for _, tc := range []struct {
+		decision candidatePolicyDecision
+		delivers bool
+		want     string
+	}{
+		{PolicyCandidateAuthorizedStrict, true, DeliveryFromStrictCandidate},
+		{PolicyCandidatePreferredAdvisory, true, DeliveryFromAdvisoryCandidate},
+		{PolicyHumanConfirmationRequired, true, DeliveryFromHumanApproval},
+		{PolicyCandidateAuthorizedStrict, false, DeliveryFromModelProposal},
+		{PolicyBaselineRetained, false, DeliveryFromModelProposal},
+		{PolicyCandidateRejectedHardVeto, false, DeliveryFromModelProposal},
+		{PolicyInsufficientConfidence, false, DeliveryFromModelProposal},
+	} {
+		got := deliveryProvenanceFor(candidatePolicyOutcome{
+			Decision: tc.decision, Delivers: tc.delivers})
+		if got != tc.want {
+			t.Errorf("%s delivers=%v gave %q, want %q", tc.decision, tc.delivers, got, tc.want)
+		}
+	}
+}
+
+// The provenance is a server-side fact for the user, not something the model
+// reads and argues with.
+func TestDeliveryProvenanceIsNotModelFacing(t *testing.T) {
+	r := &ToolResult{Success: true, DeliveryProvenance: DeliveryFromStrictCandidate}
+	blob, err := json.Marshal(r.ModelFacing())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(blob), DeliveryFromStrictCandidate) ||
+		strings.Contains(string(blob), "delivery_provenance") {
+		t.Fatalf("the model sees the provenance: %s", blob)
+	}
+}
+
+// No advisory value is presented as a probability of correctness.
+func TestNoAdvisoryValueClaimsCorrectness(t *testing.T) {
+	in := advisoryInput{
+		Observed:         checkOutcome{Status: ValidationPassed},
+		TargetDeclared:   true,
+		TargetAuthorized: true,
+		Evidence: []proxyEvidence{{
+			Provenance: V3EvidenceProvenance{
+				Source: ProvenanceClientDeclaredVerification, ObservedStrength: "behavioral"},
+			Outcome: ValidationPassed,
+		}},
+	}
+	signals := advisorySignals(in)
+	for key, value := range signals {
+		switch value.(type) {
+		case float64, float32:
+			t.Errorf("signal %q is a bare number that reads as a probability", key)
+		}
+		if strings.Contains(key, "confidence") || strings.Contains(key, "probability") ||
+			strings.Contains(key, "correct") {
+			t.Errorf("signal %q claims correctness", key)
+		}
+	}
+	// The service's numbers are labelled as the service's wherever they appear.
+	in.Envelope = &V3EvidenceEnvelope{}
+	for key := range advisorySignals(in) {
+		if strings.Contains(key, "closure") || strings.Contains(key, "selection") {
+			if !strings.HasPrefix(key, "service_") {
+				t.Errorf("signal %q does not name the side that produced it", key)
+			}
+		}
+	}
+}
+
+// --- helpers -----------------------------------------------------------------
+
+func policyContext(t *testing.T, mode candidatePolicyMode) *AgentContext {
+	t.Helper()
+	dir := t.TempDir()
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.TaskContract = mustContract(t, dir,
+		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
+			`"candidate_policy":"`+string(mode)+`"}`)
+	return ctx
+}
+
+// codeWithoutComments strips line and block comments so a source-level check
+// asserts about what runs rather than about what is written down.
+func codeWithoutComments(src string) string {
+	var out strings.Builder
+	for _, line := range strings.Split(src, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "//") {
+			continue
+		}
+		if i := strings.Index(line, "//"); i >= 0 {
+			line = line[:i]
+		}
+		out.WriteString(line)
+		out.WriteString("\n")
+	}
+	return out.String()
+}
+
+func hasVeto(vetoes []string, want string) bool {
+	for _, v := range vetoes {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}

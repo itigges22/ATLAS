@@ -343,10 +343,37 @@ type routeWorld struct {
 	shellGone *bool
 }
 
+// The two fields a service record carries about its own verdict. They travel
+// together in production -- a record that is not closure-eligible is not a
+// verified winner -- so the fixture keeps them consistent.
+func evidenceStrengthFor(closureEligible bool) string {
+	if closureEligible {
+		return "behavioral"
+	}
+	return "syntax"
+}
+
+func selectionStatusFor(closureEligible bool) string {
+	if closureEligible {
+		return "verified_winner"
+	}
+	return "best_not_closure_eligible"
+}
+
 const routeBaseline = "def solve(values):\n    total = 0\n    for v in values:\n        total += v\n    return total\n"
 const routeWinner = "def solve(values):\n    return sum(values)\n"
 
 func newRouteWorld(t *testing.T, contract string, commands map[string]stubEffect) *routeWorld {
+	t.Helper()
+	return newRouteWorldWithClosure(t, contract, commands, true)
+}
+
+// newRouteWorldWithClosure is the same world with the service's own closure
+// verdict as a knob. An uncertified proposal is the ordinary case for real
+// code -- the python adapter reaches syntax and the default floor is
+// behavioral -- so the routing rules have to be exercised for it too.
+func newRouteWorldWithClosure(t *testing.T, contract string,
+	commands map[string]stubEffect, closureEligible bool) *routeWorld {
 	t.Helper()
 	dir := t.TempDir()
 	winnerHash := contentSHA256(routeWinner)
@@ -373,13 +400,14 @@ func newRouteWorld(t *testing.T, contract string, commands map[string]stubEffect
 					},
 					"evaluation": map[string]interface{}{
 						"execution_status": "ok", "supported": true,
-						"evidence_strength": "behavioral", "requirements_complete": true,
-						"closure_eligible": true,
+						"evidence_strength": evidenceStrengthFor(closureEligible),
+						"requirements_complete": true,
+						"closure_eligible":      closureEligible,
 						"quality": map[string]interface{}{
 							"required_coverage": 1.0, "optional_quality": 1.0, "overall": 1.0},
 					},
 					"coverage":  map[string]interface{}{"required": []string{}, "demonstrated": []string{}},
-					"selection": map[string]interface{}{"status": "verified_winner", "reason": "highest"},
+					"selection": map[string]interface{}{"status": selectionStatusFor(closureEligible), "reason": "highest"},
 					"delivery": map[string]interface{}{
 						"delivered_content_hash": winnerHash, "describes_delivered_candidate": true},
 				},

@@ -68,7 +68,10 @@ func produceDeclaredVerificationEvidence(ctx *AgentContext, req verificationEvid
 	if req.Obligation.Kind != ObligationDeclaredCommand {
 		return proxyEvidence{}, false
 	}
-	if req.Obligation.RequiredStrength != "behavioral" {
+	// The floor may be any strength a client can declare. What it may not be
+	// is a strength no declaration produces: an obligation carrying oracle, or
+	// carrying nothing, was not built from a verification requirement.
+	if !verificationKinds[req.Obligation.RequiredStrength] {
 		return proxyEvidence{}, false
 	}
 	if !stagingCommandOutcomes[req.Result.Outcome] {
@@ -80,6 +83,15 @@ func produceDeclaredVerificationEvidence(ctx *AgentContext, req verificationEvid
 	// caller never declared has no authority here whoever typed it, and a
 	// caller that stated no knowledge declared nothing at all.
 	if !requestDeclaredCommand(ctx, command) {
+		return proxyEvidence{}, false
+	}
+	// The client's typed declaration for this exact command, re-read from the
+	// validated request rather than accepted from the caller. It is where the
+	// strength comes from, so a caller cannot hand in a stronger one than the
+	// client wrote -- and an obligation whose floor disagrees with the
+	// declaration it should have come from is refused rather than reconciled.
+	requirement, declared := requestVerificationRequirement(ctx, command)
+	if !declared || requirement.declaredStrength() != req.Obligation.RequiredStrength {
 		return proxyEvidence{}, false
 	}
 	// What ran must be what the client wrote, byte for byte. The staging side
@@ -128,12 +140,13 @@ func produceDeclaredVerificationEvidence(ctx *AgentContext, req verificationEvid
 		BaselineIdentity: req.Identity.BaselineIdentity,
 		ObligationID:     req.Obligation.ID,
 		RequiredStrength: req.Obligation.RequiredStrength,
-		// A successful declared command demonstrates that the thing the client
-		// asked to be run ran and succeeded. It is behavioral. It is NOT an
-		// oracle: nothing here compared an answer with a reference, and
-		// labelling an arbitrary exit-zero command oracle evidence is how "it
-		// ran" becomes "it is right".
-		ObservedStrength: "behavioral",
+		// What the run may be said to have demonstrated: the weaker of what
+		// the client declared and what its assets can support. Never oracle --
+		// nothing here compared an answer with a reference -- and never
+		// behavioral for a command measured against something this session
+		// wrote, because a request that authors its own oracle demonstrates
+		// only that it agrees with itself.
+		ObservedStrength: verificationObservedStrength(ctx, requirement),
 	}
 	outcome := ValidationFailed
 	// Passing means the exact command exited zero having changed neither the

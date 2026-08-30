@@ -1949,11 +1949,11 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// while NOT being closure-eligible. Returning its code for diagnostics
 	// would have silently made it the delivered artifact. An unverified
 	// alternative must never displace the baseline.
-	code, authorizedV3 := authorizedV3Replacement(v3Result, baselineContent)
+	code, proposed := proposedV3Candidate(v3Result, baselineContent)
 	// Declared here, with the bytes it describes. It used to be declared
 	// below the language-swap gate, which is precisely why that gate could
 	// restore the baseline without withdrawing provenance.
-	fellBack := !authorizedV3
+	fellBack := !proposed
 
 	// Language-swap gate. V3 generates candidates for the TASK, and on a
 	// multi-file job the task is not the file: "build me a snake game"
@@ -1961,8 +1961,10 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// document with 149 lines of JS and no tags. The in-pipeline smoke
 	// check could not see it because for .html it runs an HTML parser, and
 	// an HTML parser accepts any text at all.
+	languageOrBoundaryViolation := false
 	if swapped := v3SwappedTheLanguage(path, baselineContent, code); swapped != "" {
-		code, authorizedV3, fellBack = revokeV3(baselineContent, swapped, path)
+		languageOrBoundaryViolation = true
+		code, proposed, fellBack = revokeV3(baselineContent, swapped, path)
 	}
 
 	// Sanitise V3 output. The pipeline's underlying LLM response
@@ -1974,17 +1976,12 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		code = cleaned
 	}
 
-	// Authorization is re-asked of the FINAL bytes. Sanitisation rewrites the
-	// candidate after the service earned its evidence, so evidence that
-	// described the pre-sanitisation text describes nothing that is about to be
-	// written. Rather than claim it does, the delivery falls back to the
-	// caller's own content and the provenance goes with it.
-	if authorizedV3 {
-		if ok, why := v3DeliveryAuthorized(v3Result, code); !ok {
-			log.Printf("[write_file] evidence no longer authorizes the bytes for %s (%s)",
-				logPath(path), why)
-			code, authorizedV3, fellBack = revokeV3(baselineContent, why, path)
-		}
+	// Sanitisation can turn a proposal back into the caller's own content. That
+	// is not a candidate, and carrying it forward as one would mint a licence
+	// for a delivery that is not going to happen.
+	if proposed && code == baselineContent {
+		code, proposed, fellBack = revokeV3(baselineContent,
+			"sanitisation left the caller's own content", path)
 	}
 
 	// FINAL-BYTE OBSERVATION. The bytes are now chosen, and every artifact this
@@ -2014,22 +2011,21 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// `authorizedV3` stands exactly as it did.
 	// A RETAINED BASELINE IS NOT A CANDIDATE.
 	//
-	// When nothing the evidence authorizes came back, `code` is the caller's
-	// own proposal. Staging it, taking an authorization decision over it and
-	// minting a one-time licence for it describes a delivery that is not going
-	// to happen: the fallback below writes those same bytes directly and the
-	// licence retires unused. Measured live: nine grants minted, zero delivery
-	// attempts, and a reader could not tell a retained baseline from an
-	// undelivered candidate.
+	// When nothing materially different came back, `code` is the caller's own
+	// content. Staging it, taking an authorization decision over it and minting
+	// a one-time licence for it describes a delivery that is not going to
+	// happen: the fallback below writes those same bytes directly and the
+	// licence retires unused.
 	//
-	// Everything else on the route is untouched -- the structural gate, the
-	// cancellation window, the final-byte invariant and the fallback write all
-	// still run, and the route is still recorded as contemplated.
-	candidateProposed := authorizedV3 || code != baselineContent
+	// What a candidate does NOT have to be is service-certified. The service
+	// ranks; the evidence this machine produces about these exact bytes is what
+	// authorizes, and it cannot be produced without staging the candidate.
+	candidateProposed := proposed
 
 	var observed []proxyEvidence
 	var evID candidateEvidenceIdentity
 	var unmet map[string]AuthorizationReason
+	stagingMutatedAssets := false
 	if ev, id, seen := observeDeliveredCandidateSyntax(ctx, entry, path, code, deliveredCheck); seen && candidateProposed {
 		observed, evID = []proxyEvidence{ev}, id
 		// THE production call path for the client-declared verification
@@ -2038,8 +2034,9 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		// behavioral question has an answer rather than a blocker. It runs at
 		// all only for a request that declared commands, and the staging
 		// budget bounds what it may spend on one.
-		behavioral, why := observeCandidateVerification(ctx, path, code, evID)
+		behavioral, why, mutatedAssets := observeCandidateVerification(ctx, path, code, evID)
 		observed, unmet = append(observed, behavioral...), why
+		stagingMutatedAssets = mutatedAssets
 	}
 	selected := ""
 	if v3Result != nil && v3Result.Evidence != nil {
@@ -2056,10 +2053,42 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		delivery = authorizeCandidateDelivery(ctx, entry, path, code, evID,
 			v3Result.Evidence, observed, selected, unmet, deliveredCheck)
 	}
-	// A typed refusal withdraws the candidate. The caller's own content is the
+	// THE policy owner. It reads the typed answer, the trusted observations and
+	// the disqualifying facts, and says which of the honest decisions this
+	// candidate earned. Only the strict authorization delivers in this build.
+	policy := decideCandidatePolicy(ctx, advisoryInput{
+		Observed:                    deliveredCheck,
+		TargetDeclared:              outputKnowledgeDeclared(ctx),
+		TargetAuthorized:            targetIsAuthorized(requestObligations(ctx), resolveAgentPath(ctx, path)),
+		LanguageOrBoundaryViolation: languageOrBoundaryViolation,
+		Unmet:                       unmet,
+		Decision:                    delivery.Decision,
+		Evidence:                    observed,
+		Envelope:                    envelopeOf(v3Result),
+		Cancelled:                   ctx.Ctx != nil && ctx.Ctx.Err() != nil,
+		MutatedProtectedAssets:      stagingMutatedAssets,
+	}, candidateProposed && delivery.Typed && delivery.mayDeliver())
+	if candidateProposed {
+		recordCandidatePolicyDecision(ctx, entry, contentSHA256(code), policy)
+	}
+
+	// Whether the proposal becomes the delivered artifact. For a request that
+	// declared its outputs the policy decides; for one that declared nothing
+	// there is no obligation to decide against, so the service's own closure
+	// verdict remains that request's rule exactly as it always was.
+	authorizedV3 := false
+	switch {
+	case !candidateProposed:
+	case delivery.Typed:
+		authorizedV3 = policy.mayDeliverUnderPolicy()
+	default:
+		authorizedV3 = serviceCertifiedCandidate(v3Result, code)
+	}
+
+	// A refusal withdraws the candidate. The caller's own content is the
 	// alternative, and it is checked before being restored -- the same rule
 	// every other gate on this path follows.
-	if authorizedV3 && !delivery.mayDeliver() {
+	if candidateProposed && !authorizedV3 {
 		lifecycle.finish(ctx, routingAuthorizationRefused, contentSHA256(code),
 			AuthorizationReason(delivery.Refusal))
 		baseCheck := fallbackSyntaxOutcomeFor(ctx, path, baselineContent).aggregate()
@@ -2072,7 +2101,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 				ValidationDetail: baseCheck.Detail}, nil
 		}
 		code, authorizedV3, fellBack = revokeV3(
-			baselineContent, "the authorization refused it ("+delivery.Refusal+")", path)
+			baselineContent, "the policy refused it ("+string(policy.Decision)+")", path)
 		deliveredCheck, checkedFor = baseCheck, code
 	}
 	if deliveredCheck.Status == ValidationFailed {
@@ -2276,7 +2305,9 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		// same false claim in a different field, and it fires the agent's
 		// "V3 verified this edit" completion nudge.
 		fbRes, fbErr := writeFileRecorded(path, code, ctx)
-		return applyRouteObservation(fbRes, fbErr, final)
+		out, outErr := applyRouteObservation(fbRes, fbErr, final)
+		emitDeliveryProvenance(ctx, path, DeliveryFromModelProposal, policy)
+		return withDeliveryProvenance(out, DeliveryFromModelProposal), outErr
 	}
 
 	// Stream V3 completion summary — after the gate, so a rejected write
@@ -2314,7 +2345,10 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 			// different field.
 			return result, nil
 		}
-		return v3DeliveredResult(ctx, result, v3Result, code), nil
+		provenance := deliveryProvenanceFor(policy)
+		emitDeliveryProvenance(ctx, path, provenance, policy)
+		return withDeliveryProvenance(v3DeliveredResult(ctx, result, v3Result, code),
+			provenance), nil
 	}
 
 	result, err := writeFileRecorded(path, code, ctx)
@@ -2330,7 +2364,20 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// this; validation says only what was checked here.
 	overlayValidation(result, final)
 
-	return v3DeliveredResult(ctx, result, v3Result, code), nil
+	// A contractless delivery: the service's own rule let it land, and the
+	// terminal is told the same thing every other delivery tells it.
+	emitDeliveryProvenance(ctx, path, DeliveryFromStrictCandidate, policy)
+	return withDeliveryProvenance(v3DeliveredResult(ctx, result, v3Result, code),
+		DeliveryFromStrictCandidate), nil
+}
+
+// withDeliveryProvenance labels a result with where its bytes came from.
+func withDeliveryProvenance(result *ToolResult, provenance string) *ToolResult {
+	if result == nil || !deliveryProvenanceValues[provenance] {
+		return result
+	}
+	result.DeliveryProvenance = provenance
+	return result
 }
 
 // v3DeliveredResult attaches the pipeline's metadata to a delivery that
@@ -3160,6 +3207,14 @@ type V3EditMetadata struct {
 	WinningScore         float64
 	PhaseSolved          string
 	VerificationEvidence []V3VerificationEvidence
+	// Envelope is the service's own evidence record for the proposal, carried
+	// so the route that decides can read its ranking signals and its closure
+	// verdict. Advisory: it is a signal and the legacy contractless rule, and
+	// it authorizes nothing for a request that declared its outputs.
+	Envelope *V3EvidenceEnvelope
+	// ServiceCertified is that verdict about the FINAL bytes -- after
+	// sanitisation, about exactly what the route received.
+	ServiceCertified bool
 }
 
 // improveContentWithV3 sends content through the V3 pipeline and returns
@@ -3167,50 +3222,76 @@ type V3EditMetadata struct {
 // On error, returns "" + zero metadata; the caller should fall back to
 // writing the original content.
 
-// authorizedV3Replacement is the SINGLE authorization point for letting a V3
-// candidate replace the caller's content.
+// proposedV3Candidate is the PROPOSAL boundary: what the service offered, and
+// whether it is materially different from what the caller wrote.
 //
-// Both delivery paths previously made this decision independently, and only
-// one of them made it correctly: write_file was fixed to consult Passed
-// while improveContentWithV3 still took Code unconditionally, so an
-// unverified candidate could still land through an edit. Duplicating a
-// safety condition is how half of it goes stale.
+// It answers one question and deliberately not the other. Whether a candidate
+// may LAND is a decision this machine makes, from evidence it produced itself,
+// against the policy the client or the operator declared -- and it cannot make
+// that decision about bytes it never received. Collapsing an uncertified
+// proposal to the baseline here is what put the trusted producer on the far
+// side of a gate that needed its output: staging runs the client's declared
+// command against the candidate, so a candidate discarded before staging can
+// never be the thing that command is run against.
 //
-// Authorization is Passed, never the mere presence of Code. The evidence
-// work introduces a "best_record" that is the strongest available candidate
-// while deliberately NOT closure-eligible; its code exists for diagnostics
-// and must never become the delivered artifact.
+// The service's own verdict travels with the bytes as advisory metadata. It
+// ranks; it does not authorize. Nothing downstream reads it as permission, and
+// no field of it mints a grant.
+//
+// A proposal is still refused outright for the things that make bytes unusable
+// rather than unproven: no response, no code, or code identical to the
+// caller's own, which is not a proposal at all.
+func proposedV3Candidate(result *V3GenerateResponse, baseline string) (string, bool) {
+	if result == nil || strings.TrimSpace(result.Code) == "" {
+		// No bytes, or nothing but whitespace. Not a proposal: unusable is a
+		// different thing from unproven, and only the second is worth staging.
+		return baseline, false
+	}
+	if result.Code == baseline {
+		// The service agreed with the caller. There is nothing to decide, no
+		// licence to mint, and no delivery to describe.
+		return baseline, false
+	}
+	return result.Code, true
+}
 
 // revokeV3 restores the caller's baseline AND withdraws V3 provenance in one
 // step.
 //
 // These moved independently before: the language-swap gate reset the bytes
-// to baseline but left authorizedV3 true and fellBack false, so the final
+// to baseline but left the proposal live and fellBack false, so the final
 // check attached V3Used, phase, score and verification evidence to content
-// V3 had not authored — and fired the "V3 verified this edit" nudge over it.
-// Authorization describes the FINAL bytes, not the initial response, so it
-// is revocable and every restoring gate must revoke it. Returning all three
+// V3 had not authored -- and fired the "V3 verified this edit" nudge over it.
+// Provenance describes the FINAL bytes, not the initial response, so it is
+// revocable and every restoring gate must revoke it. Returning all three
 // values together makes it impossible for a future gate to update one
 // without the others.
 func revokeV3(baseline, reason, path string) (string, bool, bool) {
 	log.Printf("[write_file] V3 provenance withdrawn for %s — %s", logPath(path), reason)
-	return baseline, false, true // content, authorizedV3, fellBack
+	return baseline, false, true // content, live proposal, fellBack
 }
 
-func authorizedV3Replacement(result *V3GenerateResponse, baseline string) (string, bool) {
-	code := ""
-	if result != nil {
-		code = result.Code
+// envelopeOf is the service's evidence record, or nil. Read for advisory
+// signals only; nothing downstream may treat it as permission.
+func envelopeOf(result *V3GenerateResponse) *V3EvidenceEnvelope {
+	if result == nil {
+		return nil
 	}
-	authorized, reason := v3DeliveryAuthorized(result, code)
-	if !authorized {
-		if code != "" {
-			log.Printf("[v3] returned %d bytes the evidence does not authorize (%s) — keeping the caller's content",
-				len(code), reason)
-		}
-		return baseline, false
-	}
-	return code, true
+	return result.Evidence
+}
+
+// serviceCertifiedCandidate is the service's own closure verdict about the
+// FINAL bytes, and the legacy delivery rule for a request that declared no
+// output knowledge.
+//
+// A contractless request states nothing this machine can authorize against: no
+// target, no obligation, no floor. Its delivery rule is the one it has always
+// had, and it is kept here, named for what it is, rather than left looking like
+// an authorization. A request that DID declare its outputs never reaches it --
+// the typed decision owns that one.
+func serviceCertifiedCandidate(result *V3GenerateResponse, code string) bool {
+	ok, _ := v3DeliveryAuthorized(result, code)
+	return ok
 }
 
 func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3EditMetadata, error) {
@@ -3311,10 +3392,10 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 		})
 	}
 
-	chosen, authorizedV3 := authorizedV3Replacement(v3Result, content)
-	if !authorizedV3 {
-		// Unverified: the caller's content stands, and no V3 metadata is
-		// attached to it.
+	chosen, proposed := proposedV3Candidate(v3Result, content)
+	if !proposed {
+		// Nothing materially different came back. The caller's content stands,
+		// and no V3 metadata is attached to it.
 		return content, V3EditMetadata{}, nil
 	}
 	// V3 sometimes returns code wrapped in markdown fences (the underlying
@@ -3325,14 +3406,12 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 	if cleaned, sanitized := sanitizeFileContent(path, chosen); sanitized {
 		log.Printf("[v3] sanitised candidate for %s", logPath(path))
 		chosen = cleaned
-		// Authorization is re-asked of the bytes as they now stand. The
-		// service earned its evidence on what it returned; stripping a
-		// wrapper produces different bytes, and evidence for the wrapped
-		// form describes nothing that would be delivered. Same rule the
-		// write path applies after its own sanitisation.
-		if ok, why := v3DeliveryAuthorized(v3Result, chosen); !ok {
-			log.Printf("[v3] sanitised candidate for %s is no longer authorized (%s) — keeping the caller's content",
-				logPath(path), why)
+		// Stripping a wrapper can leave the caller's own content, which is
+		// not a proposal. Everything else about the sanitised bytes is
+		// decided by the route that receives them: it stages them, produces
+		// evidence about them, and applies the policy.
+		if chosen == content {
+			log.Printf("[v3] sanitised candidate for %s is the caller's own content", logPath(path))
 			return content, V3EditMetadata{}, nil
 		}
 	}
@@ -3357,6 +3436,8 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 		WinningScore:         v3Result.WinningScore,
 		PhaseSolved:          v3Result.PhaseSolved,
 		VerificationEvidence: v3Result.VerificationEvidence,
+		Envelope:             envelopeOf(v3Result),
+		ServiceCertified:     serviceCertifiedCandidate(v3Result, chosen),
 	}, nil
 }
 

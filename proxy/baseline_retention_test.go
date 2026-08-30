@@ -12,16 +12,19 @@ import (
 
 // A retained caller baseline is not a candidate delivery.
 //
-// When the service returns nothing the evidence authorizes, the route keeps
-// the caller's own bytes and writes them directly. It nevertheless staged
-// those bytes as a candidate, took an authorization decision over them and
-// minted a one-time licence it then retired unused. Measured on the Trusted
-// Delivery Live Validation run: nine grants minted, zero delivery attempts,
-// and a reader could not tell a retained baseline from an undelivered
-// candidate without reading the delivery disposition.
+// When nothing materially different comes back, the route keeps the caller's
+// own bytes and writes them directly. It must not stage those bytes as a
+// candidate, take an authorization decision over them, or mint a one-time
+// licence it then retires unused: a reader could not otherwise tell a retained
+// baseline from an undelivered candidate.
+//
+// Retention is about the BYTES, not about the service's opinion of them. A
+// proposal the service declined to certify is still a proposal, and what
+// happens to it is decided by the evidence this machine produces about it --
+// TestAnUncertifiedProposalReachesStaging is that case.
 
-// retentionWorld is a route whose service declines to authorize a
-// replacement, which is the ordinary shape when no candidate closes.
+// retentionWorld is a route whose service returns the caller's own content,
+// which is the ordinary shape when the pipeline finds nothing better.
 func retentionWorld(t *testing.T, contract string) *routeWorld {
 	t.Helper()
 	// The declared command passes in staging, which is what made the live run
@@ -32,10 +35,10 @@ func retentionWorld(t *testing.T, contract string) *routeWorld {
 	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/v3/generate":
-			// A well-formed answer whose own record says the best candidate
-			// is not closure eligible. Nothing here is authorized to land.
+			// A well-formed answer that offers the caller's own bytes back,
+			// with a record saying nothing closed. There is no candidate here.
 			body, _ := json.Marshal(map[string]interface{}{
-				"code": routeWinner, "passed": false, "phase_solved": "",
+				"code": routeBaseline, "passed": false, "phase_solved": "",
 				"candidates_tested": 3, "winning_score": 0.4,
 				"evidence": map[string]interface{}{
 					"wire_version": "1.0.0", "record_schema_version": "1.1.0",
@@ -43,7 +46,7 @@ func retentionWorld(t *testing.T, contract string) *routeWorld {
 						"contract_id": "c.v1", "contract_version": "1",
 						"adapter_id": "python_compile", "adapter_version": "0.1.0-prototype",
 						"artifact_scope": "solve.py", "evaluation_context_hash": "ctx",
-						"candidate_content_hash": contentSHA256(routeWinner),
+						"candidate_content_hash": contentSHA256(routeBaseline),
 					},
 					"evaluation": map[string]interface{}{
 						"execution_status": "ok", "supported": true,

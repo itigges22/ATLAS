@@ -263,8 +263,11 @@ func TestEvidenceMatrix(t *testing.T) {
 		if !ok {
 			t.Fatal("an exact declared command produced no evidence")
 		}
-		if ev.Provenance.ObservedStrength != "behavioral" {
-			t.Errorf("strength %q, want behavioral", ev.Provenance.ObservedStrength)
+		// A command declared without a type is a runtime fact: it ran against
+		// these bytes and exited zero. Reaching behavioral takes a typed
+		// declaration and assets the client owns.
+		if ev.Provenance.ObservedStrength != VerificationKindRuntime {
+			t.Errorf("strength %q, want runtime", ev.Provenance.ObservedStrength)
 		}
 		met, missing := declaredVerificationCoverage([]taskObligation{cmd}, []proxyEvidence{ev})
 		if len(met) != 1 || len(missing) != 0 {
@@ -388,7 +391,8 @@ func TestEvidenceMatrix(t *testing.T) {
 		// The client declared nothing. The model wrote its own test and ran it
 		// green against the exact bytes.
 		w := newMatrixWorld(t, `{"task_mode":"work"}`, "solve.py", secretCode, true)
-		obl, ok := newTaskObligation(ObligationDeclaredCommand, "python3 test_solve.py", "", true)
+		obl, ok := newTaskObligation(ObligationDeclaredCommand, "python3 test_solve.py",
+			VerificationKindRuntime, true)
 		if !ok {
 			t.Fatal("obligation refused")
 		}

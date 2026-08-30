@@ -91,9 +91,24 @@ func TestEveryObligationKindHasExactlyOneAnswerAboutItsFloor(t *testing.T) {
 func TestADeclaredCommandIsBehavioralAndNotAnOracle(t *testing.T) {
 	// Exit zero says the command the client asked for ran and succeeded
 	// against these bytes. It does not say an answer was checked against a
-	// reference.
-	if got := obligationKindRequiredStrength[ObligationDeclaredCommand]; got != "behavioral" {
-		t.Errorf("declared command floor is %q, want behavioral", got)
+	// reference, so no declaration reaches oracle -- and the kind carries no
+	// fixed floor at all, because how strongly a command counts is a statement
+	// only the client can make about that command.
+	if _, fixed := obligationKindRequiredStrength[ObligationDeclaredCommand]; fixed {
+		t.Error("the declared-command kind carries a fixed floor")
+	}
+	if !obligationDynamicStrengthKinds[ObligationDeclaredCommand] {
+		t.Error("the declared-command floor is not taken from the obligation")
+	}
+	for _, kind := range []string{VerificationKindSyntax, VerificationKindRuntime,
+		VerificationKindBehavioral} {
+		got, ok := obligationRequiredStrength(ObligationDeclaredCommand, kind)
+		if !ok || got != kind {
+			t.Errorf("declared %q resolved to %q (ok=%v)", kind, got, ok)
+		}
+	}
+	if _, ok := obligationRequiredStrength(ObligationDeclaredCommand, "oracle"); ok {
+		t.Error("a declared command reached oracle")
 	}
 	if got := obligationKindRequiredStrength[ObligationDeclaredExample]; got != "oracle" {
 		t.Errorf("declared example floor is %q, want oracle", got)
@@ -120,7 +135,7 @@ func TestAnUnknownObligationKindFailsClosed(t *testing.T) {
 // leak. The rule is uniform so no exception can leak one.
 func TestAnObligationIDNeverCarriesItsSubject(t *testing.T) {
 	const secret = "pytest --token=hunter2 -q"
-	o, ok := newTaskObligation(ObligationDeclaredCommand, secret, "", true)
+	o, ok := newTaskObligation(ObligationDeclaredCommand, secret, VerificationKindRuntime, true)
 	if !ok {
 		t.Fatal("declared command obligation refused")
 	}
@@ -150,9 +165,15 @@ func TestObligationIDsMatchTheServiceVocabulary(t *testing.T) {
 
 func TestTheClosureFloorIsTheStrongestRequiredObligation(t *testing.T) {
 	exists, _ := newTaskObligation(ObligationArtifactExists, "a.py", "", true)
-	cmd, _ := newTaskObligation(ObligationDeclaredCommand, "pytest -q", "", true)
+	cmd, _ := newTaskObligation(ObligationDeclaredCommand, "pytest -q", VerificationKindBehavioral, true)
 	if got := obligationClosureFloor([]taskObligation{exists, cmd}); got != "behavioral" {
 		t.Errorf("floor %q, want behavioral", got)
+	}
+	// And an untyped command carries the floor it can actually support.
+	untyped, _ := newTaskObligation(ObligationDeclaredCommand, "pytest -q",
+		VerificationKindRuntime, true)
+	if got := obligationClosureFloor([]taskObligation{exists, untyped}); got != "runtime" {
+		t.Errorf("floor %q, want runtime", got)
 	}
 	unsup, _ := newTaskObligation(ObligationUnsupported, "a thing", "", true)
 	if got := obligationClosureFloor([]taskObligation{exists, unsup}); got != "oracle" {
@@ -222,8 +243,10 @@ func TestEachDeclaredCommandIsItsOwnExactObligation(t *testing.T) {
 		if !ok {
 			t.Fatalf("no obligation for declared command %q", cmd)
 		}
-		if o.RequiredStrength != "behavioral" {
-			t.Errorf("%q floor %q, want behavioral", cmd, o.RequiredStrength)
+		// Declared without a type, so each carries the runtime floor rather
+		// than a behavioral one nobody stated.
+		if o.RequiredStrength != VerificationKindRuntime {
+			t.Errorf("%q floor %q, want runtime", cmd, o.RequiredStrength)
 		}
 	}
 	// Two commands are two obligations, never one satisfied twice.

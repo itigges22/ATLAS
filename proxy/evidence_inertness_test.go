@@ -22,7 +22,8 @@ import (
 // changes what lands, so the set of callers is pinned.
 var deliveryDecisions = []string{
 	"EvidenceSupportsProvenanceFor",
-	"authorizedV3Replacement",
+	"proposedV3Candidate",
+	"serviceCertifiedCandidate",
 	"v3DeliveryAuthorized",
 }
 
@@ -94,7 +95,8 @@ func TestTheDeliveryGraphGainedNoCaller(t *testing.T) {
 	allowed := map[string]bool{
 		"v3_bridge.go:v3DeliveryAuthorized":          true,
 		"v3_bridge.go:EvidenceSupportsProvenanceFor": true,
-		"tools.go:authorizedV3Replacement":           true,
+		"tools.go:proposedV3Candidate":                true,
+		"tools.go:serviceCertifiedCandidate":          true,
 		"tools.go:writeFileWithV3":                   true,
 		"tools.go:improveContentWithV3":              true,
 	}
@@ -207,9 +209,9 @@ func TestATypedRefusalNeverFallsBackToACandidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(src)
-	i := strings.Index(body, "!delivery.mayDeliver()")
+	i := strings.Index(body, "if candidateProposed && !authorizedV3 {")
 	if i < 0 {
-		t.Fatal("the typed refusal is no longer on the production path")
+		t.Fatal("the policy refusal is no longer on the production path")
 	}
 	// The refusal branch restores the caller's own baseline. It must name
 	// baselineContent and must not reach for the candidate.
@@ -221,7 +223,7 @@ func TestATypedRefusalNeverFallsBackToACandidate(t *testing.T) {
 	if !strings.Contains(branch, "revokeV3(") || !strings.Contains(branch, "baselineContent") {
 		t.Error("a typed refusal does not restore the caller's own content")
 	}
-	if strings.Contains(branch, "v3Result.Code") || strings.Contains(branch, "authorizedV3Replacement") {
+	if strings.Contains(branch, "v3Result.Code") || strings.Contains(branch, "proposedV3Candidate") {
 		t.Error("a typed refusal reaches for a candidate")
 	}
 	// And the grant is only ever spent on the typed route.

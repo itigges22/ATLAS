@@ -230,6 +230,10 @@ func TestEachObligationClassHasExactlyOneLiveDecision(t *testing.T) {
 	// evidence_inertness_test.go proves separately.
 	readers := map[string]bool{
 		"verification_evidence.go:requestDeclaredCommand": true,
+		// The typed-declaration reader. It is inside the obligation owner and
+		// answers one question about one command, from the same decision every
+		// other reader sees.
+		"obligations.go:requestVerificationRequirement": true,
 		// The one place a caller asks what a request obliges. It derives from
 		// what the owners said and decides nothing itself.
 		"obligation_kinds.go:requestObligations": true,
@@ -265,6 +269,10 @@ func TestOnlyNamedReadersReachTheObligationOwner(t *testing.T) {
 		"agent.go:runAgentLoop":                           true,
 		"guardrails.go:decideVerificationDemand":          true,
 		"verification_evidence.go:requestDeclaredCommand": true,
+		// The typed-declaration reader. It is inside the obligation owner and
+		// answers one question about one command, from the same decision every
+		// other reader sees.
+		"obligations.go:requestVerificationRequirement": true,
 		"obligation_kinds.go:requestObligations":          true,
 		"obligations.go:outputKnowledgeDeclared":          true,
 	}
@@ -361,15 +369,20 @@ func TestOnlyTheOwnerReadsTheKnowledgeFields(t *testing.T) {
 
 func TestNoNewConsumerInTheDeliveryGraph(t *testing.T) {
 	files := proxyFiles(t)
-	for _, fn := range []string{"EvidenceSupportsProvenanceFor", "authorizedV3Replacement",
+	for _, fn := range []string{"EvidenceSupportsProvenanceFor", "serviceCertifiedCandidate",
 		"v3DeliveryAuthorized"} {
 		for site := range callSites(files, fn) {
 			allowed := map[string]bool{
 				"v3_bridge.go:v3DeliveryAuthorized":          true,
 				"v3_bridge.go:EvidenceSupportsProvenanceFor": true,
-				"tools.go:authorizedV3Replacement":           true,
-				"tools.go:writeFileWithV3":                   true,
-				"tools.go:improveContentWithV3":              true,
+				// The service's own verdict has exactly one reader and two
+				// callers: the contractless delivery rule, and the write and
+				// edit routes that apply it to a request which declared
+				// nothing. A request that DID declare its outputs never
+				// reaches it.
+				"tools.go:serviceCertifiedCandidate": true,
+				"tools.go:writeFileWithV3":           true,
+				"tools.go:improveContentWithV3":      true,
 			}
 			if !allowed[site] {
 				t.Errorf("%s gained a new caller of %s", site, fn)
@@ -377,7 +390,7 @@ func TestNoNewConsumerInTheDeliveryGraph(t *testing.T) {
 		}
 	}
 	// The obligation owner must not reach the delivery graph at all.
-	for _, fn := range []string{"EvidenceSupportsProvenanceFor", "authorizedV3Replacement",
+	for _, fn := range []string{"EvidenceSupportsProvenanceFor", "serviceCertifiedCandidate",
 		"v3DeliveryAuthorized", "MayAuthorize", "BindsTo"} {
 		for site := range callSites(files, fn) {
 			if strings.Contains(site, "Obligation") {
