@@ -65,6 +65,11 @@ func newGrantWorldWithCode(t *testing.T, code string, commands ...string) *grant
 		Evidence:                evidence,
 		BaselineWitnessCommand:  grantWitness(w.ctx, w.path),
 		OutputKnowledgeDeclared: outputKnowledgeDeclared(w.ctx),
+		// The structured intent of the call a licence would be bound to. A
+		// grant is refused without one, so every fixture that expects to mint
+		// carries the scope its route would have derived.
+		Scope:          testMutationScope(w.ctx, mintRouteEntry(w.ctx), w.path, w.code),
+		CandidateBytes: w.code,
 	}
 	d := decideAuthorization(w.ctx, in)
 	return &grantWorld{authWorld: w, in: in, decision: d}
@@ -620,6 +625,8 @@ func TestAGrantCarriesNoContent(t *testing.T) {
 		},
 		Evidence:                append([]proxyEvidence{ev}, w.stage(evID)...),
 		OutputKnowledgeDeclared: outputKnowledgeDeclared(w.ctx),
+		Scope:                   testMutationScope(w.ctx, mintRouteEntry(w.ctx), w.path, secret),
+		CandidateBytes:          secret,
 	}
 	d := decideAuthorization(w.ctx, in)
 	g, ok, why := mintAuthorizationGrant(w.ctx, in, d, "selected")
@@ -668,6 +675,8 @@ func TestGrantTelemetryCarriesNoPathOrContent(t *testing.T) {
 		},
 		Evidence:                append([]proxyEvidence{ev}, w.stage(evID)...),
 		OutputKnowledgeDeclared: outputKnowledgeDeclared(w.ctx),
+		Scope:                   testMutationScope(w.ctx, mintRouteEntry(w.ctx), w.path, secret),
+		CandidateBytes:          secret,
 	}
 	d := decideAuthorization(w.ctx, in)
 

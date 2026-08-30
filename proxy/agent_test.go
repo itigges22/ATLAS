@@ -1767,7 +1767,9 @@ func writeGateCtx(t *testing.T, v3URL, sandboxURL, workDir string) *AgentContext
 	ctx := NewAgentContext(workDir, Tier2Medium)
 	ctx.V3URL = v3URL
 	ctx.SandboxURL = sandboxURL
-	ctx.Ctx = context.Background()
+	// A request identity, because the route mints one entry per attempt and a
+	// call that cannot be named bounds no mutation. Production always has one.
+	ctx.Ctx = context.WithValue(context.Background(), requestIDKey, "req-write-gate")
 	return ctx
 }
 
@@ -1819,6 +1821,11 @@ func TestWriteFileV3CleanWinnerKeepsTelemetry(t *testing.T) {
 	sb := fakeSyntaxSandbox(t, "")
 	defer sb.Close()
 	ctx := writeGateCtx(t, v3.URL, sb.URL, dir)
+	// The client declares the artifact it asked for. Without a declared target
+	// there is nothing to authorize against and the model's own bytes land,
+	// which is a different test from this one.
+	ctx.TaskContract = mustContract(t, dir,
+		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["app.py"]}`)
 
 	res, err := writeFileWithV3(path, baseline, ctx)
 	if err != nil {
@@ -1849,6 +1856,8 @@ func TestWriteFileV3BothBrokenRejects(t *testing.T) {
 	sb := fakeSyntaxSandbox(t, "")
 	defer sb.Close()
 	ctx := writeGateCtx(t, v3.URL, sb.URL, dir)
+	ctx.TaskContract = mustContract(t, dir,
+		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["app.py"]}`)
 
 	res, err := writeFileWithV3(path, baseline, ctx)
 	if err != nil {
@@ -1941,7 +1950,7 @@ func TestImproveContentV3RevokesAFencedCandidateItMustRewrite(t *testing.T) {
 	defer sb.Close()
 	ctx := writeGateCtx(t, v3.URL, sb.URL, dir)
 
-	out, meta, err := improveContentWithV3(path, modelEdit, ctx)
+	out, _, err := improveContentWithV3(path, modelEdit, ctx)
 	if err != nil {
 		t.Fatalf("improveContentWithV3 error: %v", err)
 	}
@@ -1949,18 +1958,12 @@ func TestImproveContentV3RevokesAFencedCandidateItMustRewrite(t *testing.T) {
 		t.Errorf("the wrapper must never reach the caller, got %q", out)
 	}
 	// The stripped bytes are a proposal -- they are materially different from
-	// the caller's edit -- but the service's evidence describes the FENCED
-	// text, so it certifies nothing about what would be delivered. For a
-	// request that declared nothing, that certification IS the delivery rule,
-	// so the caller's content is what stands.
+	// the caller's edit -- and the route that receives them decides. Nothing
+	// the service says about them is an authorization, and a request that
+	// declared nothing has no trusted verification to satisfy, so what lands
+	// is the caller's own edit.
 	if out != code {
 		t.Errorf("the sanitised proposal was not carried; got %q", out)
-	}
-	if meta.ServiceCertified {
-		t.Error("the service certified bytes its evidence does not describe")
-	}
-	if editCandidateAuthorized(deliveryAuthorization{}, meta) {
-		t.Error("a contractless request delivered uncertified bytes")
 	}
 	// The same code, returned in the form it is delivered in, IS adopted --
 	// this is authorization against the final bytes, not a refusal of fences.

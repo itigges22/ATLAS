@@ -51,6 +51,12 @@ func deliverEditCandidate(ctx *AgentContext, tool, path, relPath,
 	lifecycle := newRouteLifecycle(entry)
 	defer lifecycle.finalizeDefault(ctx)
 
+	// The structured intent of THIS call: the tool the model actually invoked,
+	// the canonical target it named, the pre-edit artifact and the caller's own
+	// post-edit result. The difference between the last two is the boundary a
+	// candidate may not leave.
+	scope, scopeOK := deriveMutationScope(ctx, entry, tool, path, original, edited)
+
 	// Observe-only. The answer is recorded for this route and never consulted:
 	// generation happens exactly as often as it did before, and any future
 	// compute saving here needs its own measurement and its own authorization.
@@ -123,8 +129,14 @@ func deliverEditCandidate(ctx *AgentContext, tool, path, relPath,
 		pool, unmet, mutatedAssets = append(pool, behavioral...), why, mutated
 	}
 
+	scopeAdmits, scopeRefusal := false, scopeRefusedNoScope
+	if scopeOK {
+		scopeAdmits, scopeRefusal = scopeAdmitsCandidate(ctx, scope, improved)
+	}
+	recordMutationScope(ctx, scope, scopeAdmits, scopeRefusal)
+
 	delivery := authorizeCandidateDelivery(ctx, entry, path, improved, evID,
-		nil, pool, "", unmet, observed)
+		meta.Envelope, pool, "", unmet, observed, scope)
 	// The same policy owner the new-file route asks, over the same kinds of
 	// fact. An edit route that decided this for itself is how the two paths
 	// disagreed about what a candidate had to show before it could land.
@@ -138,7 +150,9 @@ func deliverEditCandidate(ctx *AgentContext, tool, path, relPath,
 		Envelope:               meta.Envelope,
 		Cancelled:              ctx.Ctx != nil && ctx.Ctx.Err() != nil,
 		MutatedProtectedAssets: mutatedAssets,
-	}, editCandidateAuthorized(delivery, meta))
+		ScopeAdmits:            scopeAdmits,
+		ScopeRefusal:           scopeRefusal,
+	}, delivery.Typed && delivery.mayDeliver())
 	recordCandidatePolicyDecision(ctx, entry, contentSHA256(improved), policy)
 	if !policy.mayDeliverUnderPolicy() {
 		// An honest refusal. The model's own edit is the alternative, and
@@ -176,21 +190,6 @@ func deliverEditCandidate(ctx *AgentContext, tool, path, relPath,
 		keep.Result = result
 	}
 	return keep
-}
-
-// editCandidateAuthorized is whether this edit candidate has cleared the rule
-// that owns it.
-//
-// A request that declared its outputs is owned by the typed decision: trusted
-// evidence about these exact bytes, meeting the floor the client declared. A
-// request that declared nothing has no obligation to be measured against, so
-// its rule is the one it has always had -- the service's own closure verdict --
-// and it is named here rather than left looking like an authorization.
-func editCandidateAuthorized(delivery deliveryAuthorization, meta V3EditMetadata) bool {
-	if delivery.Typed {
-		return delivery.mayDeliver()
-	}
-	return meta.ServiceCertified
 }
 
 // editResultPayload is the originating tool's own result body.

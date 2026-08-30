@@ -489,11 +489,11 @@ func TestAuthorizedV3ReplacementIsTheOnlyGate(t *testing.T) {
 		{"nil result falls back", nil, baseline, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// The contractless delivery rule, which is what this table has
-			// always been about: a request that declared nothing delivers on
-			// the service's own verdict and on nothing else.
-			if got := serviceCertifiedCandidate(tc.result, codeOf(tc.result)); got != tc.authorized {
-				t.Fatalf("serviceCertifiedCandidate = %v, want %v", got, tc.authorized)
+			// The service's own verdict, which authorizes nothing anywhere:
+			// this table now pins what the predicate SAYS, not what it
+			// permits. No production path consults it.
+			if got, _ := v3DeliveryAuthorized(tc.result, codeOf(tc.result)); got != tc.authorized {
+				t.Fatalf("v3DeliveryAuthorized = %v, want %v", got, tc.authorized)
 			}
 			// And the bytes a refused verdict leaves behind are the caller's.
 			if !tc.authorized {
@@ -714,15 +714,9 @@ func TestEditPathDeliversOnlyAuthorizedCandidates(t *testing.T) {
 			if !meta.Used {
 				t.Error("a proposal lost the pipeline that produced it")
 			}
-			if meta.ServiceCertified != c.delivered {
-				t.Errorf("service certification %v, want %v",
-					meta.ServiceCertified, c.delivered)
-			}
-			// And the contractless delivery rule agrees with it, over the same
-			// bytes, so the two cannot drift apart.
-			if got := editCandidateAuthorized(deliveryAuthorization{}, meta); got != c.delivered {
-				t.Errorf("the contractless rule said %v, want %v", got, c.delivered)
-			}
+			// Whatever the envelope said, the metadata carries no
+			// certification: there is no field for the service to authorize
+			// through and no route that would read one.
 		})
 	}
 }
@@ -753,11 +747,8 @@ func TestEditPathRevokesWhenSanitisationChangesTheBytes(t *testing.T) {
 	if out != inner {
 		t.Fatalf("the sanitised proposal was not carried: %q", out)
 	}
-	if meta.ServiceCertified {
-		t.Error("certification survived a hash that no longer matches the bytes")
-	}
-	if editCandidateAuthorized(deliveryAuthorization{}, meta) {
-		t.Error("a contractless request delivered bytes no evidence describes")
+	if meta.Envelope == nil {
+		t.Error("the advisory record did not travel with the proposal")
 	}
 	// The same bytes, returned unwrapped and verified as such, ARE delivered:
 	// this is authorization against what will be written, not a blanket
@@ -962,7 +953,6 @@ func TestEditPathAuthorizesOnlyThroughTheSharedGate(t *testing.T) {
 		t.Error("runEditPipeline manufactures provenance instead of carrying it")
 	}
 }
-
 
 // codeOf is the bytes a response offered, or "" for none.
 func codeOf(result *V3GenerateResponse) string {

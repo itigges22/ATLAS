@@ -102,6 +102,7 @@ func TestCancellationStopsThePolicy(t *testing.T) {
 		Observed:         checkOutcome{Status: ValidationPassed},
 		TargetDeclared:   true,
 		TargetAuthorized: true,
+		ScopeAdmits:      true,
 		Cancelled:        ctx.Ctx.Err() != nil,
 		Evidence: []proxyEvidence{{
 			Provenance: V3EvidenceProvenance{Source: ProvenanceClientDeclaredVerification},

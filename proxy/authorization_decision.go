@@ -171,6 +171,16 @@ type authorizationInput struct {
 	// statement a client can make indistinguishable from silence, and would
 	// hand the candidate to the legacy decision on the strength of it.
 	OutputKnowledgeDeclared bool
+	// Scope is the structured intent of the tool call this candidate belongs
+	// to: which target it may touch and what boundary it may not leave. It
+	// narrows and never grants -- a licence is refused without one, and no
+	// scope has ever caused one to be minted.
+	Scope mutationScope
+	// CandidateBytes are the exact bytes the decision is about. They are read
+	// only to ask the scope whether they stayed inside the boundary, and they
+	// never enter a record, a log or a hash other than the one already carried
+	// as CandidateHash.
+	CandidateBytes string
 }
 
 // baselinePreservedBy answers whether the evidence that authorized this

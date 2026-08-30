@@ -3860,6 +3860,9 @@ const (
 	// One candidate policy answer: which rule owned the decision, what
 	// disqualified the candidate, and what was observed in its favour.
 	shadowSchemaVersionCandidatePolicy = 1
+	// One tool call's structured mutation scope, and whether the candidate
+	// stayed inside it.
+	shadowSchemaVersionMutationScope = 1
 )
 
 // canonicalSource keeps an unknown decision source out of the record. The

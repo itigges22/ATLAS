@@ -23,7 +23,6 @@ import (
 var deliveryDecisions = []string{
 	"EvidenceSupportsProvenanceFor",
 	"proposedV3Candidate",
-	"serviceCertifiedCandidate",
 	"v3DeliveryAuthorized",
 }
 
@@ -95,8 +94,7 @@ func TestTheDeliveryGraphGainedNoCaller(t *testing.T) {
 	allowed := map[string]bool{
 		"v3_bridge.go:v3DeliveryAuthorized":          true,
 		"v3_bridge.go:EvidenceSupportsProvenanceFor": true,
-		"tools.go:proposedV3Candidate":                true,
-		"tools.go:serviceCertifiedCandidate":          true,
+		"tools.go:proposedV3Candidate":               true,
 		"tools.go:writeFileWithV3":                   true,
 		"tools.go:improveContentWithV3":              true,
 	}

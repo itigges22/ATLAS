@@ -73,8 +73,10 @@ func TestTheObserversRunAndRecordAttributably(t *testing.T) {
 		observeInvocationFeasibility(w.ctx, mintRouteEntry(w.ctx))
 		outcome := fallbackSyntaxOutcomeFor(w.ctx, w.path, w.code).aggregate()
 		if ev, id, ok := observeDeliveredCandidateSyntax(w.ctx, mintRouteEntry(w.ctx), w.path, w.code, outcome); ok {
-			authorizeCandidateDelivery(w.ctx, mintRouteEntry(w.ctx), w.path, w.code, id, nil,
-				[]proxyEvidence{ev}, "selected", nil, checkOutcome{Status: ValidationPassed})
+			captureEntry := mintRouteEntry(w.ctx)
+			authorizeCandidateDelivery(w.ctx, captureEntry, w.path, w.code, id, nil,
+				[]proxyEvidence{ev}, "selected", nil, checkOutcome{Status: ValidationPassed},
+				testMutationScope(w.ctx, captureEntry, w.path, w.code))
 		} else {
 			t.Error("the producer did not run on a declared code output")
 		}
@@ -220,8 +222,10 @@ func TestTheObserversAreSilentWithNoSink(t *testing.T) {
 	if !ok {
 		t.Fatal("the producer went silent with the sink off")
 	}
-	a := authorizeCandidateDelivery(w.ctx, mintRouteEntry(w.ctx), w.path, w.code, id, nil,
-		[]proxyEvidence{ev}, "selected", nil, checkOutcome{Status: ValidationPassed})
+	sinkOffEntry := mintRouteEntry(w.ctx)
+	a := authorizeCandidateDelivery(w.ctx, sinkOffEntry, w.path, w.code, id, nil,
+		[]proxyEvidence{ev}, "selected", nil, checkOutcome{Status: ValidationPassed},
+		testMutationScope(w.ctx, sinkOffEntry, w.path, w.code))
 	if !a.Decision.Authorized {
 		t.Errorf("the decision changed with the sink off: %q", a.Decision.Reason)
 	}

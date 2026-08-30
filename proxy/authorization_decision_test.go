@@ -57,8 +57,10 @@ func authorizeCandidateDeliveryDecision(ctx *AgentContext, path, code string,
 	id candidateEvidenceIdentity, envelope *V3EvidenceEnvelope,
 	evidence []proxyEvidence) AuthorizationDecision {
 	observed := fallbackSyntaxOutcomeFor(ctx, path, code).aggregate()
-	return authorizeCandidateDelivery(ctx, mintRouteEntry(ctx), path, code, id, envelope,
-		evidence, "selected", nil, observed).Decision
+	entry := mintRouteEntry(ctx)
+	return authorizeCandidateDelivery(ctx, entry, path, code, id, envelope,
+		evidence, "selected", nil, observed,
+		testMutationScope(ctx, entry, path, code)).Decision
 }
 
 // authorize runs the LIVE owner, so the matrix describes what production
@@ -68,8 +70,10 @@ func (w *authWorld) authorize(id candidateEvidenceIdentity,
 	// The real observation, so a row that refuses is refused for the reason
 	// production would give rather than for a zero value.
 	observed := fallbackSyntaxOutcomeFor(w.ctx, w.path, w.code).aggregate()
-	return authorizeCandidateDelivery(w.ctx, mintRouteEntry(w.ctx), w.path, w.code, id, envelope,
-		evidence, "selected", nil, observed)
+	entry := mintRouteEntry(w.ctx)
+	return authorizeCandidateDelivery(w.ctx, entry, w.path, w.code, id, envelope,
+		evidence, "selected", nil, observed,
+		testMutationScope(w.ctx, entry, w.path, w.code))
 }
 
 // stagedWorld is a world whose client declared commands, with an executor that
@@ -863,7 +867,7 @@ func TestTheDecisionReachesNoLiveWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	banned := map[string]bool{
-		"proposedV3Candidate": true, "serviceCertifiedCandidate": true, "v3DeliveryAuthorized": true,
+		"proposedV3Candidate": true, "v3DeliveryAuthorized": true,
 		"writeFileRecorded": true, "finalizeCompletion": true,
 		"terminalCompletionAllowed": true, "callV3Generate": true,
 		"callV3GenerateStreaming": true, "revokeV3": true,

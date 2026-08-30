@@ -266,8 +266,13 @@ func TestUnspecifiedOutputsKeepTheLegacyRoute(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if string(onDisk) != routeWinner {
-			t.Errorf("%q: legacy output behaviour changed: disk holds %q", contract, string(onDisk))
+		// A request that stated no outputs names no target, so nothing can be
+		// authorized against it and the model's own bytes are what land. The
+		// typed path still declines to have an opinion, which is the half of
+		// this invariant that has not changed.
+		if string(onDisk) != routeBaseline {
+			t.Errorf("%q: a request that declared no outputs delivered %q",
+				contract, string(onDisk))
 		}
 		for _, r := range recordsOfKind(recs, "candidate_authorization_decision") {
 			if r["influences_live_decision"] != false {

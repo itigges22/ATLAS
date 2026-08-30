@@ -86,6 +86,10 @@ type authorizationGrant struct {
 	// thing that was authorized.
 	BaselineGeneration int
 	BaselineTombstoned bool
+	// MutationScopeID names the tool call's structured intent this licence is
+	// bound to. A licence that cannot name one describes a mutation nobody
+	// asked for, so minting refuses without it.
+	MutationScopeID string
 	// baselineRetained marks a grant the route minted over the caller's own
 	// bytes and then kept: no delivery was ever attempted and none was owed.
 	baselineRetained bool
@@ -176,6 +180,17 @@ func mintAuthorizationGrant(ctx *AgentContext, in authorizationInput,
 	if !targetIsAuthorized(in.Obligations, target) {
 		return nil, false, "the target is not declared"
 	}
+	// The structured intent of the call this candidate belongs to. A licence
+	// is bounded by the mutation its own tool call defined: the target it
+	// names, and for an edit the boundary it may not leave. The scope grants
+	// nothing -- everything above still had to hold -- it only refuses to let
+	// a licence be wider than the call that produced it.
+	if !in.Scope.valid() || in.Scope.Target != target {
+		return nil, false, "no structured mutation scope for this target"
+	}
+	if admitted, why := scopeAdmitsCandidate(ctx, in.Scope, in.CandidateBytes); !admitted {
+		return nil, false, "the candidate is outside its mutation scope (" + why + ")"
+	}
 	// Every prerequisite satisfied and nothing owed. The decision says so;
 	// this refuses to take its word without the accounting agreeing.
 	if len(d.Missing) != 0 {
@@ -237,6 +252,7 @@ func mintAuthorizationGrant(ctx *AgentContext, in authorizationInput,
 		ObligationSetID:     obligationSetIdentity(in.Obligations),
 		EvidenceSetID:       evidenceSetIdentity(in.Evidence),
 		SelectedCandidateID: selectedCandidateID,
+		MutationScopeID:     in.Scope.identity(),
 	}
 
 	ctx.grantMu.Lock()

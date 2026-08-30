@@ -632,12 +632,6 @@ func TestOnlyAVerifiedEnvelopeAuthorizesDelivery(t *testing.T) {
 			if !c.authorized && c.reason != "" && why != c.reason {
 				t.Errorf("reason = %q, want %q", why, c.reason)
 			}
-			// The legacy contractless rule reaches the same verdict about the
-			// same bytes: for a request that declared nothing, this IS the
-			// delivery rule and it must not have drifted.
-			if got := serviceCertifiedCandidate(res, res.Code); got != c.authorized {
-				t.Errorf("serviceCertifiedCandidate = %v, want %v", got, c.authorized)
-			}
 			// The PROPOSAL boundary is a different question, and answers it
 			// differently on purpose: bytes materially different from the
 			// caller's own are a proposal whatever the service concluded, and
@@ -659,9 +653,6 @@ func TestEmptyCandidateIsNeverAuthorized(t *testing.T) {
 	res := responseWith(t, "", true, envelopeFor(t, "", nil))
 	if ok, why := v3DeliveryAuthorized(res, res.Code); ok {
 		t.Fatalf("empty code was authorized: %s", why)
-	}
-	if serviceCertifiedCandidate(res, res.Code) {
-		t.Fatal("empty code was certified")
 	}
 	delivered, proposed := proposedV3Candidate(res, authBaseline)
 	if proposed || delivered != authBaseline {
@@ -692,12 +683,11 @@ func TestPassedNoLongerAuthorizesDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	helper := string(tools)[strings.Index(string(tools), "func serviceCertifiedCandidate("):]
-	helper = helper[:strings.Index(helper, "\n}")]
-	for _, banned := range []string{"result.Passed", "!result.Passed"} {
-		if strings.Contains(helper, banned) {
-			t.Errorf("the contractless delivery rule still reads %s", banned)
-		}
+	// There is no service-certification helper at all any more: a request that
+	// declared nothing retains its own bytes rather than delivering on the
+	// producer's opinion of them.
+	if strings.Contains(string(tools), "func serviceCertifiedCandidate(") {
+		t.Error("the self-certification path is back")
 	}
 	// And the proposal boundary reads no verdict at all: it compares bytes.
 	proposal := string(tools)[strings.Index(string(tools), "func proposedV3Candidate("):]
@@ -832,9 +822,6 @@ print(json.dumps({
 	}
 	if ok, why := v3DeliveryAuthorized(got, got.Code); !ok {
 		t.Fatalf("live verified winner refused: %s", why)
-	}
-	if !serviceCertifiedCandidate(got, got.Code) {
-		t.Fatal("the live verified winner was not certified by the contractless rule")
 	}
 	delivered, proposed := proposedV3Candidate(got, "x = 1\n")
 	if !proposed || delivered != code {

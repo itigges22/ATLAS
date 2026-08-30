@@ -76,7 +76,8 @@ func (a deliveryAuthorization) mayDeliver() bool {
 func authorizeCandidateDelivery(ctx *AgentContext, entry routeEntry, path, code string,
 	id candidateEvidenceIdentity, envelope *V3EvidenceEnvelope,
 	evidence []proxyEvidence, selectedCandidateID string,
-	unmet map[string]AuthorizationReason, observed checkOutcome) deliveryAuthorization {
+	unmet map[string]AuthorizationReason, observed checkOutcome,
+	scope mutationScope) deliveryAuthorization {
 	resolved := resolveAgentPath(ctx, path)
 	hash := contentSHA256(code)
 
@@ -108,6 +109,8 @@ func authorizeCandidateDelivery(ctx *AgentContext, entry routeEntry, path, code 
 		Unmet:                   unmet,
 		OutputKnowledgeDeclared: declared,
 		RouteEntry:              entry,
+		Scope:                   scope,
+		CandidateBytes:          code,
 	}
 	d := decideAuthorization(ctx, in)
 	recordAuthorizationDecision(ctx, in, d)

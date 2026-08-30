@@ -135,6 +135,7 @@ func TestAdvisoryPrefersOnlyWithNoVetoAndDeliversNothing(t *testing.T) {
 		Observed:         checkOutcome{Status: ValidationPassed},
 		TargetDeclared:   true,
 		TargetAuthorized: true,
+		ScopeAdmits:      true,
 		Evidence: []proxyEvidence{{
 			Provenance: V3EvidenceProvenance{Source: ProvenanceClientDeclaredVerification},
 			Outcome:    ValidationPassed,
@@ -162,6 +163,7 @@ func TestWeakEvidenceRetainsTheBaseline(t *testing.T) {
 		Observed:         checkOutcome{Status: ValidationNotRun},
 		TargetDeclared:   true,
 		TargetAuthorized: true,
+		ScopeAdmits:      true,
 	}
 	if out := decideCandidatePolicy(advisory, nothing, false); out.Decision != PolicyInsufficientConfidence {
 		t.Errorf("advisory with nothing observed said %q", out.Decision)
@@ -176,6 +178,7 @@ func TestWeakEvidenceRetainsTheBaseline(t *testing.T) {
 		Observed:         checkOutcome{Status: ValidationPassed},
 		TargetDeclared:   true,
 		TargetAuthorized: true,
+		ScopeAdmits:      true,
 		Unmet:            map[string]AuthorizationReason{"cmd": ReasonEvidenceExecutionFailed},
 		Evidence: []proxyEvidence{{
 			Provenance: V3EvidenceProvenance{Source: ProvenanceProxyOwnedValidation},
@@ -195,11 +198,11 @@ func TestWeakEvidenceRetainsTheBaseline(t *testing.T) {
 func TestEveryHardVetoIsReachable(t *testing.T) {
 	ctx := policyContext(t, CandidatePolicyAdvisory)
 	base := advisoryInput{Observed: checkOutcome{Status: ValidationPassed},
-		TargetDeclared: true, TargetAuthorized: true}
+		TargetDeclared: true, TargetAuthorized: true, ScopeAdmits: true}
 	for _, tc := range []struct {
-		name  string
+		name   string
 		mutate func(*advisoryInput)
-		want  string
+		want   string
 	}{
 		{"syntax or structural", func(in *advisoryInput) {
 			in.Observed = checkOutcome{Status: ValidationFailed}
@@ -260,6 +263,7 @@ func TestAVetoOutranksStrictAuthorization(t *testing.T) {
 		Observed:         checkOutcome{Status: ValidationFailed},
 		TargetDeclared:   true,
 		TargetAuthorized: true,
+		ScopeAdmits:      true,
 	}
 	out := decideCandidatePolicy(ctx, in, true)
 	if out.Decision != PolicyCandidateRejectedHardVeto || out.Delivers {
@@ -334,6 +338,7 @@ func TestAdvisoryCannotAuthorizeDestructiveActions(t *testing.T) {
 		Observed:           checkOutcome{Status: ValidationPassed},
 		TargetDeclared:     true,
 		TargetAuthorized:   true,
+		ScopeAdmits:        true,
 		DestructiveImplied: true,
 		Evidence: []proxyEvidence{{
 			Provenance: V3EvidenceProvenance{Source: ProvenanceClientDeclaredVerification},
@@ -464,6 +469,7 @@ func TestNoAdvisoryValueClaimsCorrectness(t *testing.T) {
 		Observed:         checkOutcome{Status: ValidationPassed},
 		TargetDeclared:   true,
 		TargetAuthorized: true,
+		ScopeAdmits:      true,
 		Evidence: []proxyEvidence{{
 			Provenance: V3EvidenceProvenance{
 				Source: ProvenanceClientDeclaredVerification, ObservedStrength: "behavioral"},
@@ -529,4 +535,13 @@ func hasVeto(vetoes []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// testMutationScope is the structured intent a route would have derived for
+// this call. The scope is a fixture in these tests, not the thing under test:
+// the boundary is the caller's own bytes, so it admits exactly the candidate
+// being decided on.
+func testMutationScope(ctx *AgentContext, entry routeEntry, path, code string) mutationScope {
+	s, _ := deriveMutationScope(ctx, entry, "write_file", path, "", code)
+	return s
 }

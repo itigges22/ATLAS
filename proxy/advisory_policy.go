@@ -58,6 +58,11 @@ const (
 	// and the permission owner did not grant it. Advisory confidence is not a
 	// permission.
 	VetoDestructiveWithoutPermission = "destructive_operation_without_permission"
+	// VetoOutsideMutationScope: the candidate is outside the boundary the
+	// model's own tool call defined, or that call defined no boundary at all.
+	// A scope is not evidence and never authorizes; this is the one direction
+	// it acts in.
+	VetoOutsideMutationScope = "outside_structured_mutation_scope"
 )
 
 var advisoryVetoNames = map[string]bool{
@@ -72,6 +77,7 @@ var advisoryVetoNames = map[string]bool{
 	VetoCancelledOrTimedOut:          true,
 	VetoIncompleteEvidence:           true,
 	VetoDestructiveWithoutPermission: true,
+	VetoOutsideMutationScope:         true,
 }
 
 // advisoryInput is the closed set of typed facts the policy may read.
@@ -116,6 +122,12 @@ type advisoryInput struct {
 	// the candidate it was measuring or the workspace around it. It is a
 	// separate fact from a failing command and is named separately.
 	MutatedProtectedAssets bool
+	// ScopeAdmits is whether the model's own tool call bounds a mutation that
+	// contains these bytes. False covers both "it does not" and "there is no
+	// scope", and ScopeRefusal says which.
+	ScopeAdmits bool
+	// ScopeRefusal is the closed reason, for the record.
+	ScopeRefusal string
 }
 
 // advisoryVetoes are the disqualifying facts observed about this candidate, in
@@ -145,6 +157,9 @@ func advisoryVetoes(in advisoryInput) []string {
 	}
 	if in.MutatedProtectedAssets {
 		fired[VetoMutatedProtectedAssets] = true
+	}
+	if !in.ScopeAdmits {
+		fired[VetoOutsideMutationScope] = true
 	}
 
 	for _, why := range in.Unmet {
@@ -200,6 +215,8 @@ func advisorySignals(in advisoryInput) map[string]interface{} {
 		"proxy_gate_status":     string(in.Observed.Status),
 		"trusted_observations":  len(in.Evidence),
 		"authorization_reason":  string(in.Decision.Reason),
+		"scope_admits":          in.ScopeAdmits,
+		"scope_refusal":         in.ScopeRefusal,
 		"obligations_satisfied": len(in.Decision.Satisfied),
 		"obligations_missing":   len(in.Decision.Missing),
 	}

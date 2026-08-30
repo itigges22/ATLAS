@@ -154,11 +154,10 @@ func agreementRows() []agreementRow {
 		// absence of one, and it may not fall through to legacy delivery.
 		{name: "declared empty outputs",
 			contract: `{"task_mode":"work","output_knowledge":"declared","expected_outputs":[]}`},
-		// The same shape without the declaration. Nothing was stated, so the
-		// existing decision keeps its exact behaviour.
+		// The same shape without the declaration. Nothing was stated, so there
+		// is no target to authorize against and the caller's own bytes stand.
 		{name: "unspecified outputs",
-			contract:   `{"task_mode":"work","output_knowledge":"unspecified"}`,
-			wantWinner: true},
+			contract: `{"task_mode":"work","output_knowledge":"unspecified"}`},
 	}
 }
 
@@ -220,17 +219,17 @@ func TestWhatLandsAgreesWithWhatWasDecided(t *testing.T) {
 			}
 			landedWinner := string(onDisk) == routeWinner
 
-			// Agreement is only claimed where the decision OWNS the answer.
-			// A request with no structured obligations gets a record saying
-			// so, and there the existing decision is what delivers -- which
-			// is the compatibility half of the invariant, not a disagreement.
+			// Agreement is claimed where the decision OWNS the answer, and a
+			// request with no structured obligations is owned by nothing: it
+			// has no target to authorize against, so the caller's own bytes
+			// are what land and no winner ever does.
 			if influences && landedWinner != authorized {
 				t.Errorf("decision authorized=%v but the winner %s (reason %v)",
 					authorized, landedOrNot(landedWinner), decisions[0]["reason"])
 			}
-			if !influences && !landedWinner {
-				t.Errorf("a request the typed path does not own was refused anyway "+
-					"(reason %v)", decisions[0]["reason"])
+			if !influences && landedWinner {
+				t.Errorf("a request the typed path does not own delivered a "+
+					"candidate anyway (reason %v)", decisions[0]["reason"])
 			}
 			if landedWinner != row.wantWinner {
 				t.Errorf("the winner %s; the row expects %s (reason %v)",
@@ -406,9 +405,11 @@ func TestARepairCandidateIsJudgedOnItsOwnBytes(t *testing.T) {
 	if evID.CandidateInstanceID == first.CandidateInstanceID {
 		t.Error("a repair reused the first delivery's candidate identity")
 	}
-	a := authorizeCandidateDelivery(w.ctx, mintRouteEntry(w.ctx), w.path, repaired, evID, nil,
+	repairEntry := mintRouteEntry(w.ctx)
+	a := authorizeCandidateDelivery(w.ctx, repairEntry, w.path, repaired, evID, nil,
 		[]proxyEvidence{ev}, "selected-repair", nil,
-		fallbackSyntaxOutcomeFor(w.ctx, w.path, repaired).aggregate())
+		fallbackSyntaxOutcomeFor(w.ctx, w.path, repaired).aggregate(),
+		testMutationScope(w.ctx, repairEntry, w.path, repaired))
 	if a.Grant != nil && a.Grant.CandidateHash != contentSHA256(repaired) {
 		t.Error("the repair's grant is about other bytes")
 	}
@@ -577,8 +578,9 @@ func TestAnUnavailableStructuralGateRefusesRatherThanDelivers(t *testing.T) {
 	if res.AuthorizedDeliveryHash != "" {
 		t.Error("an unauthorized delivery named an authorization")
 	}
-	// Contractless traffic is unaffected: it never opted in, and the gate
-	// being down is not a reason to change what it always did.
+	// Contractless traffic answers the same way whether the gate is up or
+	// down: it declared no target, so nothing can be authorized against it and
+	// the model's own bytes are what land.
 	u := newRouteWorld(t, `{"task_mode":"work"}`, nil)
 	u.ctx.SandboxURL = "http://127.0.0.1:1"
 	if _, err := u.write(t); err != nil {
@@ -588,7 +590,7 @@ func TestAnUnavailableStructuralGateRefusesRatherThanDelivers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != routeWinner {
-		t.Error("contractless traffic changed behaviour when the gate went down")
+	if string(got) != routeBaseline {
+		t.Errorf("contractless traffic delivered %q with the gate down", string(got))
 	}
 }

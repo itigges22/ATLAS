@@ -2593,17 +2593,21 @@ var shadowGuardOwners = map[string]bool{
 	// and both declare themselves inert in the record they write.
 	"(*routeLifecycle).finish":  true,
 	"recordDeliveryDisposition": true,
+	// The structured intent record: one per decided candidate, saying which
+	// tool call bounded it and whether the bytes stayed inside. It reads
+	// nothing back and authorizes nothing, which its own record states.
+	"recordMutationScope": true,
 	// The candidate policy's own record: one answer per decided candidate,
 	// with the vetoes that fired and the signals that were observed. It reads
 	// nothing back, and whether the decision it describes delivered is a field
 	// on the record rather than something the sink is asked about.
 	"recordCandidatePolicyDecision": true,
-	"contractOutputs":           true,
-	"shadowCanonicalSet":        true,
-	"shadowHashes":              true,
-	"shadowCompareSets":         true,
-	"shadowHash":                true,
-	"main":                      true,
+	"contractOutputs":               true,
+	"shadowCanonicalSet":            true,
+	"shadowHashes":                  true,
+	"shadowCompareSets":             true,
+	"shadowHash":                    true,
+	"main":                          true,
 }
 
 // funcIdentity renders a declaration the way shadowGuardOwners keys it.

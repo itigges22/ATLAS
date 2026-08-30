@@ -103,8 +103,15 @@ type auditCase struct {
 	cancelOnStructural bool
 	readOnlyDir        bool
 	// noEvidence sends the legacy response shape: passed=true with no
-	// envelope, which authorizes nothing.
+	// envelope. The envelope authorizes nothing either way now; the field
+	// stays because a response without one is still a shape the bridge has to
+	// read.
 	noEvidence bool
+	// declaredCommand makes the client require a command the audit's executor
+	// never answers, so the candidate's floor goes unmet and the proxy refuses
+	// it. It is how this walk still covers a genuine refusal now that a
+	// service verdict cannot cause one.
+	declaredCommand string
 }
 
 type auditResult struct {
@@ -215,8 +222,18 @@ func runAudit(t *testing.T, c auditCase) auditResult {
 	ctx := NewAgentContext(dir, Tier2Medium)
 	ctx.PermissionMode = PermissionYolo
 	ctx.StreamFn = func(event string, _ interface{}) { events = append(events, event) }
-	ctx.Ctx = reqCtx
+	ctx.Ctx = context.WithValue(reqCtx, requestIDKey, "req-audit")
 	ctx.BypassV3 = false
+	// The client declares the artifact it asked for. Without that there is no
+	// target to authorize against, no licence to mint and no candidate
+	// delivery to walk -- which is the point of this audit.
+	contract := `{"task_mode":"work","output_knowledge":"declared","expected_outputs":[` +
+		mustJSONString(c.rel) + `]`
+	if c.declaredCommand != "" {
+		contract += `,"verification_knowledge":"declared","verification":[` +
+			mustJSONString(c.declaredCommand) + `]`
+	}
+	ctx.TaskContract = mustContract(t, dir, contract+`}`)
 	ctx.V3URL = srv.URL
 	ctx.SandboxURL = srv.URL
 	ctx.SessionWrites[c.rel] = true
@@ -509,7 +526,8 @@ func auditCases() []auditCase {
 		// 1. Non-passing response that still carries code. Authorization is
 		// Passed, not the presence of Code.
 		{name: "01_unauthorized_code_retained_baseline",
-			rel: "solve.py", baseline: auBaselinePy, candidate: auCandidatePy, passed: false},
+			rel: "solve.py", baseline: auBaselinePy, candidate: auCandidatePy, passed: false,
+			declaredCommand: "pytest -q"},
 
 		// 2. Authorized candidate survives every gate.
 		{name: "02_authorized_candidate_delivered",
@@ -522,7 +540,8 @@ func auditCases() []auditCase {
 		// 4. Sanitization rewrites an authorized candidate after V3 verified it.
 		{name: "04_sanitization_rewrites_candidate",
 			rel: "solve.py", baseline: auBaselinePy,
-			candidate: "```python\n" + auCandidatePy + "```\n", passed: true},
+			candidate: "```python\n" + auCandidatePy + "```\n", passed: true,
+			declaredCommand: "pytest -q"},
 
 		// 5. Structural gate rejects the candidate; the baseline is clean.
 		{name: "05_structural_revokes_to_clean_baseline",
@@ -601,7 +620,7 @@ func auditCases() []auditCase {
 		// 12. The revoked-to-baseline write fails.
 		{name: "12_baseline_write_fails",
 			rel: "ro/solve.py", baseline: auBaselinePy, candidate: auCandidatePy, passed: false,
-			readOnlyDir: true},
+			declaredCommand: "pytest -q", readOnlyDir: true},
 	}
 }
 
@@ -643,16 +662,17 @@ func TestUnauthorizedCandidateNeverInfluencesAnything(t *testing.T) {
 	}
 }
 
-// Q4/Q5, now answered by authorization: sanitisation rewrites the bytes AFTER
-// the service earned its evidence, so that evidence describes text that will
-// never exist on disk. Rather than claim it covers the sanitised result, the
-// delivery falls back to the caller's own content and the provenance goes with
-// it. A sanitised candidate becomes deliverable again only when the service
-// hashes what it actually returns.
+// Q4/Q5: sanitisation rewrites the bytes after the service produced its
+// record, so that record describes text that will never exist on disk. It was
+// never an authorization and is not one now -- what decides is the proxy's own
+// evidence about the sanitised bytes, measured against the floor the client
+// declared. With a declared command the executor never answers, that floor
+// goes unmet and the caller's own content is what lands.
 func TestSanitizedCandidateLosesItsAuthorization(t *testing.T) {
 	fenced := "```python\n" + auCandidatePy + "```\n"
 	got := runAudit(t, auditCase{
-		rel: "solve.py", baseline: auBaselinePy, candidate: fenced, passed: true})
+		rel: "solve.py", baseline: auBaselinePy, candidate: fenced, passed: true,
+		declaredCommand: "pytest -q"})
 
 	sanitized, changed := sanitizeFileContent("solve.py", fenced)
 	if !changed {
@@ -825,10 +845,13 @@ func TestFinalByteInvariantTransitions(t *testing.T) {
 
 		// The candidate never became an artifact: no provenance, and the
 		// observation of those exact bytes survives the failure.
+		// An authorized candidate whose write fails: the licence was spent on
+		// bytes that never reached disk, so the delivery owner refuses rather
+		// than reporting a mutation. Nothing moved and nothing is claimed.
 		{name: "11_candidate_write_fails",
 			checks:  []string{"syntax:BASE", "syntax:CAND", "structural:CAND"},
 			disk:    "",
-			success: false, mutation: MutationFailed,
+			success: false, mutation: MutationRefused,
 			kind: ValidationKindSyntax, status: ValidationPassed,
 			sse: []string{"v3_progress", "v3_progress"}},
 

@@ -400,7 +400,7 @@ func newRouteWorldWithClosure(t *testing.T, contract string,
 					},
 					"evaluation": map[string]interface{}{
 						"execution_status": "ok", "supported": true,
-						"evidence_strength": evidenceStrengthFor(closureEligible),
+						"evidence_strength":     evidenceStrengthFor(closureEligible),
 						"requirements_complete": true,
 						"closure_eligible":      closureEligible,
 						"quality": map[string]interface{}{
@@ -529,6 +529,14 @@ func TestATypedRefusalKeepsTheCallersContent(t *testing.T) {
 	}
 }
 
+// A request that declared nothing keeps the MODEL's bytes.
+//
+// It used to keep the service's, on the service's own closure verdict, which
+// is the producer of a candidate certifying that candidate. There is no target
+// the client named, no obligation and no floor, so nothing here can be
+// authorized against -- and the honest answer under strict is the caller's own
+// content. What such a request still has is a structured mutation scope, which
+// says WHERE a future calibrated decision could act and never whether.
 func TestContractlessTrafficKeepsItsPreviousRoute(t *testing.T) {
 	for _, contract := range []string{"", `{"task_mode":"work"}`,
 		`{"task_mode":"work","output_knowledge":"unspecified"}`} {
@@ -540,17 +548,23 @@ func TestContractlessTrafficKeepsItsPreviousRoute(t *testing.T) {
 		if res == nil || !res.Success {
 			t.Fatalf("%q: delivery failed: %+v", contract, res)
 		}
-		// The legacy decision still delivers the winner, and no grant is
-		// involved at all: nothing about this traffic opted in.
-		if got := w.disk(t); got != routeWinner {
-			t.Errorf("%q: disk holds %q, want the winner the envelope authorized",
-				contract, got)
+		// The model's own bytes land, through the model's own path, exactly as
+		// if the pipeline had not run. No licence is minted and none is spent.
+		if got := w.disk(t); got != routeBaseline {
+			t.Errorf("%q: disk holds %q, want the caller's own content", contract, got)
 		}
 		if res.AuthorizedDeliveryHash != "" {
 			t.Errorf("%q: contractless traffic spent an authorization", contract)
 		}
-		if !res.V3Used {
-			t.Errorf("%q: the legacy route stopped reporting the pipeline", contract)
+		if res.V3Used {
+			t.Errorf("%q: the service's own verdict delivered a candidate", contract)
+		}
+		if res.DeliveryProvenance != DeliveryFromModelProposal {
+			t.Errorf("%q: provenance %q, want the model's own proposal",
+				contract, res.DeliveryProvenance)
+		}
+		if liveGrantCount(w.ctx) != 0 {
+			t.Errorf("%q: a licence outlived a contractless request", contract)
 		}
 	}
 }
