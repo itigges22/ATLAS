@@ -37,14 +37,33 @@ var mutationScopeTools = map[string]bool{
 	"structural_edit": true,
 }
 
-// How a call changes its target.
+// How a call changes its target. The kind comes from the TOOL, not from
+// whether the target happens to exist.
+//
+// That distinction was wrong once and it cost real candidates. A second
+// write_file to a target the same session already created was classified as an
+// in-place edit because the file was now there, and the edit-boundary rule --
+// "a line the edit kept and the candidate dropped is out of scope" -- was
+// applied to a call whose whole purpose is to replace the file. Measured on the
+// eligibility pilot: six routes across four families refused for leaving a
+// boundary their tool never had, while a seventh passed only because its
+// candidate happened to append rather than rewrite.
 const (
-	// mutationScopeNewFile: the call produces the artifact whole.
+	// mutationScopeNewFile: write_file creating an artifact that was not there.
 	mutationScopeNewFile = "new_file"
-	// mutationScopeInPlaceEdit: the call changes part of an artifact that
-	// already exists, and the part it changes is the boundary.
+	// mutationScopeWholeFile: write_file replacing an artifact that was. The
+	// authority is the whole target either way, so there is no line boundary
+	// to leave -- only the target, the containment and the identity checks,
+	// which all still apply.
+	mutationScopeWholeFile = "whole_file"
+	// mutationScopeInPlaceEdit: one of the four edit tools changing part of an
+	// artifact, where the part it changes IS the boundary.
 	mutationScopeInPlaceEdit = "in_place_edit"
 )
+
+// wholeFileTools replace their target outright. Everything else in
+// mutationScopeTools edits in place.
+var wholeFileTools = map[string]bool{"write_file": true}
 
 // mutationScope is one tool call's structured intent.
 //
@@ -81,7 +100,9 @@ func (s mutationScope) valid() bool {
 	if !mutationScopeTools[s.Tool] {
 		return false
 	}
-	if s.Kind != mutationScopeNewFile && s.Kind != mutationScopeInPlaceEdit {
+	switch s.Kind {
+	case mutationScopeNewFile, mutationScopeWholeFile, mutationScopeInPlaceEdit:
+	default:
 		return false
 	}
 	for _, v := range []string{s.Target, s.RequestID, s.RouteEntryID, s.ProposalHash,
@@ -145,11 +166,17 @@ func deriveMutationScope(ctx *AgentContext, entry routeEntry, tool, path,
 	}
 	kind := mutationScopeInPlaceEdit
 	originalHash := contentSHA256(original)
-	if strings.TrimSpace(original) == "" {
-		// A new file has no prior bytes, so its original hash names nothing.
-		// Recording the hash of the empty string would make "absent" and
-		// "empty" the same fact.
+	switch {
+	case strings.TrimSpace(original) == "":
+		// Nothing was there. A new file has no prior bytes, so its original
+		// hash names nothing: recording the hash of the empty string would
+		// make "absent" and "empty" the same fact.
 		kind, originalHash = mutationScopeNewFile, ""
+	case wholeFileTools[tool]:
+		// The target exists and the call replaces it whole. Still bounded by
+		// the target, the workspace and the identity checks; not by a line
+		// boundary the tool does not have.
+		kind = mutationScopeWholeFile
 	}
 	generation, stateHash := workspaceIdentity(ctx)
 	s := mutationScope{

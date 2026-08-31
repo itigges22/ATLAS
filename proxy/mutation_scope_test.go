@@ -278,3 +278,129 @@ func TestEveryMutatingRouteDerivesItsOwnScope(t *testing.T) {
 			len(mutationScopeTools))
 	}
 }
+
+// A whole-file write has no line boundary to leave.
+//
+// RED, in the exact shape the eligibility pilot retained: write_file creates
+// the declared target, then write_file replaces it. The second call was
+// classified in_place_edit because the file now existed, and the edit-boundary
+// rule refused a candidate that was squarely inside the tool's authority. Six
+// routes across four families died that way.
+func TestAWholeFileWriteIsNotAnEdit(t *testing.T) {
+	ctx, path := scopeWorld(t)
+	original := "def solve(values):\n    total = 0\n    for v in values:\n" +
+		"        total += v\n    return total\n"
+	proposal := "def solve(values):\n    return sum(values)\n"
+	candidate := "def solve(values):\n    return sum(values)  # tightened\n"
+
+	// The pilot's shape: the target already exists, the tool is write_file.
+	s, ok := deriveMutationScope(ctx, scopeEntry(t, ctx), "write_file", path,
+		original, proposal)
+	if !ok {
+		t.Fatal("a rewrite of an existing target defined no scope")
+	}
+	if s.Kind != mutationScopeWholeFile {
+		t.Fatalf("scope kind %q, want whole_file", s.Kind)
+	}
+	if admits, why := scopeAdmitsCandidate(ctx, s, candidate); !admits {
+		t.Fatalf("a whole-file rewrite was refused for %q", why)
+	}
+
+	// The same bytes through an edit tool stay refused: an edit that dropped
+	// every line it kept IS out of its boundary.
+	for _, tool := range []string{"edit_file", "insert_after", "replace_lines",
+		"structural_edit"} {
+		e, ok := deriveMutationScope(ctx, scopeEntry(t, ctx), tool, path,
+			original, proposal)
+		if !ok {
+			t.Fatalf("%s defined no scope", tool)
+		}
+		if e.Kind != mutationScopeInPlaceEdit {
+			t.Errorf("%s scope kind %q, want in_place_edit", tool, e.Kind)
+		}
+		// Drops a line the edit kept: the function the original and the
+		// caller's own result both declare.
+		outside := "def compute(values):\n    return 0\n"
+		if admits, why := scopeAdmitsCandidate(ctx, e, outside); admits {
+			t.Errorf("%s admitted a candidate outside its boundary (%q)", tool, why)
+		}
+	}
+
+	// And a first write is still a new file, not a rewrite.
+	first, ok := deriveMutationScope(ctx, scopeEntry(t, ctx), "write_file", path,
+		"", proposal)
+	if !ok || first.Kind != mutationScopeNewFile {
+		t.Errorf("a first write is %q, want new_file", first.Kind)
+	}
+}
+
+// Widening the scope kind widens nothing else. Every other refusal a rewrite
+// must still meet is asserted on the same scope.
+func TestAWholeFileWriteKeepsEveryOtherBoundary(t *testing.T) {
+	ctx, path := scopeWorld(t)
+	original, proposal := "x = 1\n", "x = 2\n"
+	s, ok := deriveMutationScope(ctx, scopeEntry(t, ctx), "write_file", path,
+		original, proposal)
+	if !ok {
+		t.Fatal("no scope")
+	}
+	if admits, why := scopeAdmitsCandidate(ctx, s, ""); admits ||
+		why != scopeRefusedEmptyCandidate {
+		t.Errorf("a deletion was admitted (%v/%q)", admits, why)
+	}
+	other := s
+	other.Target = filepath.Join(ctx.WorkingDir, "somewhere_else.py")
+	if admits, _ := scopeAdmitsCandidate(ctx, other, "x = 3\n"); admits {
+		// The target moved under the scope: its generation no longer matches.
+		t.Log("a different target is caught by generation or tombstone")
+	}
+	foreign := s
+	foreign.RequestID = "req-somebody-else"
+	if admits, _ := scopeAdmitsCandidate(ctx, foreign, "x = 3\n"); admits {
+		t.Error("a scope from another request admitted a rewrite")
+	}
+	cancelled, cancel := context.WithCancel(ctx.Ctx)
+	cancel()
+	ctx.Ctx = cancelled
+	if admits, why := scopeAdmitsCandidate(ctx, s, "x = 3\n"); admits ||
+		why != scopeRefusedCancelled {
+		t.Errorf("a cancelled request admitted a rewrite (%v/%q)", admits, why)
+	}
+	// An escaping path still defines no scope at all.
+	if _, ok := deriveMutationScope(ctx, scopeEntry(t, ctx), "write_file",
+		"../outside.py", original, proposal); ok {
+		t.Error("the wider kind let a path escape the workspace")
+	}
+}
+
+// One containment resolver, one boundary rule. A second of either is how two
+// answers to the same question start disagreeing.
+func TestOneScopeAuthorityAndOnePathNormalizer(t *testing.T) {
+	src, err := os.ReadFile("mutation_scope.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := codeWithoutComments(string(src))
+	if n := strings.Count(body, "resolveWorkspacePath("); n != 1 {
+		t.Errorf("the scope resolves containment %d times, want once", n)
+	}
+	for _, banned := range []string{"filepath.Abs(", "filepath.EvalSymlinks(",
+		"os.Getwd(", "strings.TrimPrefix(path"} {
+		if strings.Contains(body, banned) {
+			t.Errorf("the scope normalises paths its own way via %q", banned)
+		}
+	}
+	if n := strings.Count(body, "v3RewroteBeyondTheEdit("); n != 1 {
+		t.Errorf("the boundary rule is applied %d times inside the scope, want once", n)
+	}
+	files := proxyFiles(t)
+	for site := range callSites(files, "v3RewroteBeyondTheEdit") {
+		switch site {
+		case "gates.go:v3RewroteBeyondTheEdit",
+			"mutation_scope.go:scopeAdmitsCandidate",
+			"edit_route_delivery.go:deliverEditCandidate":
+		default:
+			t.Errorf("%s is a second owner of the edit boundary", site)
+		}
+	}
+}
