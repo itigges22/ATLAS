@@ -192,6 +192,44 @@ into the decision:
 - No advisory confidence value may be described as a probability of
   correctness unless a calibration supports that interpretation.
 
+## The acquisition control
+
+An outcome-blind acquisition — an eligibility pilot, a calibration run — has one
+invariant that outranks what it is measuring: **candidate bytes must never enter
+the active task workspace.** A delivered candidate changes what the model sees
+next, how many routes the task takes, which terminal it reaches and what
+evidence exists at the end, whether or not anyone runs an evaluator afterwards.
+
+`ATLAS_CANDIDATE_CAPTURE_ONLY` is that control, and it is **not a fourth policy
+mode**: strict, advisory and confirm are what a client may ask for and they are
+unchanged. It is operator configuration on a private experimental process,
+default off, unreachable from any task contract, model output, service response
+or header, and failing closed to ordinary behaviour on any value it does not
+recognise.
+
+It sits at the one place a candidate grant is created — inside
+`authorizeCandidateDelivery`, after the authorization decision and immediately
+before `mintAuthorizationGrant` — and a structural test pins that there is
+exactly one minting caller and that the control is consulted before it.
+
+What it suppresses is the licence, not the answer:
+
+- the policy runs, the declared commands run against the exact staged candidate
+  bytes, and the hard vetoes fire, all unchanged;
+- no grant is minted, none is consumed, and the baseline stays on disk;
+- the decision is recorded as what it was — `candidate_authorized_strict` stays
+  `candidate_authorized_strict` rather than being flattened into
+  `baseline_retained`;
+- two private records carry it: the suppression, and the would-have disposition
+  from the closed set `would_authorize_strict`, `would_prefer_advisory`,
+  `would_require_human_confirmation`, `rejected_hard_veto`,
+  `insufficient_confidence`, `baseline_retained`,
+  `capture_only_suppressed_delivery`;
+- nothing model-facing mentions it, and no extra model turn results.
+
+With the control off, a trusted strict candidate still earns its grant and
+lands, byte for byte as before.
+
 ## What the user sees
 
 Delivered bytes name their origin, from a closed vocabulary the terminal can
