@@ -62,6 +62,39 @@ obligation, no floor, and an authority that came from the side being checked.
 It is gone, and nothing replaced it. Such a request retains the model's own
 bytes under strict.
 
+## When the producer is not consulted at all
+
+Before any of the above runs, both byte-producing routes decide whether to ask
+the pipeline for candidates. That decision is a **cost** rule, not a safety one,
+and it is made per mutation:
+
+| Reason | Predicate |
+| --- | --- |
+| `file_tier_below_threshold` | the file classifies below T2 (under 10 lines, or a config/data/style/doc class) |
+| `edit_below_complexity_floor` | an edit whose result is under 80 lines with cyclomatic complexity under 8 |
+| `producer_not_configured` | the session has no `V3URL` |
+| `generation_disabled` | the session's V3 mode is not full |
+| `active_debug_iteration` | the session wrote this file and just watched it fail a run |
+| `proposal_failed_syntax_guard` | a syntax or structural guard answered before the producer could be asked |
+| `internal_unclassified` | fail-closed: a skip nobody taught the vocabulary about |
+
+`writeGenerationBypass` owns the new-file answer and `editGenerationBypass` owns
+the answer for the four edit tools; a structural test keeps the conditions out
+of the routes themselves. Each skip writes one `candidate_generation_bypass`
+capture record carrying the request, the tool, the reason and the two predicate
+inputs that decided it — path-free and content-free, like every capture record.
+
+This matters for measurement as much as for cost. A skipped mutation mints no
+route entry, so before these records existed it produced no telemetry of any
+kind: an outcome-blind pilot could see that a family yielded no candidate and
+could not see whether the pipeline had declined, failed, or never been asked.
+Nine of twenty-four families in the corrected eligibility pilot ended exactly
+there, and the two cost rules account for seven of them.
+
+The rules themselves are unchanged. A cost rule that skips generation is not the
+same statement as a policy rule that refuses delivery, and the two thresholds
+above were set for latency on small files, not for confidence in candidates.
+
 ## Structured mutation scope
 
 Removing that bypass would make the pipeline useless for the interactive case
@@ -252,3 +285,4 @@ guarantee, because none of it is one.
 | `proxy/verification_requirements.go` | typed verification requirements and asset authority |
 | `proxy/tools.go` | the new-file route: proposal, staging, policy, delivery |
 | `proxy/edit_route_delivery.go` | the edit route, through the same owner |
+| `proxy/candidate_reachability.go` | whether the producer is consulted at all, and why not |

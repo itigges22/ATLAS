@@ -2602,6 +2602,10 @@ var shadowGuardOwners = map[string]bool{
 	// nothing back, and both declare that no delivery happened.
 	"recordCaptureOnlySuppression": true,
 	"recordCaptureOnlyDisposition": true,
+	// Why the candidate producer was not consulted for a mutation. One record
+	// per skip, nothing read back, and the skip decision itself is made by the
+	// two owners beside it -- which touch the sink not at all.
+	"recordCandidateGenerationBypass": true,
 	// The candidate policy's own record: one answer per decided candidate,
 	// with the vetoes that fired and the signals that were observed. It reads
 	// nothing back, and whether the decision it describes delivered is a field

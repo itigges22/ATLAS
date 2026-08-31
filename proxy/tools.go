@@ -981,7 +981,13 @@ func writeFileTool() *ToolDef {
 			// full timeout on every attempt. Observed live: a degenerating
 			// model emitted markdown bold inside code (`data = [1, 2, **3**]`)
 			// four times, each costing 180s before it was told anything.
-			if fileTier >= Tier2Medium && ctx.V3URL != "" && ctx.V3GenerationEnabled() && !iterating {
+			// One owner for whether the producer is consulted, and for why
+			// it was not. Identical to the condition it replaces; what is new
+			// is that the skip says which threshold turned it away.
+			writeBypass := writeGenerationBypass(ctx, fileTier, iterating)
+			recordCandidateGenerationBypass(ctx, "write_file", writeBypass,
+				fileTier, strings.Count(input.Content, "\n")+1)
+			if writeBypass == bypassNone {
 				// The regression gate above evaluated these exact bytes
 				// whenever the destination exists, so the evaluation here is
 				// for the case it skipped: a file that does not exist yet,
@@ -1000,6 +1006,9 @@ func writeFileTool() *ToolDef {
 					if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
 						log.Printf("[write_file] new file %s does not parse — writing with a warning, skipping V3 (%s)",
 							logPath(input.Path), safeDiagnosticSummary(synErr))
+						recordCandidateGenerationBypass(ctx, "write_file",
+							bypassProposalFailedSyntaxGuard, fileTier,
+							strings.Count(input.Content, "\n")+1)
 						return preflightWarnedWrite(path, input.Path, input.Content, proposalCheck, ctx)
 					}
 					// The strictness on existing files protects WORKING code.
@@ -1020,11 +1029,17 @@ func writeFileTool() *ToolDef {
 						if baselineAllowsRepair(baselineCheck) {
 							log.Printf("[write_file] %s already broken on disk — landing the repair attempt with a warning (%s)",
 								logPath(input.Path), safeDiagnosticSummary(synErr))
+							recordCandidateGenerationBypass(ctx, "write_file",
+								bypassProposalFailedSyntaxGuard, fileTier,
+								strings.Count(input.Content, "\n")+1)
 							return preflightWarnedWrite(path, input.Path, input.Content, proposalCheck, ctx)
 						}
 					}
 					log.Printf("[write_file] %s does not parse — rejecting before V3 (%s)",
 						logPath(input.Path), safeDiagnosticSummary(synErr))
+					recordCandidateGenerationBypass(ctx, "write_file",
+						bypassProposalFailedSyntaxGuard, fileTier,
+						strings.Count(input.Content, "\n")+1)
 					// Refused before any byte reached disk, on exactly the
 					// content that would have been written. An unreadable
 					// baseline arrives here too: without a baseline there is
@@ -3131,8 +3146,12 @@ func structuralEditTool() *ToolDef {
 			// the edit path never consulted it. Measured: three 900s timeout
 			// deaths whose sessions each paid one full V3 run and then
 			// V3-improve on every corrective edit until the clock died.
-			if fileTier >= Tier2Medium && editWarrantsV3(finalContent, cc, ccOK) && ctx.V3URL != "" && ctx.V3GenerationEnabled() &&
-				!isActiveDebugIteration(ctx, input.Path) {
+			structuralBypass := editGenerationBypass(ctx, fileTier,
+				editWarrantsV3(finalContent, cc, ccOK),
+				isActiveDebugIteration(ctx, input.Path))
+			recordCandidateGenerationBypass(ctx, "structural_edit", structuralBypass,
+				fileTier, strings.Count(finalContent, "\n")+1)
+			if structuralBypass == bypassNone {
 				log.Printf("[structural_edit] V3 pipeline activating for %s (oldTier=%d newTier=%d max=%d, req_tier=%d, cc=%d) post-structural-edit", input.Path, oldTier, newTier, fileTier, ctx.Tier, cc)
 				// THE protected edit route, same owner as the other three edit
 				// tools: a service proposal reaches disk only through the
@@ -5854,13 +5873,18 @@ func runEditPipeline(ctx *AgentContext, tool, path, relPath, original,
 			fileTier = refined
 		}
 	}
-	if fileTier < Tier2Medium || !editWarrantsV3(edited, cc, ccOK) || ctx.V3URL == "" || !ctx.V3GenerationEnabled() {
-		return keep
-	}
-	// Same debug fast-track the write path has: mid-iteration edits skip the
-	// V3 toll so the session's clock goes to executions, not candidates.
-	if isActiveDebugIteration(ctx, relPath) {
+	// One owner for whether the producer is consulted, and for why it was
+	// not. Identical to the conditions it replaces -- including the debug
+	// fast-track, which keeps the session's clock on executions rather than
+	// candidates -- and now the skip says which threshold turned it away.
+	bypass := editGenerationBypass(ctx, fileTier, editWarrantsV3(edited, cc, ccOK),
+		isActiveDebugIteration(ctx, relPath))
+	recordCandidateGenerationBypass(ctx, tool, bypass, fileTier,
+		strings.Count(edited, "\n")+1)
+	if bypass == bypassActiveDebugIteration {
 		log.Printf("[%s] %s mid-debug iteration — skipping V3, execution is the feedback", tool, relPath)
+	}
+	if bypass != bypassNone {
 		return keep
 	}
 
