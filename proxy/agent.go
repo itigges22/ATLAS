@@ -3863,6 +3863,9 @@ const (
 	// One tool call's structured mutation scope, and whether the candidate
 	// stayed inside it.
 	shadowSchemaVersionMutationScope = 1
+	// One acquisition-control record: what the policy would have done, and the
+	// fact that no delivery followed it.
+	shadowSchemaVersionCaptureOnly = 1
 )
 
 // canonicalSource keeps an unknown decision source out of the record. The

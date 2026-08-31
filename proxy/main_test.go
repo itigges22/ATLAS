@@ -2597,6 +2597,11 @@ var shadowGuardOwners = map[string]bool{
 	// tool call bounded it and whether the bytes stayed inside. It reads
 	// nothing back and authorizes nothing, which its own record states.
 	"recordMutationScope": true,
+	// The acquisition control's two records: what the policy would have done,
+	// and the fact that no licence followed it. Both write once and read
+	// nothing back, and both declare that no delivery happened.
+	"recordCaptureOnlySuppression": true,
+	"recordCaptureOnlyDisposition": true,
 	// The candidate policy's own record: one answer per decided candidate,
 	// with the vetoes that fired and the signals that were observed. It reads
 	// nothing back, and whether the decision it describes delivered is a field

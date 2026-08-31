@@ -2083,9 +2083,17 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		MutatedProtectedAssets:      stagingMutatedAssets,
 		ScopeAdmits:                 scopeAdmits,
 		ScopeRefusal:                scopeRefusal,
-	}, candidateProposed && delivery.Typed && delivery.mayDeliver())
+		CaptureOnlySuppressed:       delivery.CaptureOnly,
+		// The would-have, not the outcome: an acquisition control takes the
+		// licence and leaves the answer, so the policy is asked the question it
+		// would have been asked without one.
+	}, candidateProposed && delivery.Typed &&
+		(delivery.mayDeliver() || delivery.WouldAuthorize))
 	if candidateProposed {
 		recordCandidatePolicyDecision(ctx, entry, contentSHA256(code), policy)
+		if delivery.CaptureOnly {
+			recordCaptureOnlyDisposition(ctx, entry, contentSHA256(code), policy, true)
+		}
 	}
 
 	// Whether the proposal becomes the delivered artifact. One owner, for every

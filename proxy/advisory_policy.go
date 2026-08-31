@@ -128,6 +128,10 @@ type advisoryInput struct {
 	ScopeAdmits bool
 	// ScopeRefusal is the closed reason, for the record.
 	ScopeRefusal string
+	// CaptureOnlySuppressed is set when an acquisition control took the licence
+	// away from a decision that had earned it. The decision below is still
+	// computed and recorded as what it was; only Delivers changes.
+	CaptureOnlySuppressed bool
 }
 
 // advisoryVetoes are the disqualifying facts observed about this candidate, in
@@ -272,9 +276,11 @@ func decideCandidatePolicy(ctx *AgentContext, in advisoryInput,
 	}
 	if strictAuthorized {
 		// Trusted evidence, bound to these exact bytes, meeting the floor the
-		// client declared. The only decision in this build that delivers.
+		// client declared. The only decision in this build that delivers --
+		// and under an acquisition control, the one decision whose delivery is
+		// taken away while its answer is kept.
 		out.Decision = PolicyCandidateAuthorizedStrict
-		out.Delivers = true
+		out.Delivers = !in.CaptureOnlySuppressed
 		return out
 	}
 	switch mode {

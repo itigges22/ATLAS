@@ -48,6 +48,11 @@ type deliveryAuthorization struct {
 	// can tell what the delivery actually answered for.
 	MetCommands       []string
 	BaselinePreserved bool
+	// CaptureOnly is set when an acquisition control suppressed the licence
+	// this decision had earned. WouldAuthorize keeps what the authorization
+	// concluded, because the suppression discards the grant and not the answer.
+	CaptureOnly    bool
+	WouldAuthorize bool
 }
 
 // mayDeliver reports whether the candidate may land under the typed answer.
@@ -129,6 +134,17 @@ func authorizeCandidateDelivery(ctx *AgentContext, entry routeEntry, path, code 
 	}
 	if !d.Authorized {
 		auth.Refusal = string(d.Reason)
+		return auth
+	}
+	// THE acquisition boundary. Every candidate grant in this build is minted
+	// on the next line, so suppressing here suppresses all of them -- and a
+	// structural guard pins that there is no second minting site to route
+	// around. Nothing above this point changed: the policy ran, the evidence
+	// ran, the vetoes ran, and their answers are recorded exactly as they were.
+	if candidateCaptureOnly() {
+		auth.CaptureOnly, auth.WouldAuthorize = true, true
+		auth.Refusal = CaptureSuppressedDelivery
+		recordCaptureOnlySuppression(ctx, entry, hash, d)
 		return auth
 	}
 	g, ok, why := mintAuthorizationGrant(ctx, in, d, selectedCandidateID)

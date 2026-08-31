@@ -152,8 +152,12 @@ func deliverEditCandidate(ctx *AgentContext, tool, path, relPath,
 		MutatedProtectedAssets: mutatedAssets,
 		ScopeAdmits:            scopeAdmits,
 		ScopeRefusal:           scopeRefusal,
-	}, delivery.Typed && delivery.mayDeliver())
+		CaptureOnlySuppressed:  delivery.CaptureOnly,
+	}, delivery.Typed && (delivery.mayDeliver() || delivery.WouldAuthorize))
 	recordCandidatePolicyDecision(ctx, entry, contentSHA256(improved), policy)
+	if delivery.CaptureOnly {
+		recordCaptureOnlyDisposition(ctx, entry, contentSHA256(improved), policy, true)
+	}
 	if !policy.mayDeliverUnderPolicy() {
 		// An honest refusal. The model's own edit is the alternative, and
 		// nothing has been written yet, so the caller simply proceeds.

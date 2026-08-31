@@ -141,13 +141,17 @@ func TestConfirmCannotDeliverWithoutApproval(t *testing.T) {
 	body := codeWithoutComments(string(src))
 	decide := body[strings.Index(body, "func decideCandidatePolicy("):]
 	decide = decide[:strings.Index(decide, "\nfunc ")]
-	if n := strings.Count(decide, "Delivers = true"); n != 1 {
-		t.Fatalf("the policy owner sets Delivers %d times, want once", n)
+	if n := strings.Count(decide, "out.Delivers ="); n != 1 {
+		t.Fatalf("the policy owner assigns Delivers %d times, want once", n)
 	}
 	strictBranch := decide[strings.Index(decide, "if strictAuthorized {"):]
 	strictBranch = strictBranch[:strings.Index(strictBranch, "\n\t}")]
-	if !strings.Contains(strictBranch, "Delivers = true") {
+	if !strings.Contains(strictBranch, "out.Delivers =") {
 		t.Error("the one delivering assignment is not the strict branch")
+	}
+	// And it is the acquisition control that can take it away, nothing else.
+	if !strings.Contains(strictBranch, "!in.CaptureOnlySuppressed") {
+		t.Error("the strict branch delivers regardless of the acquisition control")
 	}
 }
 
