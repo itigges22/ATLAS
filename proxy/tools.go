@@ -2043,6 +2043,17 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// ranks; the evidence this machine produces about these exact bytes is what
 	// authorizes, and it cannot be produced without staging the candidate.
 	candidateProposed := proposed
+	// The proposal's own identity, taken here rather than at the ending.
+	// Every gate below that withdraws a candidate restores `code` to the
+	// caller's bytes, so a hash read at the end names the BASELINE -- which is
+	// how a retained baseline came to be recorded under `candidate_hash`, with
+	// the model's own content attributed to the pipeline. The pilot has one:
+	// route entry 1 of pilot_go_duration_label carries the sha256 of the
+	// main.go the model wrote itself.
+	proposalIdentity := ""
+	if candidateProposed {
+		proposalIdentity = contentSHA256(code)
+	}
 
 	var observed []proxyEvidence
 	var evID candidateEvidenceIdentity
@@ -2336,7 +2347,18 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		// The caller's own bytes are what lands. Any grant minted over them was
 		// never owed a delivery, and says so through its own lifecycle.
 		markBaselineRetainedGrant(ctx, delivery)
-		lifecycle.finish(ctx, routingBaselineRetained, contentSHA256(code),
+		// WHICH of the two things happened is a different fact, and the
+		// vocabulary already has both words for it. Nothing materially
+		// different came back, or a gate above withdrew what did -- and only
+		// the second had a candidate to name. Recording both as a retained
+		// baseline is what made this ending unreadable: an analysis cannot
+		// tell a producer that agreed with the caller from one whose winner
+		// was revoked, and the hash it joined on belonged to neither.
+		ending := routingBaselineRetained
+		if candidateProposed {
+			ending = routingRevokedByGate
+		}
+		lifecycle.finish(ctx, ending, proposalIdentity,
 			AuthorizationReason(delivery.Refusal))
 		// Authorization governs METADATA as well as bytes: reporting
 		// V3Used/score/phase/evidence over content V3 did not author is the

@@ -134,6 +134,24 @@ usable rather than proven: materially different, valid identity, correct file
 class, no language swap, no edit-boundary violation, nothing malformed, and no
 target or workspace mutation during staging.
 
+## How a route entry ends
+
+Separate from the policy decision above, and answered at a different moment:
+the policy says what was decided about a candidate, the routing disposition
+says how the route entry that carried it ended. `skipped_infeasible`,
+`producer_unavailable`, `producer_timed_out`, `cancelled`,
+`no_candidate_produced`, `candidate_not_closure_eligible`,
+`candidate_revoked_by_gate`, `baseline_retained`, `authorization_refused`,
+`candidate_authorized`, and the fail-closed `internal_unclassified`.
+
+`baseline_retained` means the producer offered nothing materially different, so
+there was never a candidate; the record names no candidate hash, because the
+only bytes in play are the caller's own. A candidate that WAS offered and then
+withdrawn by a gate ends as `candidate_revoked_by_gate` and names the hash of
+the bytes that were withdrawn. Reporting both as a retained baseline, over the
+hash of whatever ended up on disk, is how the model's own content came to be
+recorded under `candidate_hash`.
+
 ## The decisions
 
 Closed vocabulary. Every value is a statement about what happened, never about
