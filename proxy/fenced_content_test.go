@@ -877,7 +877,6 @@ func TestSessionBudgetBounds(t *testing.T) {
 func timeoutFixture(t *testing.T, dir string, hang string, onLLM func()) (*AgentContext, map[string]string, map[string]int) {
 	t.Helper()
 	stop := make(chan struct{})
-	t.Cleanup(func() { close(stop) })
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -956,7 +955,17 @@ func timeoutFixture(t *testing.T, dir string, hang string, onLLM func()) (*Agent
 				{"delta": map[string]string{"content": string(call)}}}})
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
 	}))
-	t.Cleanup(srv.Close)
+	// Release the hanging handlers BEFORE the server waits for them.
+	// httptest.Server.Close blocks until every handler has returned, and the
+	// "tool" handler returns when the request context dies or `stop` closes.
+	// Cleanups run last-registered-first, so a `stop` registered before the
+	// server would close only after Close had already blocked on the handler
+	// -- a deadlock this suite never saw while the slot-erase retries spent
+	// the whole 900ms deadline before turn 0 could reach the tool at all.
+	t.Cleanup(func() {
+		close(stop)
+		srv.Close()
+	})
 
 	ctx := NewAgentContext(dir, Tier2Medium)
 	ctx.InferenceURL = srv.URL
