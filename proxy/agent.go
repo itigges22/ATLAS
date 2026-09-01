@@ -3700,7 +3700,7 @@ func validateTaskContract(in *TaskContract, workingDir string) (*TaskContract, e
 	// under a rule the caller did not ask for.
 	if _, ok := ParseCandidatePolicy(in.CandidatePolicy); !ok {
 		return nil, fmt.Errorf(
-			"task_contract.candidate_policy %q is not supported (want strict, advisory or confirm)",
+			"task_contract.candidate_policy %q is not supported (want strict, advisory or automatic_v3)",
 			in.CandidatePolicy)
 	}
 	outKnow, err := normalizeKnowledge("output_knowledge", in.OutputKnowledge,

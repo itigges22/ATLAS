@@ -135,25 +135,44 @@ func deliverEditCandidate(ctx *AgentContext, tool, path, relPath,
 	}
 	recordMutationScope(ctx, scope, scopeAdmits, scopeRefusal)
 
-	delivery := authorizeCandidateDelivery(ctx, entry, path, improved, evID,
-		meta.Envelope, pool, "", unmet, observed, scope)
-	// The same policy owner the new-file route asks, over the same kinds of
-	// fact. An edit route that decided this for itself is how the two paths
-	// disagreed about what a candidate had to show before it could land.
-	policy := decideCandidatePolicy(ctx, advisoryInput{
+	// ONE veto computation, two readers -- the same arrangement the new-file
+	// route uses, for the same reason.
+	vetoInput := advisoryInput{
 		Observed:               observed,
 		TargetDeclared:         outputKnowledgeDeclared(ctx),
 		TargetAuthorized:       targetIsAuthorized(requestObligations(ctx), resolveAgentPath(ctx, path)),
 		Unmet:                  unmet,
-		Decision:               delivery.Decision,
 		Evidence:               pool,
 		Envelope:               meta.Envelope,
 		Cancelled:              ctx.Ctx != nil && ctx.Ctx.Err() != nil,
 		MutatedProtectedAssets: mutatedAssets,
 		ScopeAdmits:            scopeAdmits,
 		ScopeRefusal:           scopeRefusal,
-		CaptureOnlySuppressed:  delivery.CaptureOnly,
-	}, delivery.Typed && (delivery.mayDeliver() || delivery.WouldAuthorize))
+	}
+	vetoes := advisoryVetoes(vetoInput)
+	// The selected-candidate identity, from the service's own record. The edit
+	// route reaches V3 through improveContentWithV3, which returns the winner
+	// it was given; this is the hash that winner was named by, and an
+	// automatic delivery requires it to equal the bytes actually in hand.
+	selected := ""
+	if meta.Envelope != nil {
+		selected = meta.Envelope.Identity.CandidateContentHash
+	}
+	mode, _ := candidatePolicyOf(ctx)
+	delivery := authorizeCandidateDelivery(ctx, entry, path, improved, evID,
+		meta.Envelope, pool, selected, unmet, observed, scope,
+		automaticIntent{Mode: mode, Vetoes: vetoes})
+	// The same policy owner the new-file route asks, over the same kinds of
+	// fact. An edit route that decided this for itself is how the two paths
+	// disagreed about what a candidate had to show before it could land.
+	policyInput := vetoInput
+	policyInput.Decision = delivery.Decision
+	policyInput.CaptureOnlySuppressed = delivery.CaptureOnly
+	policyInput.AutomaticEligible = delivery.AutomaticEligible
+	policyInput.Vetoes = vetoes
+	policy := decideCandidatePolicy(ctx, policyInput,
+		delivery.Typed && delivery.Basis == grantBasisStrict &&
+			(delivery.mayDeliver() || delivery.WouldAuthorize))
 	recordCandidatePolicyDecision(ctx, entry, contentSHA256(improved), policy)
 	if delivery.CaptureOnly {
 		recordCaptureOnlyDisposition(ctx, entry, contentSHA256(improved), policy, true)

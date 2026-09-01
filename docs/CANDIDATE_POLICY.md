@@ -1,4 +1,4 @@
-# Candidate policy: strict, advisory, confirm
+# Candidate policy: strict, advisory, automatic_v3
 
 **ATLAS is an interactive coding agent, not a formal verifier.** For an ordinary
 coding task there is no oracle to consult and no proof to be had. A machine that
@@ -18,12 +18,72 @@ Three modes, because there are three genuinely different situations.
 | --- | --- | --- |
 | `strict` | a client declared verification the proxy can run | the candidate, automatically, once that verification passes at the declared strength against these exact bytes |
 | `advisory` | no oracle exists | a candidate may be *preferred* on bounded evidence. A measured quality policy, never a proof. |
-| `confirm` | the decision belongs to the user | the candidate, after a one-time approval bound to the exact bytes |
+| `automatic_v3` | no oracle exists, and the pipeline picked a winner | the exact candidate V3 selected, once every hard safety requirement holds |
 
 `strict` is the shipped default. **`advisory` computes its answer and delivers
 nothing** until [Candidate Confidence Policy
 Validation](#candidate-confidence-policy-validation) has measured it; see
-"Calibration status" below for why.
+"Calibration status" below for why. `automatic_v3` is selectable by a trusted
+client or operator and is not the default until live validation passes.
+
+## Automatic delivery, and why it is not a lowered bar
+
+Strict asks whether trusted evidence meets a floor the client declared. A
+request that declared none has no floor, so the honest strict answer is to keep
+the model's own bytes — and a pipeline that generates K candidates, ranks them
+and selects a winner never reaches the artifact at all. That is an evidence
+question being answered as if it were a safety question.
+
+`automatic_v3` separates them. The evidence question keeps its honest answer:
+nothing about the candidate is claimed to be correct, and no score, consensus,
+Lens value, service verdict or hidden evaluator is consulted. What is checked
+is everything that was never about evidence:
+
+- V3 generation completed, and the candidate is the **exact selected winner**,
+  identified by content hash rather than reconstructed from a score or an
+  array position;
+- request, invocation, route-entry and candidate identities are complete and
+  attributable, and the candidate instance id separates duplicate bytes and
+  hash-prefix collisions;
+- the bytes are non-blank and materially different from the baseline;
+- the canonical target is valid, inside the workspace, and declared;
+- the structured mutation scope admits these exact bytes;
+- no undeclared path is added or altered, and no protected asset is mutated;
+- workspace, target, route, baseline and candidate identity are all fresh;
+- language and artifact class match the target;
+- applicable syntax and structural checks pass;
+- **no declared verification failed**, and none was left unobservable;
+- the candidate is not weaker than the baseline on an applicable trusted check;
+- nothing timed out, was cancelled, or exhausted memory, processes or output;
+- a destructive operation still goes through its existing permission flow;
+- the one-time exact-byte grant, revalidation, write, ledger, validation,
+  settlement and provenance all succeed.
+
+**Absence of an oracle is not failure.** No behavioral oracle, no declared
+command, an unsupported adapter, no closure certificate, no independent critic:
+each is *unavailable* evidence, recorded as such, and none of them rejects an
+otherwise safe selected candidate. A requirement the client **did** declare is
+different — a failed check is a hard veto, and one that timed out, was
+cancelled, exhausted a resource or could not be observed cannot authorize a
+delivery. Applicable syntax or structural failure remains a hard veto with or
+without a declared command.
+
+**The user's involvement does not change.** The existing permission prompts
+still gate dangerous tools, deletion keeps its exact-object approval flow, and
+what lands is reviewed as an ordinary workspace diff that can be revised or
+undone. There is no candidate approval prompt, no allow/deny request, no
+session approval and no candidate confirmation UI: the competition between
+candidates is internal, and asking a person to adjudicate it would be asking
+them to review work they cannot see.
+
+### The withdrawn `confirm` mode
+
+An earlier draft carried a fourth mode, `confirm`, which would have presented a
+candidate for a one-time exact-byte approval. It never shipped: it had no
+approval surface, no wire consumer, no TUI consumer, it never set `Delivers`,
+and it appears in no sealed evidence. It is removed rather than quarantined,
+and no replacement human-confirmation mechanism takes its place — the product
+decision is that candidate competition is internal.
 
 ## Who selects the mode
 
@@ -126,8 +186,7 @@ deletion, a moved target, a moved workspace, and a request that has ended.
 Every grant now carries the `MutationScopeID` of the call it came from.
 
 A calibrated advisory decision may one day mint a one-time grant for candidate
-bytes constrained to exactly that scope; confirm may do the same after an
-exact-byte approval. Neither delivers today.
+bytes constrained to exactly that scope. It does not deliver today.
 
 Hard proposal requirements survive unchanged, because they are about bytes being
 usable rather than proven: materially different, valid identity, correct file
@@ -152,6 +211,65 @@ the bytes that were withdrawn. Reporting both as a retained baseline, over the
 hash of whatever ended up on disk, is how the model's own content came to be
 recorded under `candidate_hash`.
 
+## automatic_v3: the competition is internal
+
+V3 generates K candidates, ranks them and selects one. Until now that winner
+reached the artifact only when trusted evidence met a floor the client had
+declared — and a request that declared no verification has no floor, so the
+honest strict answer was to keep the model's own bytes. The result was a
+pipeline whose whole output was discarded for the most common kind of request.
+
+`automatic_v3` separates two questions that were being answered together.
+
+- **The evidence question** keeps its honest answer. Nothing under this mode
+  claims a candidate is correct. No score, consensus value, Lens number or
+  service closure verdict is consulted, and none of them may be shown as a
+  probability of correctness.
+- **The safety question** is unchanged and still binding. Path containment,
+  declared targets, the structured mutation scope, protected assets, identity
+  freshness, language and artifact class, syntax and structural checks,
+  declared verification that failed or could not run, cancellation, resource
+  exhaustion, destructive permission, the one-time exact-byte grant,
+  revalidation, the ledger, settlement — every one of them still has to hold.
+
+What it adds is one requirement of its own: **the bytes must be the exact
+candidate the selection path named.** The service says which content hash it
+selected; the proxy hashes the bytes it is holding; the two must be the same
+string. Nothing is reconstructed from a score or an array position, and a
+missing, blank or unrecognised selection identity fails closed.
+
+**Absence of an oracle is not failure.** For a request that declared no
+verification requirement, none of these rejects an otherwise safe candidate:
+no behavioural oracle, no declared command, an adapter that cannot measure the
+artifact class, no closure certification, no independent critic. They are
+recorded as *unavailable* evidence, not failed evidence. What is still a hard
+veto: an applicable syntax or structural failure, and — when the client
+explicitly declared a requirement — a check that failed, timed out, was
+cancelled, was resource-exhausted or could not be observed. A declared
+requirement is never silently downgraded.
+
+**Human involvement is unchanged.** The existing permission prompts still gate
+dangerous and permission-sensitive tools, deletion keeps its exact-object
+approval flow, and the user reviews the resulting workspace diff and may revise
+or undo it. There is no candidate approval prompt, no allow/deny request, no
+session approval and no candidate confirmation UI — the competition between
+candidates is internal, and a structural test pins that no such surface exists.
+
+**Ownership.** The mode is set by trusted client or operator configuration
+only. The model cannot select it, V3 cannot select it, it is never inferred
+from task prose, and an unrecognised value falls back to strict. The shipping
+default remains **strict** until live validation passes.
+
+### A withdrawn mode
+
+An earlier draft carried a fourth mode, `confirm`, which would have presented a
+candidate for one-time exact-byte human approval. It never delivered, no wire,
+TUI or production path consumed it, and no sealed evidence contains it. It is
+removed rather than kept as scaffolding: candidate competition is internal, so
+a mode whose whole purpose was to ask a user to adjudicate between candidates
+was a product answer this design does not give. Requests naming `confirm` are
+now refused as unsupported.
+
 ## The decisions
 
 Closed vocabulary. Every value is a statement about what happened, never about
@@ -162,7 +280,7 @@ how likely the candidate is to be correct.
 | `baseline_retained` | the model's own proposal is what lands |
 | `candidate_preferred_advisory` | bounded evidence prefers the candidate; not proof, and not a delivery in this build |
 | `candidate_authorized_strict` | trusted declared verification passed at the declared strength on these exact bytes |
-| `human_confirmation_required` | the candidate is presentable and the decision is the user's |
+| `candidate_automatic_v3` | the V3 selection path chose these exact bytes and every hard safety requirement held |
 | `candidate_rejected_hard_veto` | something disqualifying was observed |
 | `insufficient_confidence` | nothing disqualified it and nothing supported it |
 
@@ -252,7 +370,7 @@ next, how many routes the task takes, which terminal it reaches and what
 evidence exists at the end, whether or not anyone runs an evaluator afterwards.
 
 `ATLAS_CANDIDATE_CAPTURE_ONLY` is that control, and it is **not a fourth policy
-mode**: strict, advisory and confirm are what a client may ask for and they are
+mode**: strict, advisory and automatic_v3 are what a client may ask for and they are
 unchanged. It is operator configuration on a private experimental process,
 default off, unreachable from any task contract, model output, service response
 or header, and failing closed to ordinary behaviour on any value it does not
@@ -273,7 +391,7 @@ What it suppresses is the licence, not the answer:
   `baseline_retained`;
 - two private records carry it: the suppression, and the would-have disposition
   from the closed set `would_authorize_strict`, `would_prefer_advisory`,
-  `would_require_human_confirmation`, `rejected_hard_veto`,
+  `would_deliver_automatic_v3`, `rejected_hard_veto`,
   `insufficient_confidence`, `baseline_retained`,
   `capture_only_suppressed_delivery`;
 - nothing model-facing mentions it, and no extra model turn results.
@@ -300,7 +418,9 @@ guarantee, because none of it is one.
 | `proxy/candidate_policy.go` | modes, sources, the decision vocabulary, the telemetry record |
 | `proxy/advisory_policy.go` | the veto vocabulary, the signal set, and the policy owner |
 | `proxy/candidate_provenance.go` | what the terminal is told about delivered bytes |
+| `proxy/automatic_delivery.go` | whether the exact selected candidate may land, and the grant basis |
 | `proxy/verification_requirements.go` | typed verification requirements and asset authority |
 | `proxy/tools.go` | the new-file route: proposal, staging, policy, delivery |
 | `proxy/edit_route_delivery.go` | the edit route, through the same owner |
 | `proxy/candidate_reachability.go` | whether the producer is consulted at all, and why not |
+| `proxy/automatic_delivery.go` | whether the exact selected candidate may land automatically, and the grant basis |

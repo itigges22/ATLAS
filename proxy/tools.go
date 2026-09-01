@@ -2089,33 +2089,51 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	if candidateProposed {
 		recordMutationScope(ctx, scope, scopeAdmits, scopeRefusal)
 	}
-	var delivery deliveryAuthorization
-	if candidateProposed {
-		delivery = authorizeCandidateDelivery(ctx, entry, path, code, evID,
-			v3Result.Evidence, observed, selected, unmet, deliveredCheck, scope)
-	}
-	// THE policy owner. It reads the typed answer, the trusted observations and
-	// the disqualifying facts, and says which of the honest decisions this
-	// candidate earned. Only the strict authorization delivers in this build.
-	policy := decideCandidatePolicy(ctx, advisoryInput{
+	// ONE veto computation, two readers. The authorization owner needs the
+	// disqualifying facts before it can mint an automatic grant, and the
+	// policy owner needs them to reach its decision. Computed here so both
+	// read the same list rather than each deriving its own.
+	vetoInput := advisoryInput{
 		Observed:                    deliveredCheck,
 		TargetDeclared:              outputKnowledgeDeclared(ctx),
 		TargetAuthorized:            targetIsAuthorized(requestObligations(ctx), resolveAgentPath(ctx, path)),
 		LanguageOrBoundaryViolation: languageOrBoundaryViolation,
 		Unmet:                       unmet,
-		Decision:                    delivery.Decision,
 		Evidence:                    observed,
-		Envelope:                    envelopeOf(v3Result),
 		Cancelled:                   ctx.Ctx != nil && ctx.Ctx.Err() != nil,
 		MutatedProtectedAssets:      stagingMutatedAssets,
 		ScopeAdmits:                 scopeAdmits,
 		ScopeRefusal:                scopeRefusal,
-		CaptureOnlySuppressed:       delivery.CaptureOnly,
-		// The would-have, not the outcome: an acquisition control takes the
-		// licence and leaves the answer, so the policy is asked the question it
-		// would have been asked without one.
-	}, candidateProposed && delivery.Typed &&
-		(delivery.mayDeliver() || delivery.WouldAuthorize))
+	}
+	vetoInput.Envelope = envelopeOf(v3Result)
+	vetoes := advisoryVetoes(vetoInput)
+	var delivery deliveryAuthorization
+	if candidateProposed {
+		mode, _ := candidatePolicyOf(ctx)
+		delivery = authorizeCandidateDelivery(ctx, entry, path, code, evID,
+			v3Result.Evidence, observed, selected, unmet, deliveredCheck, scope,
+			automaticIntent{Mode: mode, Vetoes: vetoes})
+	}
+	// THE policy owner. It reads the typed answer, the trusted observations and
+	// the disqualifying facts, and says which of the honest decisions this
+	// candidate earned. Only the strict authorization delivers in this build.
+	policyInput := vetoInput
+	policyInput.Decision = delivery.Decision
+	policyInput.CaptureOnlySuppressed = delivery.CaptureOnly
+	policyInput.AutomaticEligible = delivery.AutomaticEligible
+	// The vetoes the authorization owner was handed, verbatim. Recomputing
+	// them here from the same input would give the same answer today and is
+	// exactly the duplication that lets two answers drift apart later.
+	policyInput.Vetoes = vetoes
+	// The would-have, not the outcome: an acquisition control takes the licence
+	// and leaves the answer, so the policy is asked the question it would have
+	// been asked without one.
+	// Strict means strict. An automatic licence also makes mayDeliver true, and
+	// reporting it as a strict authorization would name the wrong rule in the
+	// record a calibration is computed from.
+	policy := decideCandidatePolicy(ctx, policyInput,
+		candidateProposed && delivery.Typed && delivery.Basis == grantBasisStrict &&
+			(delivery.mayDeliver() || delivery.WouldAuthorize))
 	if candidateProposed {
 		recordCandidatePolicyDecision(ctx, entry, contentSHA256(code), policy)
 		if delivery.CaptureOnly {

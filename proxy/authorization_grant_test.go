@@ -103,7 +103,7 @@ func (w *grantWorld) claim() grantClaim {
 
 func (w *grantWorld) mint(t *testing.T) *authorizationGrant {
 	t.Helper()
-	g, ok, why := mintAuthorizationGrant(w.ctx, w.in, w.decision, "selected-1")
+	g, ok, why := mintAuthorizationGrant(w.ctx, w.in, w.decision, "selected-1", grantBasisStrict)
 	if !ok {
 		t.Fatalf("an authorized decision minted no grant: %s", why)
 	}
@@ -176,7 +176,7 @@ func TestAnUnauthorizedDecisionMintsNothing(t *testing.T) {
 	} {
 		fresh := newGrantWorld(t)
 		mut(fresh)
-		if _, ok, _ := mintAuthorizationGrant(fresh.ctx, fresh.in, fresh.decision, "s"); ok {
+		if _, ok, _ := mintAuthorizationGrant(fresh.ctx, fresh.in, fresh.decision, "s", grantBasisStrict); ok {
 			t.Errorf("%s minted a grant", name)
 		}
 	}
@@ -198,7 +198,7 @@ func TestADeclaredCommandWithoutEvidenceMintsNothing(t *testing.T) {
 		}
 	}
 	stripped.Evidence = kept
-	if _, ok, _ := mintAuthorizationGrant(w.ctx, stripped, w.decision, "s"); ok {
+	if _, ok, _ := mintAuthorizationGrant(w.ctx, stripped, w.decision, "s", grantBasisStrict); ok {
 		t.Error("a declared command with no trusted evidence minted a grant")
 	}
 }
@@ -222,7 +222,7 @@ func TestAliasSpellingsShareOneGrant(t *testing.T) {
 	// And minting again under an alias supersedes rather than adding.
 	aliased := w.in
 	aliased.TargetPath = rel
-	if _, ok, why := mintAuthorizationGrant(w.ctx, aliased, w.decision, "s"); !ok {
+	if _, ok, why := mintAuthorizationGrant(w.ctx, aliased, w.decision, "s", grantBasisStrict); !ok {
 		t.Fatalf("an alias could not mint: %s", why)
 	}
 	if liveGrantCount(w.ctx) != 1 {
@@ -236,7 +236,7 @@ func TestALaterDecisionSupersedesTheEarlierGrant(t *testing.T) {
 	// A second candidate for the same target.
 	later := w.in
 	later.Identity.CandidateInstanceID = w.in.Identity.CandidateInstanceID + ":again"
-	second, ok, why := mintAuthorizationGrant(w.ctx, later, w.decision, "selected-2")
+	second, ok, why := mintAuthorizationGrant(w.ctx, later, w.decision, "selected-2", grantBasisStrict)
 	if !ok {
 		t.Fatalf("the later decision minted nothing: %s", why)
 	}
@@ -273,7 +273,7 @@ func TestGrantCapacityRefusesBeforeMutating(t *testing.T) {
 	if before != grantCapacity {
 		t.Fatalf("%d live grants, want the capacity", before)
 	}
-	_, ok, why := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s")
+	_, ok, why := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s", grantBasisStrict)
 	if ok {
 		t.Error("capacity did not refuse")
 	}
@@ -305,7 +305,7 @@ func TestCapacityIsReleasedWhenAGrantIsSpent(t *testing.T) {
 	if n := liveGrantCount(w.ctx); n != 0 {
 		t.Fatalf("%d live grants, want none", n)
 	}
-	if _, ok, why := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s"); !ok {
+	if _, ok, why := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s", grantBasisStrict); !ok {
 		t.Errorf("capacity was not released by spending: %s", why)
 	}
 }
@@ -538,7 +538,7 @@ func TestRetirementIsFinalAndBlocksFurtherMinting(t *testing.T) {
 			t.Errorf("refusal %q, want %q", why, reason)
 		}
 		// And nothing new may be minted afterwards.
-		if _, ok, _ := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s"); ok {
+		if _, ok, _ := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s", grantBasisStrict); ok {
 			t.Errorf("%s: a grant was minted after retirement", reason)
 		}
 	}
@@ -629,7 +629,7 @@ func TestAGrantCarriesNoContent(t *testing.T) {
 		CandidateBytes:          secret,
 	}
 	d := decideAuthorization(w.ctx, in)
-	g, ok, why := mintAuthorizationGrant(w.ctx, in, d, "selected")
+	g, ok, why := mintAuthorizationGrant(w.ctx, in, d, "selected", grantBasisStrict)
 	if !ok {
 		t.Fatalf("no grant to inspect: %s", why)
 	}
@@ -681,7 +681,7 @@ func TestGrantTelemetryCarriesNoPathOrContent(t *testing.T) {
 	d := decideAuthorization(w.ctx, in)
 
 	captured := captureShadow(t, func() {
-		g, ok, why := mintAuthorizationGrant(w.ctx, in, d, "selected")
+		g, ok, why := mintAuthorizationGrant(w.ctx, in, d, "selected", grantBasisStrict)
 		if !ok {
 			t.Fatalf("no grant: %s", why)
 		}
@@ -807,7 +807,7 @@ func TestARetryNeedsANewlyMintedDecision(t *testing.T) {
 	}
 	// The same decision cannot be re-minted into the same grant: minting again
 	// supersedes and issues a NEW decision generation.
-	second, ok, why := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s")
+	second, ok, why := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s", grantBasisStrict)
 	if !ok {
 		t.Fatalf("a fresh decision could not mint after a burn: %s", why)
 	}

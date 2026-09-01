@@ -42,15 +42,27 @@ const (
 	// in this build; the policy computes and records its answer, and delivery
 	// still requires strict authorization.
 	CandidatePolicyAdvisory candidatePolicyMode = "advisory"
-	// CandidatePolicyConfirm sends the candidate to the user for a one-time,
-	// exact-byte approval.
-	CandidatePolicyConfirm candidatePolicyMode = "confirm"
+	// CandidatePolicyAutomaticV3 delivers the exact candidate the V3 selection
+	// path chose, whenever every hard safety requirement holds.
+	//
+	// It is not a lower evidence bar for the same question -- it is a
+	// different question. Strict asks whether trusted evidence meets a floor
+	// the client declared, which is unanswerable for a request that declared
+	// nothing, and the honest answer there was to keep the baseline. But V3
+	// generating K candidates and picking one IS the product: an interactive
+	// coding agent whose internal competition never reaches the artifact is
+	// paying for a pipeline it does not use. So the competition stays
+	// internal, the user reviews the resulting diff like any other, and the
+	// safety requirements that were never about evidence -- path containment,
+	// mutation scope, identity freshness, syntax, permissions, exact-byte
+	// delivery -- all still hold.
+	CandidatePolicyAutomaticV3 candidatePolicyMode = "automatic_v3"
 )
 
 var candidatePolicyModes = map[candidatePolicyMode]bool{
-	CandidatePolicyStrict:   true,
-	CandidatePolicyAdvisory: true,
-	CandidatePolicyConfirm:  true,
+	CandidatePolicyStrict:      true,
+	CandidatePolicyAdvisory:    true,
+	CandidatePolicyAutomaticV3: true,
 }
 
 // defaultCandidatePolicy is what a request gets when neither the client nor the
@@ -144,9 +156,10 @@ const (
 	// PolicyCandidateAuthorizedStrict: trusted client-declared verification
 	// passed at the declared strength against these exact bytes.
 	PolicyCandidateAuthorizedStrict candidatePolicyDecision = "candidate_authorized_strict"
-	// PolicyHumanConfirmationRequired: the candidate is presentable and the
-	// decision belongs to the user.
-	PolicyHumanConfirmationRequired candidatePolicyDecision = "human_confirmation_required"
+	// PolicyCandidateAutomaticV3: the V3 selection path chose this candidate
+	// and every hard safety requirement holds. The competition that produced
+	// it is internal; what the user reviews is the diff.
+	PolicyCandidateAutomaticV3 candidatePolicyDecision = "candidate_automatic_v3"
 	// PolicyCandidateRejectedHardVeto: something disqualifying was observed.
 	// Vetoes are facts, never scores, and one is enough.
 	PolicyCandidateRejectedHardVeto candidatePolicyDecision = "candidate_rejected_hard_veto"
@@ -161,7 +174,7 @@ var candidatePolicyDecisions = map[candidatePolicyDecision]bool{
 	PolicyBaselineRetained:           true,
 	PolicyCandidatePreferredAdvisory: true,
 	PolicyCandidateAuthorizedStrict:  true,
-	PolicyHumanConfirmationRequired:  true,
+	PolicyCandidateAutomaticV3:       true,
 	PolicyCandidateRejectedHardVeto:  true,
 	PolicyInsufficientConfidence:     true,
 }

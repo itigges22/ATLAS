@@ -48,23 +48,23 @@ func candidateCaptureOnly() bool {
 // was suppressed. Rewriting "would authorize strict" into "baseline retained"
 // would lose the only thing the acquisition is there to measure.
 const (
-	CaptureWouldAuthorizeStrict          = "would_authorize_strict"
-	CaptureWouldPreferAdvisory           = "would_prefer_advisory"
-	CaptureWouldRequireHumanConfirmation = "would_require_human_confirmation"
-	CaptureRejectedHardVeto              = "rejected_hard_veto"
-	CaptureInsufficientConfidence        = "insufficient_confidence"
-	CaptureBaselineRetained              = "baseline_retained"
-	CaptureSuppressedDelivery            = "capture_only_suppressed_delivery"
+	CaptureWouldAuthorizeStrict    = "would_authorize_strict"
+	CaptureWouldPreferAdvisory     = "would_prefer_advisory"
+	CaptureWouldDeliverAutomaticV3 = "would_deliver_automatic_v3"
+	CaptureRejectedHardVeto        = "rejected_hard_veto"
+	CaptureInsufficientConfidence  = "insufficient_confidence"
+	CaptureBaselineRetained        = "baseline_retained"
+	CaptureSuppressedDelivery      = "capture_only_suppressed_delivery"
 )
 
 var captureOnlyDispositions = map[string]bool{
-	CaptureWouldAuthorizeStrict:          true,
-	CaptureWouldPreferAdvisory:           true,
-	CaptureWouldRequireHumanConfirmation: true,
-	CaptureRejectedHardVeto:              true,
-	CaptureInsufficientConfidence:        true,
-	CaptureBaselineRetained:              true,
-	CaptureSuppressedDelivery:            true,
+	CaptureWouldAuthorizeStrict:    true,
+	CaptureWouldPreferAdvisory:     true,
+	CaptureWouldDeliverAutomaticV3: true,
+	CaptureRejectedHardVeto:        true,
+	CaptureInsufficientConfidence:  true,
+	CaptureBaselineRetained:        true,
+	CaptureSuppressedDelivery:      true,
 }
 
 // captureOnlyDispositionFor maps a policy answer onto what the acquisition
@@ -76,8 +76,8 @@ func captureOnlyDispositionFor(decision candidatePolicyDecision) string {
 		return CaptureWouldAuthorizeStrict
 	case PolicyCandidatePreferredAdvisory:
 		return CaptureWouldPreferAdvisory
-	case PolicyHumanConfirmationRequired:
-		return CaptureWouldRequireHumanConfirmation
+	case PolicyCandidateAutomaticV3:
+		return CaptureWouldDeliverAutomaticV3
 	case PolicyCandidateRejectedHardVeto:
 		return CaptureRejectedHardVeto
 	case PolicyInsufficientConfidence:

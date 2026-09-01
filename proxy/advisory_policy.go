@@ -132,6 +132,17 @@ type advisoryInput struct {
 	// away from a decision that had earned it. The decision below is still
 	// computed and recorded as what it was; only Delivers changes.
 	CaptureOnlySuppressed bool
+	// AutomaticEligible is the authorization owner's answer to the one
+	// question automatic_v3 adds: are these the exact bytes the V3 selection
+	// path named, under a grant this machine minted. It is computed there and
+	// never here, because a policy that decided its own authorization would be
+	// the service certifying itself with an extra step.
+	AutomaticEligible bool
+	// Vetoes, when non-nil, are the disqualifying facts already computed for
+	// this candidate by the single owner. The authorization owner needs them
+	// before it can mint an automatic grant, and computing them twice is how
+	// two answers about the same candidate come to disagree.
+	Vetoes []string
 }
 
 // advisoryVetoes are the disqualifying facts observed about this candidate, in
@@ -270,38 +281,50 @@ func advisorySignals(in advisoryInput) map[string]interface{} {
 func decideCandidatePolicy(ctx *AgentContext, in advisoryInput,
 	strictAuthorized bool) candidatePolicyOutcome {
 	mode, source := candidatePolicyOf(ctx)
+	vetoes := in.Vetoes
+	if vetoes == nil {
+		vetoes = advisoryVetoes(in)
+	}
 	out := candidatePolicyOutcome{
 		Mode: mode, Source: source,
-		Vetoes:  advisoryVetoes(in),
+		Vetoes:  vetoes,
 		Signals: advisorySignals(in),
 	}
 	if len(out.Vetoes) > 0 {
 		out.Decision = PolicyCandidateRejectedHardVeto
 		return out
 	}
-	if strictAuthorized {
+	// The two decisions that deliver, chosen here and acted on once below.
+	// One assignment, so the acquisition control cannot be applied to one
+	// delivering decision and forgotten on the other.
+	delivers := false
+	switch {
+	case strictAuthorized:
 		// Trusted evidence, bound to these exact bytes, meeting the floor the
-		// client declared. The only decision in this build that delivers --
-		// and under an acquisition control, the one decision whose delivery is
-		// taken away while its answer is kept.
-		out.Decision = PolicyCandidateAuthorizedStrict
-		out.Delivers = !in.CaptureOnlySuppressed
-		return out
-	}
-	switch mode {
-	case CandidatePolicyConfirm:
-		out.Decision = PolicyHumanConfirmationRequired
-		return out
-	case CandidatePolicyAdvisory:
+		// client declared.
+		out.Decision, delivers = PolicyCandidateAuthorizedStrict, true
+	case mode == CandidatePolicyAutomaticV3 && in.AutomaticEligible:
+		// The V3 selection path chose these exact bytes and every hard safety
+		// requirement held. No floor was met because the client declared none;
+		// the vetoes above are what stands in for one, and they are facts
+		// rather than a lowered bar.
+		out.Decision, delivers = PolicyCandidateAutomaticV3, true
+	case mode == CandidatePolicyAutomaticV3:
+		// Automatic was asked for and the authorization owner declined. The
+		// model's own bytes stand.
+		out.Decision = PolicyBaselineRetained
+	case mode == CandidatePolicyAdvisory:
 		if advisoryHasPositiveEvidence(in) {
 			out.Decision = PolicyCandidatePreferredAdvisory
-			return out
+		} else {
+			out.Decision = PolicyInsufficientConfidence
 		}
-		out.Decision = PolicyInsufficientConfidence
-		return out
+	default:
+		out.Decision = PolicyBaselineRetained
 	}
-	// Strict, with nothing that authorizes. The model's own proposal stands.
-	out.Decision = PolicyBaselineRetained
+	// The acquisition control takes the licence and leaves the answer, in one
+	// place, for every decision that earned one.
+	out.Delivers = delivers && !in.CaptureOnlySuppressed
 	return out
 }
 

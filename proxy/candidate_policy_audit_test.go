@@ -103,7 +103,7 @@ func TestAdvisoryIsReachableAndInert(t *testing.T) {
 	// And the only decision that sets Delivers is the strict one.
 	for _, d := range []candidatePolicyDecision{
 		PolicyBaselineRetained, PolicyCandidatePreferredAdvisory,
-		PolicyHumanConfirmationRequired, PolicyCandidateRejectedHardVeto,
+		PolicyCandidateRejectedHardVeto,
 		PolicyInsufficientConfidence,
 	} {
 		if deliveryProvenanceFor(candidatePolicyOutcome{Decision: d}) != DeliveryFromModelProposal {
@@ -112,11 +112,15 @@ func TestAdvisoryIsReachableAndInert(t *testing.T) {
 	}
 }
 
-// Confirm presents; it does not deliver. Approval is a separate act and this
-// build has no path that fabricates one.
-func TestConfirmCannotDeliverWithoutApproval(t *testing.T) {
-	ctx := policyContext(t, CandidatePolicyConfirm)
-	out := decideCandidatePolicy(ctx, advisoryInput{
+// automatic_v3 delivers what the pipeline selected, and only that.
+//
+// Its own precondition -- that these are the exact bytes the selection path
+// named -- is answered by the authorization owner, not here. A policy that
+// decided its own authorization would be the service certifying itself with
+// one more step in between.
+func TestAutomaticDeliversOnlyWhatTheOwnerAuthorized(t *testing.T) {
+	ctx := policyContext(t, CandidatePolicyAutomaticV3)
+	in := advisoryInput{
 		Observed:         checkOutcome{Status: ValidationPassed},
 		TargetDeclared:   true,
 		TargetAuthorized: true,
@@ -125,12 +129,42 @@ func TestConfirmCannotDeliverWithoutApproval(t *testing.T) {
 			Provenance: V3EvidenceProvenance{Source: ProvenanceClientDeclaredVerification},
 			Outcome:    ValidationPassed,
 		}},
-	}, false)
-	if out.Decision != PolicyHumanConfirmationRequired {
-		t.Fatalf("confirm decided %q", out.Decision)
+	}
+	// Without the owner's answer it keeps the baseline: no floor was met and
+	// nothing established that these bytes won anything.
+	out := decideCandidatePolicy(ctx, in, false)
+	if out.Decision != PolicyBaselineRetained {
+		t.Fatalf("automatic decided %q with no authorization", out.Decision)
 	}
 	if out.Delivers {
-		t.Fatal("confirm delivered without an approval")
+		t.Fatal("automatic delivered without an authorization")
+	}
+	// With it, the candidate lands.
+	in.AutomaticEligible = true
+	out = decideCandidatePolicy(ctx, in, false)
+	if out.Decision != PolicyCandidateAutomaticV3 {
+		t.Fatalf("automatic decided %q", out.Decision)
+	}
+	if !out.Delivers {
+		t.Fatal("an authorized automatic candidate did not deliver")
+	}
+	// A veto still outranks it.
+	vetoed := in
+	vetoed.Observed = checkOutcome{Status: ValidationFailed}
+	if got := decideCandidatePolicy(ctx, vetoed, false); got.Decision != PolicyCandidateRejectedHardVeto {
+		t.Errorf("a syntax failure under automatic decided %q", got.Decision)
+	} else if got.Delivers {
+		t.Error("a vetoed automatic candidate delivered")
+	}
+	// And capture-only takes the licence while keeping the answer.
+	suppressed := in
+	suppressed.CaptureOnlySuppressed = true
+	got := decideCandidatePolicy(ctx, suppressed, false)
+	if got.Decision != PolicyCandidateAutomaticV3 {
+		t.Errorf("capture-only rewrote the decision to %q", got.Decision)
+	}
+	if got.Delivers {
+		t.Error("capture-only left the licence in place")
 	}
 	// Delivery is set in exactly one place in the policy owner, and it is the
 	// strict branch. A confirmation cannot reach it.
@@ -144,14 +178,33 @@ func TestConfirmCannotDeliverWithoutApproval(t *testing.T) {
 	if n := strings.Count(decide, "out.Delivers ="); n != 1 {
 		t.Fatalf("the policy owner assigns Delivers %d times, want once", n)
 	}
-	strictBranch := decide[strings.Index(decide, "if strictAuthorized {"):]
-	strictBranch = strictBranch[:strings.Index(strictBranch, "\n\t}")]
-	if !strings.Contains(strictBranch, "out.Delivers =") {
-		t.Error("the one delivering assignment is not the strict branch")
+	// The one assignment applies the acquisition control, so a delivering
+	// decision cannot be added later that forgets to be suppressible.
+	if !strings.Contains(decide, "out.Delivers = delivers && !in.CaptureOnlySuppressed") {
+		t.Error("the delivering assignment does not apply capture-only suppression")
 	}
-	// And it is the acquisition control that can take it away, nothing else.
-	if !strings.Contains(strictBranch, "!in.CaptureOnlySuppressed") {
-		t.Error("the strict branch delivers regardless of the acquisition control")
+	// And exactly two decisions may set it: the strict authorization, and the
+	// automatic one the authorization owner separately approved.
+	if n := strings.Count(decide, "delivers = "); n != 2 {
+		t.Errorf("%d branches set delivers, want exactly the two delivering "+
+			"decisions", n)
+	}
+	for _, delivering := range []string{
+		"out.Decision, delivers = PolicyCandidateAuthorizedStrict, true",
+		"out.Decision, delivers = PolicyCandidateAutomaticV3, true",
+	} {
+		if !strings.Contains(decide, delivering) {
+			t.Errorf("a delivering decision changed shape: %s", delivering)
+		}
+	}
+	// Automatic never decides its own eligibility here.
+	if !strings.Contains(decide, "in.AutomaticEligible") {
+		t.Error("the automatic branch no longer reads the owner's answer")
+	}
+	for _, banned := range []string{"automaticDeliveryAllowed", "mintAuthorizationGrant"} {
+		if strings.Contains(decide, banned) {
+			t.Errorf("the policy owner authorizes for itself via %s", banned)
+		}
 	}
 }
 

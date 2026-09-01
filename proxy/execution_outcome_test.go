@@ -343,7 +343,7 @@ func TestResourceExhaustionReachesNoGrant(t *testing.T) {
 // reason and reach the same veto.
 func TestNoProductModeWeakensResourceSafety(t *testing.T) {
 	for _, mode := range []candidatePolicyMode{
-		CandidatePolicyStrict, CandidatePolicyAdvisory, CandidatePolicyConfirm,
+		CandidatePolicyStrict, CandidatePolicyAdvisory, CandidatePolicyAutomaticV3,
 	} {
 		out := decideCandidatePolicy(policyContext(t, mode), advisoryInput{
 			Observed:         checkOutcome{Status: ValidationPassed},

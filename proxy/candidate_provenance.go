@@ -23,23 +23,26 @@ const (
 	// advisory policy. Bounded evidence preferred it. Nothing proved it, and
 	// the UI must not present it as proven.
 	DeliveryFromAdvisoryCandidate = "advisory_candidate"
-	// DeliveryFromHumanApproval: a V3 candidate replaced it because a person
-	// approved these exact bytes.
-	DeliveryFromHumanApproval = "human_approved_candidate"
+	// DeliveryFromAutomaticV3: a V3 candidate replaced it because the pipeline
+	// selected it and every hard safety requirement held. Nothing about its
+	// correctness was proven, and the UI must not present it as proven -- what
+	// it says is where the bytes came from, which is exactly what a reviewer
+	// of the diff needs to know.
+	DeliveryFromAutomaticV3 = "automatic_v3_candidate"
 )
 
 var deliveryProvenanceValues = map[string]bool{
 	DeliveryFromModelProposal:     true,
 	DeliveryFromStrictCandidate:   true,
 	DeliveryFromAdvisoryCandidate: true,
-	DeliveryFromHumanApproval:     true,
+	DeliveryFromAutomaticV3:       true,
 }
 
 // deliveryProvenanceFor maps a policy answer to what the user is looking at.
 //
 // Only the decisions that actually deliver map to a candidate origin. Everything
-// else -- a veto, insufficient confidence, a retained baseline, a confirmation
-// nobody has given yet -- means the bytes on disk are the model's own, and
+// else -- a veto, insufficient confidence, a retained baseline -- means the
+// bytes on disk are the model's own, and
 // saying anything else about them would be a false claim in the one place a
 // person is relying on it.
 func deliveryProvenanceFor(out candidatePolicyOutcome) string {
@@ -51,8 +54,8 @@ func deliveryProvenanceFor(out candidatePolicyOutcome) string {
 		return DeliveryFromStrictCandidate
 	case PolicyCandidatePreferredAdvisory:
 		return DeliveryFromAdvisoryCandidate
-	case PolicyHumanConfirmationRequired:
-		return DeliveryFromHumanApproval
+	case PolicyCandidateAutomaticV3:
+		return DeliveryFromAutomaticV3
 	}
 	return DeliveryFromModelProposal
 }

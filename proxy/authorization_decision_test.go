@@ -60,7 +60,7 @@ func authorizeCandidateDeliveryDecision(ctx *AgentContext, path, code string,
 	entry := mintRouteEntry(ctx)
 	return authorizeCandidateDelivery(ctx, entry, path, code, id, envelope,
 		evidence, "selected", nil, observed,
-		testMutationScope(ctx, entry, path, code)).Decision
+		testMutationScope(ctx, entry, path, code), automaticIntent{}).Decision
 }
 
 // authorize runs the LIVE owner, so the matrix describes what production
@@ -73,7 +73,7 @@ func (w *authWorld) authorize(id candidateEvidenceIdentity,
 	entry := mintRouteEntry(w.ctx)
 	return authorizeCandidateDelivery(w.ctx, entry, w.path, w.code, id, envelope,
 		evidence, "selected", nil, observed,
-		testMutationScope(w.ctx, entry, w.path, w.code))
+		testMutationScope(w.ctx, entry, w.path, w.code), automaticIntent{})
 }
 
 // stagedWorld is a world whose client declared commands, with an executor that

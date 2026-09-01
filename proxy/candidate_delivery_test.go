@@ -88,7 +88,7 @@ func TestDeliveryWritesTheBytesUnaltered(t *testing.T) {
 		"x = 1", "x = 1\n\n\n", "\tif True:\n\t\tpass\n", "print('a')\r\nprint('b')\r\n",
 	} {
 		w := newGrantWorldWithCode(t, body)
-		g, ok, why := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s")
+		g, ok, why := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s", grantBasisStrict)
 		if !ok {
 			t.Fatalf("%q: no grant (%s)", body, why)
 		}
@@ -310,7 +310,7 @@ func TestTheDeliveryResultIsSeparateFromThePoolLabel(t *testing.T) {
 func TestTheDeliveryOwnerLeaksNoContent(t *testing.T) {
 	const secret = "TOKEN = 'hunter2'\nprint(7)\n"
 	w := newGrantWorldWithCode(t, secret)
-	g, ok, why := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s")
+	g, ok, why := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s", grantBasisStrict)
 	if !ok {
 		t.Fatalf("no grant: %s", why)
 	}

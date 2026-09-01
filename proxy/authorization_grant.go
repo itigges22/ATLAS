@@ -104,6 +104,11 @@ type authorizationGrant struct {
 	// SelectedCandidateID is what the pipeline picked, recorded so the two
 	// facts stay distinguishable. Selection is not authorization.
 	SelectedCandidateID string
+	// Basis is WHY this licence exists: a declared floor that trusted evidence
+	// met, or a V3 selection that cleared every safety requirement with no
+	// floor to meet. Recorded on the grant so a later reader never has to
+	// infer it from what happened to be present.
+	Basis grantBasis
 
 	// DecisionGeneration orders decisions within one request. A later
 	// decision for the same target supersedes an earlier grant rather than
@@ -160,12 +165,25 @@ func evidenceSetIdentity(evidence []proxyEvidence) string {
 // decision already established or an identity the grant must bind, and a
 // missing one is a refusal rather than a grant with a hole in it.
 func mintAuthorizationGrant(ctx *AgentContext, in authorizationInput,
-	d AuthorizationDecision, selectedCandidateID string) (*authorizationGrant, bool, string) {
+	d AuthorizationDecision, selectedCandidateID string,
+	basis grantBasis) (*authorizationGrant, bool, string) {
 	if ctx == nil {
 		return nil, false, "no request"
 	}
-	if !d.Authorized || d.Reason != ReasonAuthorized {
-		return nil, false, "the decision did not authorize"
+	if !knownGrantBasis(basis) {
+		return nil, false, "no grant basis"
+	}
+	// The EVIDENCE preconditions, which belong to the strict basis alone.
+	// automatic_v3 has no declared floor to satisfy -- that is the whole
+	// reason it exists -- and its own precondition, that these are the exact
+	// bytes the selection path named, was established by
+	// automaticDeliveryAllowed before this was called. Everything BELOW this
+	// block is a safety requirement rather than an evidence one, and applies
+	// to both bases without exception.
+	if basis == grantBasisStrict {
+		if !d.Authorized || d.Reason != ReasonAuthorized {
+			return nil, false, "the decision did not authorize"
+		}
 	}
 	// Target knowledge must be contract-declared. A grant over a target the
 	// client never named is the one thing no amount of evidence can fix, and a
@@ -191,27 +209,45 @@ func mintAuthorizationGrant(ctx *AgentContext, in authorizationInput,
 	if admitted, why := scopeAdmitsCandidate(ctx, in.Scope, in.CandidateBytes); !admitted {
 		return nil, false, "the candidate is outside its mutation scope (" + why + ")"
 	}
-	// Every prerequisite satisfied and nothing owed. The decision says so;
-	// this refuses to take its word without the accounting agreeing.
-	if len(d.Missing) != 0 {
-		return nil, false, "an authorization prerequisite is still owed"
-	}
-	if len(d.Satisfied) == 0 {
-		return nil, false, "nothing was demonstrated"
-	}
-	// Every required declared command must have current trusted evidence.
-	// Read from the obligation set rather than from the decision, so a
-	// decision that somehow satisfied a command without a record cannot mint.
-	if _, missing := declaredVerificationCoverage(in.Obligations, in.Evidence); len(missing) != 0 {
-		return nil, false, "a declared command has no current trusted evidence"
-	}
-	// Modern, non-legacy record only.
-	if in.Envelope != nil {
-		if availability, _ := in.Envelope.Validate(); availability != EvidenceAvailable {
-			return nil, false, "the service record is not usable"
+	if basis == grantBasisStrict {
+		// Every prerequisite satisfied and nothing owed. The decision says so;
+		// this refuses to take its word without the accounting agreeing.
+		if len(d.Missing) != 0 {
+			return nil, false, "an authorization prerequisite is still owed"
 		}
-		if !in.Envelope.Evaluation.Supported {
-			return nil, false, "the adapter does not support this artifact"
+		if len(d.Satisfied) == 0 {
+			return nil, false, "nothing was demonstrated"
+		}
+		// Every required declared command must have current trusted evidence.
+		// Read from the obligation set rather than from the decision, so a
+		// decision that somehow satisfied a command without a record cannot
+		// mint.
+		if _, missing := declaredVerificationCoverage(in.Obligations, in.Evidence); len(missing) != 0 {
+			return nil, false, "a declared command has no current trusted evidence"
+		}
+		// Modern, non-legacy record only.
+		if in.Envelope != nil {
+			if availability, _ := in.Envelope.Validate(); availability != EvidenceAvailable {
+				return nil, false, "the service record is not usable"
+			}
+			// An adapter that cannot measure this artifact class cannot
+			// support a claim ABOUT evidence. Under automatic_v3 no such claim
+			// is being made, which is why this check belongs to strict alone:
+			// "nobody could measure it" is unavailable evidence, not failed
+			// evidence, and refusing on it would be treating the absence of an
+			// oracle as a fault of the candidate.
+			if !in.Envelope.Evaluation.Supported {
+				return nil, false, "the adapter does not support this artifact"
+			}
+		}
+	}
+	// A DECLARED requirement is binding under every basis. If the client named
+	// commands, each one must have current trusted evidence before anything
+	// lands -- automatic_v3 lowers no floor the client actually set, it only
+	// declines to invent one the client did not.
+	if basis == grantBasisAutomaticV3 {
+		if _, missing := declaredVerificationCoverage(in.Obligations, in.Evidence); len(missing) != 0 {
+			return nil, false, "a declared command has no current trusted evidence"
 		}
 	}
 
@@ -252,6 +288,7 @@ func mintAuthorizationGrant(ctx *AgentContext, in authorizationInput,
 		ObligationSetID:     obligationSetIdentity(in.Obligations),
 		EvidenceSetID:       evidenceSetIdentity(in.Evidence),
 		SelectedCandidateID: selectedCandidateID,
+		Basis:               basis,
 		MutationScopeID:     in.Scope.identity(),
 	}
 
@@ -564,6 +601,7 @@ func recordGrantEvent(ctx *AgentContext, g *authorizationGrant, event, detail st
 		"obligation_set_id":     g.ObligationSetID,
 		"evidence_set_id":       g.EvidenceSetID,
 		"selected_candidate_id": g.SelectedCandidateID,
+		"grant_basis":           string(g.Basis),
 		"decision_generation":   g.DecisionGeneration,
 		"build_version":         APIVersion,
 	})

@@ -409,7 +409,7 @@ func TestARepairCandidateIsJudgedOnItsOwnBytes(t *testing.T) {
 	a := authorizeCandidateDelivery(w.ctx, repairEntry, w.path, repaired, evID, nil,
 		[]proxyEvidence{ev}, "selected-repair", nil,
 		fallbackSyntaxOutcomeFor(w.ctx, w.path, repaired).aggregate(),
-		testMutationScope(w.ctx, repairEntry, w.path, repaired))
+		testMutationScope(w.ctx, repairEntry, w.path, repaired), automaticIntent{})
 	if a.Grant != nil && a.Grant.CandidateHash != contentSHA256(repaired) {
 		t.Error("the repair's grant is about other bytes")
 	}

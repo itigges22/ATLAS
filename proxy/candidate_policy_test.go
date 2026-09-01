@@ -382,8 +382,8 @@ func TestOnlyTheClientOrTheOperatorSelectsTheMode(t *testing.T) {
 		t.Fatal("an unknown candidate policy was accepted")
 	}
 	// The client's own statement wins over the deployment's.
-	ctx := policyContext(t, CandidatePolicyConfirm)
-	if mode, source := candidatePolicyOf(ctx); mode != CandidatePolicyConfirm ||
+	ctx := policyContext(t, CandidatePolicyAutomaticV3)
+	if mode, source := candidatePolicyOf(ctx); mode != CandidatePolicyAutomaticV3 ||
 		source != CandidatePolicySourceClient {
 		t.Errorf("client mode resolved to %q from %q", mode, source)
 	}
@@ -435,7 +435,7 @@ func TestDeliveryProvenanceNamesTheOrigin(t *testing.T) {
 	}{
 		{PolicyCandidateAuthorizedStrict, true, DeliveryFromStrictCandidate},
 		{PolicyCandidatePreferredAdvisory, true, DeliveryFromAdvisoryCandidate},
-		{PolicyHumanConfirmationRequired, true, DeliveryFromHumanApproval},
+		{PolicyCandidateAutomaticV3, true, DeliveryFromAutomaticV3},
 		{PolicyCandidateAuthorizedStrict, false, DeliveryFromModelProposal},
 		{PolicyBaselineRetained, false, DeliveryFromModelProposal},
 		{PolicyCandidateRejectedHardVeto, false, DeliveryFromModelProposal},

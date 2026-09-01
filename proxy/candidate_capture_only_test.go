@@ -192,7 +192,7 @@ func TestCaptureOnlyAcrossEveryPolicyAnswer(t *testing.T) {
 			`"task_mode":"work","candidate_policy":"advisory"`, 1),
 			map[string]stubEffect{"pytest -q": {}}},
 		{"confirm required", strings.Replace(captureOnlyContract, `"task_mode":"work"`,
-			`"task_mode":"work","candidate_policy":"confirm"`, 1),
+			`"task_mode":"work","candidate_policy":"automatic_v3"`, 1),
 			map[string]stubEffect{"pytest -q": {}}},
 		{"hard veto", captureOnlyContract, map[string]stubEffect{"pytest -q": {ExitCode: 1}}},
 		{"execution unavailable", captureOnlyContract,
@@ -344,7 +344,7 @@ func TestSuppressionDoesNotRewriteTheAnswer(t *testing.T) {
 	}{
 		{PolicyCandidateAuthorizedStrict, CaptureWouldAuthorizeStrict},
 		{PolicyCandidatePreferredAdvisory, CaptureWouldPreferAdvisory},
-		{PolicyHumanConfirmationRequired, CaptureWouldRequireHumanConfirmation},
+		{PolicyCandidateAutomaticV3, CaptureWouldDeliverAutomaticV3},
 		{PolicyCandidateRejectedHardVeto, CaptureRejectedHardVeto},
 		{PolicyInsufficientConfidence, CaptureInsufficientConfidence},
 		{PolicyBaselineRetained, CaptureBaselineRetained},

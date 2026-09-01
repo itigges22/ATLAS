@@ -48,6 +48,15 @@ type deliveryAuthorization struct {
 	// can tell what the delivery actually answered for.
 	MetCommands       []string
 	BaselinePreserved bool
+	// AutomaticEligible is whether the exact bytes the V3 selection path named
+	// cleared every hard safety requirement. Computed here, by the
+	// authorization owner, and read by the policy owner -- never the reverse.
+	AutomaticEligible bool
+	// AutomaticRefusal names the first thing that was wrong when it did not.
+	AutomaticRefusal string
+	// Basis is why a licence would exist, kept even when capture-only takes it
+	// away, so the acquisition can record which rule earned it.
+	Basis grantBasis
 	// CaptureOnly is set when an acquisition control suppressed the licence
 	// this decision had earned. WouldAuthorize keeps what the authorization
 	// concluded, because the suppression discards the grant and not the answer.
@@ -82,7 +91,7 @@ func authorizeCandidateDelivery(ctx *AgentContext, entry routeEntry, path, code 
 	id candidateEvidenceIdentity, envelope *V3EvidenceEnvelope,
 	evidence []proxyEvidence, selectedCandidateID string,
 	unmet map[string]AuthorizationReason, observed checkOutcome,
-	scope mutationScope) deliveryAuthorization {
+	scope mutationScope, automatic automaticIntent) deliveryAuthorization {
 	resolved := resolveAgentPath(ctx, path)
 	hash := contentSHA256(code)
 
@@ -132,10 +141,35 @@ func authorizeCandidateDelivery(ctx *AgentContext, entry routeEntry, path, code 
 		Typed: true, Decision: d, MetCommands: met,
 		BaselinePreserved: baselineObligationsSatisfied(in.Obligations, d),
 	}
+	// The automatic question, asked once, here, where the bytes and their
+	// identity are both fixed. It reads the vetoes the policy owner computed
+	// rather than recomputing them, because two answers about one candidate
+	// are two chances to disagree.
+	basis := grantBasisStrict
+	auth.AutomaticEligible, auth.AutomaticRefusal = automaticDeliveryAllowed(
+		automaticEligibilityInput{
+			Mode: automatic.Mode, Vetoes: automatic.Vetoes,
+			SelectedCandidateID: selectedCandidateID,
+			CandidateHash:       hash,
+			Identity:            asked,
+			Scope:               scope,
+		})
 	if !d.Authorized {
-		auth.Refusal = string(d.Reason)
-		return auth
+		if !auth.AutomaticEligible {
+			auth.Refusal = string(d.Reason)
+			return auth
+		}
+		// The typed decision could not authorize -- there was no floor to
+		// meet, or no adapter that could measure this class. Under
+		// automatic_v3 that is unavailable evidence rather than failed
+		// evidence, and the safety requirements below are unchanged.
+		basis = grantBasisAutomaticV3
 	}
+	// Which rule earned the licence, recorded before anything can take it
+	// away. A caller that read only WouldAuthorize could not tell a strict
+	// authorization from an automatic one, and would report the wrong decision
+	// for a candidate whose declared floor was never met.
+	auth.Basis = basis
 	// THE acquisition boundary. Every candidate grant in this build is minted
 	// on the next line, so suppressing here suppresses all of them -- and a
 	// structural guard pins that there is no second minting site to route
@@ -147,7 +181,7 @@ func authorizeCandidateDelivery(ctx *AgentContext, entry routeEntry, path, code 
 		recordCaptureOnlySuppression(ctx, entry, hash, d)
 		return auth
 	}
-	g, ok, why := mintAuthorizationGrant(ctx, in, d, selectedCandidateID)
+	g, ok, why := mintAuthorizationGrant(ctx, in, d, selectedCandidateID, basis)
 	if !ok {
 		auth.Refusal = why
 		return auth
@@ -220,7 +254,16 @@ type candidateDeliveryRequest struct {
 	Observed          checkOutcome
 	MetCommands       []string
 	BaselinePreserved bool
-	Write             func(path, code string, ctx *AgentContext) (*ToolResult, error)
+	// AutomaticEligible is whether the exact bytes the V3 selection path named
+	// cleared every hard safety requirement. Computed here, by the
+	// authorization owner, and read by the policy owner -- never the reverse.
+	AutomaticEligible bool
+	// AutomaticRefusal names the first thing that was wrong when it did not.
+	AutomaticRefusal string
+	// Basis is why a licence would exist, kept even when capture-only takes it
+	// away, so the acquisition can record which rule earned it.
+	Basis grantBasis
+	Write func(path, code string, ctx *AgentContext) (*ToolResult, error)
 }
 
 // deliverAuthorizedCandidate is the new-file route's spelling of the owner.
