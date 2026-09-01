@@ -14,6 +14,7 @@ service, or a container.
 
 from __future__ import annotations
 
+import contextlib
 import glob
 import os
 import sys
@@ -47,12 +48,13 @@ def alive(seconds: int) -> int:
     want = ("sleep\x00%d\x00" % seconds).encode()
     n = 0
     for d in glob.glob("/proc/[0-9]*"):
-        try:
+        # A pid that vanishes between the glob and the open is the ordinary
+        # race in scanning /proc, and skipping it is the whole handling. It is
+        # named rather than swallowed: anything else raises.
+        with contextlib.suppress(OSError):
             with open(d + "/cmdline", "rb") as fh:
                 if fh.read() == want:
                     n += 1
-        except OSError:
-            pass
     return n
 
 

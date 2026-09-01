@@ -15,6 +15,7 @@ Local fixtures only. No model, no deployed service.
 
 from __future__ import annotations
 
+import contextlib
 import glob
 import os
 import socket
@@ -45,24 +46,25 @@ def _free_port() -> int:
 def _reap(seconds: int) -> None:
     """Kill any stray marker process, so one test cannot leak into the next."""
     for d in glob.glob("/proc/[0-9]*"):
-        try:
+        # Same race, plus a non-numeric /proc entry: both mean "not a process
+        # this cleanup is about", and nothing else is suppressed.
+        with contextlib.suppress(OSError, ValueError):
             with open(d + "/cmdline", "rb") as fh:
                 if fh.read() == ("sleep\x00%d\x00" % seconds).encode():
                     os.kill(int(os.path.basename(d)), 9)
-        except (OSError, ValueError):
-            pass
 
 
 def alive(seconds: int) -> int:
     want = ("sleep\x00%d\x00" % seconds).encode()
     n = 0
     for d in glob.glob("/proc/[0-9]*"):
-        try:
+        # A pid that vanishes between the glob and the open is the ordinary
+        # race in scanning /proc, and skipping it is the whole handling. It is
+        # named rather than swallowed: anything else raises.
+        with contextlib.suppress(OSError):
             with open(d + "/cmdline", "rb") as fh:
                 if fh.read() == want:
                     n += 1
-        except OSError:
-            pass
     return n
 
 
