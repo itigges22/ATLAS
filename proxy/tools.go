@@ -985,7 +985,13 @@ func writeFileTool() *ToolDef {
 			// One owner for whether the producer is consulted, and for why
 			// it was not. Identical to the condition it replaces; what is new
 			// is that the skip says which threshold turned it away.
-			writeBypass := writeGenerationBypass(ctx, fileTier, iterating)
+			// The typed predicate, named at the site that reaches the
+			// producer. The owner below decides WHICH reason applies and in
+			// what order; this is the dependency being visible where the
+			// dispatch happens, so a reader looking at the call that reaches
+			// generation can see that disabling generation reaches it.
+			writeBypass := writeGenerationBypass(ctx, fileTier, iterating,
+				ctx.V3GenerationEnabled())
 			recordCandidateGenerationBypass(ctx, "write_file", writeBypass,
 				fileTier, strings.Count(input.Content, "\n")+1)
 			if writeBypass == bypassNone {
@@ -3189,7 +3195,7 @@ func structuralEditTool() *ToolDef {
 			// V3-improve on every corrective edit until the clock died.
 			structuralBypass := editGenerationBypass(ctx, fileTier,
 				editWarrantsV3(finalContent, cc, ccOK),
-				isActiveDebugIteration(ctx, input.Path))
+				isActiveDebugIteration(ctx, input.Path), ctx.V3GenerationEnabled())
 			recordCandidateGenerationBypass(ctx, "structural_edit", structuralBypass,
 				fileTier, strings.Count(finalContent, "\n")+1)
 			if structuralBypass == bypassNone {
@@ -5989,7 +5995,7 @@ func runEditPipeline(ctx *AgentContext, tool, path, relPath, original,
 	// fast-track, which keeps the session's clock on executions rather than
 	// candidates -- and now the skip says which threshold turned it away.
 	bypass := editGenerationBypass(ctx, fileTier, editWarrantsV3(edited, cc, ccOK),
-		isActiveDebugIteration(ctx, relPath))
+		isActiveDebugIteration(ctx, relPath), ctx.V3GenerationEnabled())
 	recordCandidateGenerationBypass(ctx, tool, bypass, fileTier,
 		strings.Count(edited, "\n")+1)
 	if bypass == bypassActiveDebugIteration {

@@ -159,13 +159,15 @@ func TestTheBypassOwnersAreTheOldConditions(t *testing.T) {
 						ctx.V3URL, ctx.V3Mode = url, mode
 						wantWrite := tier >= Tier2Medium && ctx.V3URL != "" &&
 							ctx.V3GenerationEnabled() && !iterating
-						if got := writeGenerationBypass(ctx, tier, iterating); (got == bypassNone) != wantWrite {
+						if got := writeGenerationBypass(ctx, tier, iterating,
+							ctx.V3GenerationEnabled()); (got == bypassNone) != wantWrite {
 							t.Errorf("write tier=%v url=%q mode=%v iter=%v: %q vs old %v",
 								tier, url, mode, iterating, got, wantWrite)
 						}
 						wantEdit := !(tier < Tier2Medium || !warrants || ctx.V3URL == "" ||
 							!ctx.V3GenerationEnabled()) && !iterating
-						if got := editGenerationBypass(ctx, tier, warrants, iterating); (got == bypassNone) != wantEdit {
+						if got := editGenerationBypass(ctx, tier, warrants, iterating,
+							ctx.V3GenerationEnabled()); (got == bypassNone) != wantEdit {
 							t.Errorf("edit tier=%v url=%q mode=%v iter=%v warrants=%v: %q vs old %v",
 								tier, url, mode, iterating, warrants, got, wantEdit)
 						}
@@ -175,10 +177,10 @@ func TestTheBypassOwnersAreTheOldConditions(t *testing.T) {
 		}
 	}
 	// A nil context has no producer, and says that rather than panicking.
-	if writeGenerationBypass(nil, Tier3Hard, false) != bypassProducerNotConfigured {
+	if writeGenerationBypass(nil, Tier3Hard, false, true) != bypassProducerNotConfigured {
 		t.Error("a nil context did not report a missing producer")
 	}
-	if editGenerationBypass(nil, Tier3Hard, true, false) != bypassProducerNotConfigured {
+	if editGenerationBypass(nil, Tier3Hard, true, false, true) != bypassProducerNotConfigured {
 		t.Error("a nil context did not report a missing producer")
 	}
 }
@@ -275,22 +277,36 @@ func TestOneActivationAuthorityPerCandidateRoute(t *testing.T) {
 			}
 		}
 	}
-	// The generation mode is read by the owners, and elsewhere only by the
-	// syntax helper, which decides nothing about candidates.
+	// The predicate is READ at the sites that reach the producer and PASSED to
+	// the owners. That is the arrangement a reliability detector checks for,
+	// and it is the honest one: a reader of the call that dispatches
+	// generation can see that disabling generation reaches it, instead of
+	// having to follow a call to find out. The owners keep the ordering and
+	// the reasons; they are just told the answer rather than looking it up.
 	owner := body["candidate_reachability.go"]
-	if strings.Count(owner, "V3GenerationEnabled()") != 2 {
-		t.Error("the owners are not the readers of the generation mode")
+	if strings.Contains(owner, "V3GenerationEnabled()") {
+		t.Error("the owners read the generation mode instead of being told it")
 	}
-	for f, allowed := range map[string]string{
-		"tools.go": "func pycheckViaV3(", "edit_route_delivery.go": "",
-	} {
+	if n := strings.Count(owner, "generationPermitted"); n < 4 {
+		t.Errorf("the owners take the predicate as a parameter %d times", n)
+	}
+	// Every site that reaches the producer names it, and only those sites plus
+	// the syntax helper, which decides nothing about candidates.
+	allowed := map[string]bool{
+		"func pycheckViaV3(":         true,
+		"func writeFileTool(":        true,
+		"func structuralEditTool(":   true,
+		"func runEditPipeline(":      true,
+		"func deliverEditCandidate(": true,
+	}
+	for _, f := range []string{"tools.go", "edit_route_delivery.go"} {
 		for _, chunk := range strings.Split(body[f], "\nfunc ")[1:] {
 			if !strings.Contains(chunk, "V3GenerationEnabled()") {
 				continue
 			}
 			name := "func " + chunk[:strings.Index(chunk, "(")+1]
-			if name != allowed {
-				t.Errorf("%s: %s decides generation for itself", f, name)
+			if !allowed[name] {
+				t.Errorf("%s: %s reads the generation mode and is not a dispatch site", f, name)
 			}
 		}
 	}

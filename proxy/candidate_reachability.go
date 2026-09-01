@@ -71,13 +71,19 @@ func knownCandidateBypassReason(r candidateBypassReason) bool {
 //
 // negated one clause at a time, in the order the `&&` chain evaluated them, so
 // the first reason a caller would have failed on is the reason it reports.
-func writeGenerationBypass(ctx *AgentContext, fileTier Tier, iterating bool) candidateBypassReason {
+// generationPermitted is passed in rather than read here, and the dispatch
+// site names it. The owner still owns the ORDER and the reasons; what the site
+// owns is the visible dependency, so a reader looking at the call that reaches
+// the producer can see that disabling generation reaches it -- without having
+// to follow a call to find out.
+func writeGenerationBypass(ctx *AgentContext, fileTier Tier, iterating bool,
+	generationPermitted bool) candidateBypassReason {
 	switch {
 	case fileTier < Tier2Medium:
 		return bypassTierBelowThreshold
 	case ctx == nil || ctx.V3URL == "":
 		return bypassProducerNotConfigured
-	case !ctx.V3GenerationEnabled():
+	case !generationPermitted:
 		return bypassGenerationDisabled
 	case iterating:
 		return bypassActiveDebugIteration
@@ -92,7 +98,7 @@ func writeGenerationBypass(ctx *AgentContext, fileTier Tier, iterating bool) can
 //	fileTier < Tier2Medium || !editWarrantsV3(...) || ctx.V3URL == "" || !ctx.V3GenerationEnabled()
 //	isActiveDebugIteration(ctx, relPath)
 func editGenerationBypass(ctx *AgentContext, fileTier Tier, warrants bool,
-	iterating bool) candidateBypassReason {
+	iterating bool, generationPermitted bool) candidateBypassReason {
 	switch {
 	case fileTier < Tier2Medium:
 		return bypassTierBelowThreshold
@@ -100,7 +106,7 @@ func editGenerationBypass(ctx *AgentContext, fileTier Tier, warrants bool,
 		return bypassEditBelowComplexityFloor
 	case ctx == nil || ctx.V3URL == "":
 		return bypassProducerNotConfigured
-	case !ctx.V3GenerationEnabled():
+	case !generationPermitted:
 		return bypassGenerationDisabled
 	case iterating:
 		return bypassActiveDebugIteration

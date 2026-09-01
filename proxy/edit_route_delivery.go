@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"path/filepath"
+	"strings"
 )
 
 // Trusted candidate delivery for the edit routes.
@@ -70,6 +71,24 @@ func deliverEditCandidate(ctx *AgentContext, tool, path, relPath,
 		"detail":      "file=" + filepath.Base(path),
 		"route_entry": entry.ID,
 	}))
+
+	// The generation site's own precondition, checked here and not only in the
+	// callers that decide eligibility.
+	//
+	// runEditPipeline and structural_edit both ask editGenerationBypass before
+	// they get this far, so in the shipped topology this is unreachable. It is
+	// here because "V3 is disabled" is a property of the SITE that reaches the
+	// producer, not of whoever happened to route to it: a fifth caller added
+	// later would otherwise generate candidates in a deployment that turned
+	// generation off, and every mutation gate below would still run while the
+	// one thing the operator switched off did not stay off.
+	if !ctx.V3GenerationEnabled() {
+		recordCandidateGenerationBypass(ctx, tool, bypassGenerationDisabled,
+			classifyFileTier(relPath, edited), strings.Count(edited, "\n")+1)
+		lifecycle.finish(ctx, routingSkippedInfeasible, "",
+			AuthorizationReason(bypassGenerationDisabled))
+		return keep
+	}
 
 	improved, meta, err := improveContentWithV3(path, edited, ctx)
 	if err != nil {
