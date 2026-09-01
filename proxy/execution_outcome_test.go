@@ -384,3 +384,104 @@ func TestTheExecutorWireCarriesTheOutcome(t *testing.T) {
 		t.Error("the wire name and the vocabulary have drifted apart")
 	}
 }
+
+// --- the declared envelope ---------------------------------------------------
+
+// The deployment that killed the model was one where every process was inside
+// its own limit and the sum was not.
+func TestAnEnvelopeThatDoesNotFitTheHostIsRefused(t *testing.T) {
+	const GiB = int64(1) << 30
+	fits := memoryEnvelope{
+		HostBytes: 15*GiB + GiB/3, ReserveBytes: 3 * GiB / 2,
+		Budgets: []memoryBudget{
+			{"inference", 9728 * (1 << 20)}, {"lens", 1792 * (1 << 20)},
+			{"v3-service", 512 * (1 << 20)}, {"proxy", 256 * (1 << 20)},
+			{"sandbox", 1536 * (1 << 20)},
+		},
+		PerCommandBytes: GiB, SandboxBytes: 1536 * (1 << 20), Concurrency: 1,
+	}
+	if problems := fits.validate(); len(problems) != 0 {
+		t.Fatalf("the shipped envelope does not validate: %v", problems)
+	}
+	if executionEnvelopeRefusal(fits) != "" {
+		t.Error("a fitting envelope refused execution")
+	}
+
+	// The deployment as it actually stood: an 11 GiB sandbox beside an
+	// unbounded 9 GiB model on a 15 GiB host.
+	asItWas := fits
+	asItWas.Budgets = []memoryBudget{
+		{"inference", 9728 * (1 << 20)}, {"sandbox", 11 * GiB},
+	}
+	asItWas.SandboxBytes = 11 * GiB
+	if problems := asItWas.validate(); len(problems) == 0 {
+		t.Fatal("the deployment that killed the model validated")
+	}
+	if !strings.Contains(executionEnvelopeRefusal(asItWas), "over by") {
+		t.Errorf("the refusal does not say by how much: %q", executionEnvelopeRefusal(asItWas))
+	}
+
+	// Concurrency has to fit too, or raising it is a silent over-commit.
+	crowded := fits
+	crowded.Concurrency = 2
+	if len(crowded.validate()) == 0 {
+		t.Error("two concurrent commands fit in a container that holds one")
+	}
+
+	// Nothing declared is not the same as everything fine: no refusal, and no
+	// claim either.
+	if executionEnvelopeRefusal(memoryEnvelope{}) != "" {
+		t.Error("an undeclared envelope refused execution")
+	}
+	var undeclared memoryEnvelope
+	if undeclared.declared() {
+		t.Error("an empty envelope reports itself as declared")
+	}
+}
+
+func TestTheEnvelopeReadsTheSizesComposeWrites(t *testing.T) {
+	for raw, want := range map[string]int64{
+		"1536m": 1536 << 20, "9728M": 9728 << 20, "11g": 11 << 30,
+		"2G": 2 << 30, "1073741824": 1073741824, "512k": 512 << 10,
+		"": 0, "lots": 0, "-5": 0,
+	} {
+		t.Setenv("ATLAS_PROBE_SIZE", raw)
+		if got := envBytes("ATLAS_PROBE_SIZE"); got != want {
+			t.Errorf("%q read as %d, want %d", raw, got, want)
+		}
+	}
+}
+
+// A budget that is missing, zero or negative is a declaration nobody can act
+// on, and it fails closed rather than being treated as unlimited.
+func TestAMalformedEnvelopeFailsClosed(t *testing.T) {
+	const GiB = int64(1) << 30
+	base := memoryEnvelope{
+		HostBytes: 16 * GiB, ReserveBytes: GiB,
+		Budgets:      []memoryBudget{{"inference", 8 * GiB}, {"sandbox", GiB}},
+		SandboxBytes: GiB, PerCommandBytes: GiB / 2, Concurrency: 1,
+	}
+	if len(base.validate()) != 0 {
+		t.Fatalf("the base envelope does not validate: %v", base.validate())
+	}
+	noReserve := base
+	noReserve.ReserveBytes = 0
+	if len(noReserve.validate()) == 0 {
+		t.Error("an envelope with no host reserve validated")
+	}
+	zeroBudget := base
+	zeroBudget.Budgets = []memoryBudget{{"inference", 0}}
+	if len(zeroBudget.validate()) == 0 {
+		t.Error("a component with no budget validated")
+	}
+	noContainer := base
+	noContainer.SandboxBytes = 0
+	if len(noContainer.validate()) == 0 {
+		t.Error("a per-command ceiling with no container to hold it validated")
+	}
+	zeroConcurrency := base
+	zeroConcurrency.Concurrency = 0
+	if len(zeroConcurrency.validate()) == 0 {
+		t.Error("zero concurrency validated")
+	}
+}

@@ -4467,6 +4467,23 @@ func runCommandTool() *ToolDef {
 			// The shell-op safety gate (validateShellCommand) still
 			// fired upstream regardless of target. cwd is translated
 			// to the host path so the command lands in the right dir.
+			// The declared envelope, checked before anything runs. A
+			// deployment whose configured maxima exceed the host is one where
+			// every process can be inside its own limit at the moment the
+			// kernel picks a victim, which is exactly how the inference server
+			// died. Refusing here rather than at startup keeps the diagnosis
+			// readable: reading a file was never the unsafe part.
+			if refusal := executionEnvelopeRefusal(envelopeFromEnv()); refusal != "" {
+				log.Printf("[run_command] %s", refusal)
+				return &ToolResult{
+					Success: false,
+					Error: "commands cannot be run in this deployment: its memory " +
+						"limits add up to more than the machine has, so a command " +
+						"that used too much could take down another service. Ask " +
+						"the operator to fix the configured limits.",
+				}, nil
+			}
+
 			var out RunCommandOutput
 			var err error
 			// Host execution requires fully-trusted; otherwise a

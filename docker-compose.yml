@@ -36,6 +36,14 @@ services:
       - ./inference/entrypoint-v3.1.sh:/entrypoint.sh:ro
     ports:
       - "127.0.0.1:${ATLAS_LLAMA_PORT:-8080}:8080"
+    # The model's own budget. It was the OOM victim precisely because it had
+    # none: unbounded and largest is what the kernel's victim selection looks
+    # for. A limit here does not make it use less, it makes the kernel reclaim
+    # its page cache under pressure instead of killing it -- and it makes the
+    # deployment's total a number that can be checked. Sized from a 12B Q4
+    # model's measured resident set with headroom; `atlas init` writes the
+    # host-appropriate value.
+    mem_limit: ${ATLAS_LLAMA_MEM:-9728m}
     ulimits:
       memlock: -1
       stack: 67108864
@@ -100,6 +108,8 @@ services:
       - "host.docker.internal:host-gateway"
     image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-lens:${ATLAS_IMAGE_TAG:-latest}
     restart: unless-stopped
+    # Part of the memory envelope; measured peak 1.56 GiB.
+    mem_limit: ${ATLAS_LENS_MEM:-1792m}
     build:
       context: ./geometric-lens
     environment:
@@ -160,6 +170,8 @@ services:
       - "host.docker.internal:host-gateway"
     image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-v3:${ATLAS_IMAGE_TAG:-latest}
     restart: unless-stopped
+    # Part of the memory envelope; measured peak 52 MiB: it orchestrates, the executor runs.
+    mem_limit: ${ATLAS_V3_MEM:-512m}
     build:
       context: .
       dockerfile: v3-service/Dockerfile
@@ -224,6 +236,14 @@ services:
       # proxy's 300s run_command cap so long builds/tests aren't cut off
       # by the executor's internal 60s default.
       - MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}
+      # The rest of the per-command contract, validated by the executor at
+      # startup. Each is a hard maximum a request may narrow and never raise.
+      # The memory ceiling sits BELOW the container's mem_limit because the
+      # executor process and the output it buffers share that container with
+      # the command: one command may not consume the whole allocation.
+      - ATLAS_EXEC_MEMORY_BYTES=${ATLAS_EXEC_MEMORY_BYTES:-1073741824}
+      - ATLAS_EXEC_MAX_PROCESSES=${ATLAS_EXEC_MAX_PROCESSES:-256}
+      - ATLAS_EXEC_OUTPUT_BYTES=${ATLAS_EXEC_OUTPUT_BYTES:-33554432}
       - ATLAS_LOG_FORMAT=${ATLAS_LOG_FORMAT:-}
       # Workspace-snapshot caps for overlay-file runs (executor_server.py
       # reads these; without the passthrough the documented .env knobs
@@ -308,8 +328,25 @@ services:
     # OOM or peg the host out of the box. `atlas init` detects host RAM/
     # cores and writes host-appropriate ATLAS_SANDBOX_MEM (~75% RAM) /
     # ATLAS_SANDBOX_CPUS (~75% cores) to .env, which override these floors.
+    #
+    # THE MEMORY ENVELOPE.
+    #
+    # These numbers are not independent. A staged verification command reached
+    # 5.9 GB in seconds on a 16 GB host where the inference server held 9 GB
+    # with no limit of its own; every process was inside its own bounds and the
+    # kernel still had to pick something to kill, so it took the model. What
+    # was missing was not one limit, it was a SUM that fits the machine.
+    #
+    # The default below assumes a 16 GiB host running a 12B Q4 model. On that
+    # machine the model's steady resident set is the dominant term and the
+    # sandbox gets what is left, which is not much: 1.5 GiB, holding one
+    # command at 1 GiB plus the executor and the output it buffers. `atlas
+    # init` sizes these from the real host; ATLAS_HOST_MEMORY_BYTES turns the
+    # arithmetic into a startup check rather than a comment, and the proxy
+    # refuses to run commands when the declared sum does not fit.
     pids_limit: ${ATLAS_SANDBOX_PIDS:-1024}
-    mem_limit: ${ATLAS_SANDBOX_MEM:-4g}
+    mem_limit: ${ATLAS_SANDBOX_MEM:-1536m}
+    memswap_limit: ${ATLAS_SANDBOX_MEM:-1536m}   # no swap: a swapping test is a hung one
     cpus: ${ATLAS_SANDBOX_CPUS:-2}
     # Don't override working_dir — the image uses WORKDIR=/app for
     # executor_server.py. The /shell endpoint defaults its cwd to
@@ -356,6 +393,8 @@ services:
       - "host.docker.internal:host-gateway"
     image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-proxy:${ATLAS_IMAGE_TAG:-latest}
     restart: unless-stopped
+    # Part of the memory envelope; measured peak 33 MiB.
+    mem_limit: ${ATLAS_PROXY_MEM:-256m}
     # Must exceed the proxy's own shutdown budget (ATLAS_SHUTDOWN_GRACE_SEC,
     # default 650s): session total 600s of request drain plus a 10s close-hook
     # margin is 610s, and the proxy refuses to start if that does not fit. The
@@ -372,6 +411,22 @@ services:
     # `atlas init` writes the invoking user's ids into .env.
     user: "${ATLAS_PROXY_UID:-1000}:${ATLAS_PROXY_GID:-1000}"
     environment:
+      # THE DECLARED MEMORY ENVELOPE. Absent ATLAS_HOST_MEMORY_BYTES nothing
+      # is declared and nothing is checked -- an envelope this build guessed
+      # at would be asserting something the operator never said. When it IS
+      # declared, the proxy adds every hard maximum below plus the host
+      # reserve and refuses to run commands if the sum does not fit, because a
+      # deployment that can over-commit is one where every process is inside
+      # its own limit at the moment the kernel picks a victim.
+      - ATLAS_HOST_MEMORY_BYTES=${ATLAS_HOST_MEMORY_BYTES:-}
+      - ATLAS_HOST_RESERVE_BYTES=${ATLAS_HOST_RESERVE_BYTES:-1610612736}
+      - ATLAS_LLAMA_MEM=${ATLAS_LLAMA_MEM:-9728m}
+      - ATLAS_LENS_MEM=${ATLAS_LENS_MEM:-1792m}
+      - ATLAS_V3_MEM=${ATLAS_V3_MEM:-512m}
+      - ATLAS_PROXY_MEM=${ATLAS_PROXY_MEM:-256m}
+      - ATLAS_SANDBOX_MEM=${ATLAS_SANDBOX_MEM:-1536m}
+      - ATLAS_EXEC_MEMORY_BYTES=${ATLAS_EXEC_MEMORY_BYTES:-1073741824}
+      - ATLAS_EXEC_CONCURRENCY=${ATLAS_EXEC_CONCURRENCY:-1}
       - ATLAS_GRAMMAR_MODE=${ATLAS_GRAMMAR_MODE:-strict}
       - ATLAS_PROXY_PORT=8090
       - ATLAS_INFERENCE_URL=http://llama-server:8080

@@ -131,6 +131,116 @@ All knobs in CONFIGURATION.md; the load-bearing ones: `ATLAS_CTX_SIZE`
 + `ATLAS_PARALLEL_SLOTS` (VRAM), `ATLAS_SANDBOX_MEM/CPUS/PIDS`
 (runaway-build protection), `ATLAS_V3_TIMEOUT` (interactive cap).
 
+## The memory envelope
+
+These numbers are not independent, and getting the sum wrong is not a
+performance problem. A staged verification command once reached 5.9 GB in
+seconds on a 16 GB host where the inference server held 9 GB with no limit of
+its own. Every process was inside its own bounds; the kernel still had to pick
+something to kill, and it picked the largest resident process, which was the
+model. What was missing was not one limit — it was a total that fits the
+machine.
+
+Two layers, and both are needed.
+
+**Per command.** The executor bounds every untrusted command: wall clock,
+memory, process count and output bytes, installed before the command starts and
+applied to everything it spawns, however it spawns it. A command stopped at a
+ceiling is reported as stopped, never as failed — see "Truthful results" below.
+
+| Variable | Default | What it bounds |
+| --- | --- | --- |
+| `MAX_EXECUTION_TIME` | 300 (compose) / 60 (executor) | wall clock per command |
+| `ATLAS_EXEC_MEMORY_BYTES` | 1 GiB | resident memory of the command and its descendants |
+| `ATLAS_EXEC_MAX_PROCESSES` | 256 | processes in the command's tree |
+| `ATLAS_EXEC_OUTPUT_BYTES` | 32 MiB | stdout + stderr the executor will buffer |
+
+Malformed, zero, negative or internally inconsistent values stop the executor
+at startup rather than being clamped into something plausible at the moment a
+command runs. An output cap at or above the memory ceiling is one of the
+inconsistent ones: the executor holds that buffer.
+
+**Per deployment.** Every container's hard maximum, plus a host reserve, has to
+fit the host. The shipped defaults assume a 16 GiB machine running a 12B Q4
+model:
+
+| Component | Variable | Default | Basis |
+| --- | --- | --- | --- |
+| inference | `ATLAS_LLAMA_MEM` | 9.5 GiB | measured steady resident set + headroom |
+| geometric lens | `ATLAS_LENS_MEM` | 1.75 GiB | measured peak 1.56 GiB |
+| sandbox | `ATLAS_SANDBOX_MEM` | 1.5 GiB | one 1 GiB command + the executor and its buffers |
+| v3-service | `ATLAS_V3_MEM` | 0.5 GiB | measured peak 52 MiB |
+| proxy | `ATLAS_PROXY_MEM` | 0.25 GiB | measured peak 33 MiB |
+| host reserve | `ATLAS_HOST_RESERVE_BYTES` | 1.5 GiB | kernel, container daemon, logging, shutdown |
+| **total** | | **15.0 GiB** | on a 15.36 GiB host: 0.36 GiB headroom |
+
+Set `ATLAS_HOST_MEMORY_BYTES` to your machine's RAM to turn that arithmetic
+into a check. When it is declared and the sum does not fit, the proxy **refuses
+to run commands** and says by how much it is over; reading files and answering
+questions still work, because the diagnosis has to be readable. Left unset,
+nothing is declared and nothing is checked — the per-command contract still
+applies, and it carries the safety on its own.
+
+Raising `ATLAS_EXEC_CONCURRENCY` is checked the same way: two commands at the
+per-command ceiling must still fit inside the sandbox's own budget.
+
+`ATLAS_SANDBOX_MEM` is what `atlas init` sizes from host RAM. A value chosen as
+a fraction of RAM without subtracting the model is exactly the shape that
+caused the kill — on a 16 GiB host with a 12B model resident, the sandbox's
+share is about 1.5 GiB, not 11.
+
+Swap is disabled for the sandbox (`memswap_limit` tracks `mem_limit`): a
+swapping test is a hung one, and swap hides an over-commit rather than
+absorbing it.
+
+## Building for verification without claiming the deployable tag
+
+`docker compose build atlas-proxy` writes `ghcr.io/itigges22/atlas-proxy:dev` —
+the same tag the running stack was started from. Nothing restarts, so the
+running container keeps its image; but the deployable **name** now points at
+the new build, and the previous image becomes untagged. If it is later pruned,
+the tag cannot be put back: the image the container is running no longer exists
+in the local store, and its identity is recoverable only from
+`docker inspect <container>` and the compose labels.
+
+For a build you only want to test, use a throwaway tag and leave the deployable
+name alone:
+
+```bash
+docker build -t atlas-proxy:my-slice-check ./proxy      # never :dev
+ATLAS_IMAGE_TAG=my-slice-check docker compose config    # check it resolves
+```
+
+Before any build, record what is actually running, so the tag can be restored:
+
+```bash
+docker inspect -f '{{.Image}}' atlas-atlas-proxy-1
+docker inspect -f '{{index .Config.Labels "com.docker.compose.image"}}' atlas-atlas-proxy-1
+```
+
+## Truthful results
+
+A command stopped at a ceiling exits non-zero exactly like a failing test — a
+Python process that hits an address-space limit raises `MemoryError` and exits
+1. Read as an exit code alone, a verification that never completed becomes a
+behavioural failure of the code under test.
+
+So the executor reports **how** the command ended, from a closed set:
+`completed`, `timed_out`, `memory_exhausted`, `process_limit_exceeded`,
+`output_limit_exceeded`, `cancelled`, `spawn_failed`, and the fail-closed
+`internal_unclassified`. Only `completed` means the command reached its own
+end, and only then does its exit code mean anything.
+
+A stopped command cannot mint a candidate authorization, consume a grant,
+settle mutation debt or claim completion. In candidate staging it becomes
+`resource_exhausted`, which reports as `evidence_resource_exhausted` — the
+obligation is unmet for want of an observation, not because an observation went
+against the candidate.
+
+The model is told what happened in words it can act on ("it used too much
+memory to finish; it did NOT fail"), with no host limits, pids, cgroup paths or
+deployment detail in the message.
+
 ---
 
 # Upgrading
