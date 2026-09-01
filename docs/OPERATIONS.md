@@ -289,8 +289,7 @@ bound it completes within is the running command's own deadline
 ## Truthful results
 
 A command stopped at a ceiling exits non-zero exactly like a failing test — a
-Python process that hits an address-space limit raises `MemoryError` and exits
-1. Read as an exit code alone, a verification that never completed becomes a
+Python process that runs out of memory raises `MemoryError` and exits 1. Read as an exit code alone, a verification that never completed becomes a
 behavioural failure of the code under test.
 
 So the executor reports **how** the command ended, from a closed set:

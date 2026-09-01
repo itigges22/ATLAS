@@ -24,8 +24,11 @@ import (
 //	           strength the client declared. Automatic delivery.
 //	advisory   no oracle exists. Bounded evidence may prefer a candidate, and
 //	           the preference is a measured quality policy, never a proof.
-//	confirm    the candidate, its diff and its evidence go to the user, and a
-//	           one-time approval bound to the exact bytes decides.
+//	automatic_v3
+//	           the exact candidate the V3 selection path named, delivered when
+//	           every hard safety requirement holds. No floor is invented for a
+//	           request that declared none, and none the client declared is
+//	           lowered.
 //
 // The mode is not a model output and not a service output. It comes from the
 // validated client request or from trusted operator configuration, and a value
@@ -199,11 +202,12 @@ type candidatePolicyOutcome struct {
 
 // mayDeliverUnderPolicy is the single predicate the delivery path asks.
 //
-// Advisory preference and confirmation are computed and recorded; neither
-// delivers here. Advisory needs a calibrated threshold and a measured
-// regression rate before it may change what lands, and confirmation needs the
-// approval round trip. Recording the answer without acting on it is what makes
-// the calibration experiment possible without shipping an unmeasured policy.
+// Advisory preference is computed and recorded and does not deliver: it needs
+// a calibrated threshold and a measured regression rate before it may change
+// what lands. Recording the answer without acting on it is what makes the
+// calibration experiment possible without shipping an unmeasured policy.
+// Strict and automatic_v3 are the two that deliver, and each sets Delivers in
+// exactly one place.
 func (o candidatePolicyOutcome) mayDeliverUnderPolicy() bool { return o.Delivers }
 
 // recordCandidatePolicyDecision writes one policy answer to the private shadow

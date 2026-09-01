@@ -152,8 +152,9 @@ func hostAddressSpaceKiB() int64 {
 			bytes = n
 		}
 	}
-	// The same headroom the sandbox leaves between the resident ceiling and
-	// the address-space rlimit, so a command that is fine in one is fine in
-	// the other.
+	// Address space, not resident memory, so it is read as a multiple of the
+	// operator's memory value rather than as that value: a mapping is
+	// reserved before it is touched, and a ceiling set AT the resident number
+	// refuses reservations a command never grows into.
 	return int64(float64(bytes) * 1.5 / 1024)
 }

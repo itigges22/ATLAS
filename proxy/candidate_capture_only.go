@@ -18,10 +18,11 @@ import (
 // distinction does not repair the violation.
 //
 // So this suppresses the delivery and keeps the reason. It is deliberately NOT
-// a fourth product mode: strict, advisory and confirm are what a client may ask
-// for, they are unchanged, and no experiment gets to redefine them. This is an
-// operator-owned switch on a private experimental process, default off, and
-// nothing a client, a model, a service or a task contract sends can reach it.
+// a fourth product mode: strict, advisory and automatic_v3 are what a client
+// may ask for, they are unchanged, and no experiment gets to redefine them.
+// This is an operator-owned switch on a private experimental process, default
+// off, and nothing a client, a model, a service or a task contract sends can
+// reach it.
 
 // CandidateCaptureOnlyEnv is the one place the control is read from. An
 // environment variable on the process an operator started: not a request field,

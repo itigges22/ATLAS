@@ -1879,7 +1879,7 @@ type TaskContract struct {
 	VerificationRequirementsVersion int `json:"verification_requirements_version,omitempty"`
 
 	// CandidatePolicy is which evidence rule this request wants applied to a
-	// V3 candidate: strict, advisory or confirm. Empty is the deployment's
+	// V3 candidate: strict, advisory or automatic_v3. Empty is the deployment's
 	// answer, and the deployment's answer is strict unless an operator changed
 	// it. A client states it; the model and the V3 service have no path to it.
 	CandidatePolicy string `json:"candidate_policy,omitempty"`

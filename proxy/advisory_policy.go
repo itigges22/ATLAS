@@ -268,11 +268,11 @@ func advisorySignals(in advisoryInput) map[string]interface{} {
 //
 // Order is the whole design. Vetoes first, because a disqualifying fact is not
 // something a strong signal elsewhere can outweigh. Then the strict answer,
-// because trusted evidence meeting a declared floor is the only thing in this
-// build that authorizes a delivery. Then the two modes that do not deliver
-// here: confirmation, which is a decision the user has not made yet, and
-// advisory preference, which is a quality opinion this build records and does
-// not act on.
+// because trusted evidence meeting a declared floor is the strongest thing a
+// candidate can show. Then automatic_v3, which delivers the candidate the
+// selection path named once nothing disqualifying was observed and the
+// authorization owner approved its identity. Then advisory preference, which
+// is a quality opinion this build records and does not act on.
 //
 // insufficient_confidence is a real answer, not a fallback. A candidate that
 // nothing disqualified and nothing supported is exactly that, and saying so is

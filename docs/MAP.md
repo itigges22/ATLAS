@@ -52,7 +52,7 @@ vulkan / cpu / macos overlays), `atlas.conf.example` (K3s), `pyproject.toml`
 | [PROTOCOL.md](PROTOCOL.md) | Typed event envelope contract shared by proxy, v3-service, and clients |
 | [EVIDENCE_WIRE.md](EVIDENCE_WIRE.md) | Versioned evidence envelope between v3-service and the proxy, and the delivery rule |
 | [CANDIDATE_AUTHORIZATION.md](CANDIDATE_AUTHORIZATION.md) | Typed obligations, evidence provenance, candidate staging, and the observe-only authorization and feasibility decisions |
-| [CANDIDATE_POLICY.md](CANDIDATE_POLICY.md) | The strict / advisory / confirm modes, the proposal-versus-authorization split, hard vetoes, and what the terminal tells the user about delivered bytes |
+| [CANDIDATE_POLICY.md](CANDIDATE_POLICY.md) | The strict / advisory / automatic_v3 modes, the proposal-versus-authorization split, hard vetoes, and what the terminal tells the user about delivered bytes |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Common issues and solutions |
 | [SOURCES.md](SOURCES.md) | Research papers bucketed by status relative to the current release |
 | [STORY.md](STORY.md) | Project background |

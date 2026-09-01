@@ -211,65 +211,6 @@ the bytes that were withdrawn. Reporting both as a retained baseline, over the
 hash of whatever ended up on disk, is how the model's own content came to be
 recorded under `candidate_hash`.
 
-## automatic_v3: the competition is internal
-
-V3 generates K candidates, ranks them and selects one. Until now that winner
-reached the artifact only when trusted evidence met a floor the client had
-declared — and a request that declared no verification has no floor, so the
-honest strict answer was to keep the model's own bytes. The result was a
-pipeline whose whole output was discarded for the most common kind of request.
-
-`automatic_v3` separates two questions that were being answered together.
-
-- **The evidence question** keeps its honest answer. Nothing under this mode
-  claims a candidate is correct. No score, consensus value, Lens number or
-  service closure verdict is consulted, and none of them may be shown as a
-  probability of correctness.
-- **The safety question** is unchanged and still binding. Path containment,
-  declared targets, the structured mutation scope, protected assets, identity
-  freshness, language and artifact class, syntax and structural checks,
-  declared verification that failed or could not run, cancellation, resource
-  exhaustion, destructive permission, the one-time exact-byte grant,
-  revalidation, the ledger, settlement — every one of them still has to hold.
-
-What it adds is one requirement of its own: **the bytes must be the exact
-candidate the selection path named.** The service says which content hash it
-selected; the proxy hashes the bytes it is holding; the two must be the same
-string. Nothing is reconstructed from a score or an array position, and a
-missing, blank or unrecognised selection identity fails closed.
-
-**Absence of an oracle is not failure.** For a request that declared no
-verification requirement, none of these rejects an otherwise safe candidate:
-no behavioural oracle, no declared command, an adapter that cannot measure the
-artifact class, no closure certification, no independent critic. They are
-recorded as *unavailable* evidence, not failed evidence. What is still a hard
-veto: an applicable syntax or structural failure, and — when the client
-explicitly declared a requirement — a check that failed, timed out, was
-cancelled, was resource-exhausted or could not be observed. A declared
-requirement is never silently downgraded.
-
-**Human involvement is unchanged.** The existing permission prompts still gate
-dangerous and permission-sensitive tools, deletion keeps its exact-object
-approval flow, and the user reviews the resulting workspace diff and may revise
-or undo it. There is no candidate approval prompt, no allow/deny request, no
-session approval and no candidate confirmation UI — the competition between
-candidates is internal, and a structural test pins that no such surface exists.
-
-**Ownership.** The mode is set by trusted client or operator configuration
-only. The model cannot select it, V3 cannot select it, it is never inferred
-from task prose, and an unrecognised value falls back to strict. The shipping
-default remains **strict** until live validation passes.
-
-### A withdrawn mode
-
-An earlier draft carried a fourth mode, `confirm`, which would have presented a
-candidate for one-time exact-byte human approval. It never delivered, no wire,
-TUI or production path consumed it, and no sealed evidence contains it. It is
-removed rather than kept as scaffolding: candidate competition is internal, so
-a mode whose whole purpose was to ask a user to adjudicate between candidates
-was a product answer this design does not give. Requests naming `confirm` are
-now refused as unsupported.
-
 ## The decisions
 
 Closed vocabulary. Every value is a statement about what happened, never about
@@ -352,8 +293,8 @@ into the decision:
 - The intended eventual interactive TUI default is **advisory, and only after
   calibration and independent validation**.
 - Until then **strict remains the default**.
-- **Confirm is an explicit user-selected fallback**, not a prompt on every
-  normal edit.
+- **`automatic_v3` is an explicit trusted-configuration choice**, not a prompt
+  on every normal edit and not something a request's prose can select.
 - **Destructive operations keep their existing explicit permission flow.**
   Advisory confidence is not a permission.
 - **Human review of the final diff remains part of the product.** ATLAS does
