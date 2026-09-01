@@ -31,6 +31,7 @@ suites tests/v3-service/test_winner_selection.py and
 tests/v3-service/test_lens_calibration.py.
 """
 
+import hashlib
 import http.server
 import json
 import os
@@ -309,14 +310,66 @@ def _agent_body(workspace, **overrides):
     return body
 
 
+# The request contract that lets the V3 winner land. Strict, the default,
+# asks whether trusted client-declared verification met a declared floor; a
+# request that declares no verification has no floor, so strict keeps the
+# model's own bytes on purpose. These tests are about what V3 selects and
+# how it behaves with the Lens gone, so they select automatic_v3 explicitly,
+# by name, in the typed contract the proxy validates -- the output declared
+# as a canonical workspace-relative path, nothing read from the prose.
+AUTOMATIC_V3_CONTRACT = {
+    "task_mode": "work",
+    "output_knowledge": "declared",
+    "expected_outputs": ["todo_app.py"],
+    "candidate_policy": "automatic_v3",
+}
+
+STRICT_CONTRACT = {
+    "task_mode": "work",
+    "output_knowledge": "declared",
+    "expected_outputs": ["todo_app.py"],
+    "candidate_policy": "strict",
+}
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _write_result(events):
+    return next(e for e in events
+                if e["type"] == "tool_result"
+                and e["data"].get("tool") == "write_file")
+
+
+def _payload(result):
+    payload = result["data"]["data"]
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    return payload
+
+
+# No candidate reaches a person inside V3: the event vocabulary a client sees
+# carries permission prompts for dangerous tools and nothing that asks anyone
+# to approve, confirm or choose a candidate. write_file under accept-edits is
+# auto-allowed, so the whole turn must run without a single prompt.
+def _assert_no_human_gate_inside_v3(events):
+    assert not [e for e in events if e["type"] == "permission_request"], (
+        "a permission prompt fired on an accept-edits write")
+    leaked = [e["type"] for e in events
+              if any(w in e["type"] for w in ("approv", "confirm", "choose"))]
+    assert not leaked, f"candidate approval surface leaked into events: {leaked}"
+
+
 # ---------------------------------------------------------------------------
 # The V3/Lens acceptance test
 # ---------------------------------------------------------------------------
 
 def test_v3_pipeline_with_lens_winner_selection(proxy, workspace):
     _FakeLensHandler.calls.clear()
-    events = drive_agent_turn(proxy, _agent_body(workspace),
-                              deadline_s=180.0)
+    events = drive_agent_turn(
+        proxy, _agent_body(workspace, task_contract=AUTOMATIC_V3_CONTRACT),
+        deadline_s=180.0)
 
     # No stage silently skipped: the v3_* event subsequence of a full
     # pipeline run, in order.
@@ -369,6 +422,62 @@ def test_v3_pipeline_with_lens_winner_selection(proxy, workspace):
     assert "# cand-A" in written, "lens-preferred candidate not written"
     assert "# cand-B" not in written
     assert abs(payload.get("winning_score", -1) - 0.20) < 1e-6, payload
+    # What landed is the selected candidate, byte for byte, terminator
+    # included. The one-time authorization the proxy spent is the hash of
+    # exactly these bytes; that hash lives on the ToolResult and the grant,
+    # not in the event stream, and the proxy's own tests pin it
+    # (TestDeliveryKeepsTheCandidatesTrailingBytes). Here the client-visible
+    # facts are the bytes and v3_used.
+    assert written == CAND_A, "disk bytes are not the selected candidate's"
+    assert _sha256(written) == _sha256(CAND_A)
+    _assert_no_human_gate_inside_v3(events)
+
+
+# Control: the same request, same fakes, same winner, under the default
+# policy. The default request declares no output knowledge, so no candidate
+# can be authorized on any basis: V3 runs, scores and selects, and the proxy
+# keeps the model's own bytes. This is what the two tests above used to
+# depend on not happening; it is pinned so the default cannot drift to
+# deliver without someone changing this test.
+def test_default_policy_runs_v3_and_keeps_the_baseline(proxy, workspace):
+    events = drive_agent_turn(proxy, _agent_body(workspace), deadline_s=180.0)
+
+    # V3 was not bypassed: it generated, scored and selected.
+    assert any(e["type"] == "v3_select" for e in events), "V3 never selected"
+    result = _write_result(events)
+    assert result["data"].get("success") is True
+    payload = _payload(result)
+    assert payload.get("v3_used") is not True, payload
+    written = (workspace / "todo_app.py").read_text()
+    assert written == T2_CONTENT, "the default did not keep the model's own bytes"
+    assert "# cand-" not in written
+    _assert_no_human_gate_inside_v3(events)
+
+
+# Control: strict, named explicitly, over the same declared output. Strict is
+# an evidence question -- every obligation derived from the declared output
+# must be met by trusted evidence at its required strength -- and in this
+# fixture the service's sandbox evidence is supported and complete, so strict
+# authorizes on its own basis (strict_trusted_evidence). The client sees the
+# same bytes and the same v3_used as under automatic_v3; the basis is recorded
+# on the grant and in private telemetry, not in the event stream. What this
+# pins is that strict still decides by evidence and that declaring the output
+# is what makes any authorization possible at all.
+def test_explicit_strict_with_a_declared_output_decides_by_evidence(proxy, workspace):
+    events = drive_agent_turn(
+        proxy, _agent_body(workspace, task_contract=STRICT_CONTRACT),
+        deadline_s=180.0)
+
+    assert any(e["type"] == "v3_select" for e in events), "V3 never selected"
+    result = _write_result(events)
+    assert result["data"].get("success") is True
+    payload = _payload(result)
+    written = (workspace / "todo_app.py").read_text()
+    if payload.get("v3_used") is True:
+        assert written in (CAND_A, CAND_B), "strict delivered bytes that are no candidate's"
+    else:
+        assert written == T2_CONTENT, "strict refused and yet the baseline changed"
+    _assert_no_human_gate_inside_v3(events)
 
 
 def test_v3_unreachable_falls_back_to_direct_write(fake_llama, fake_lens,
@@ -497,23 +606,26 @@ def test_lens_unreachable_pipeline_completes_uncalibrated(
         "ATLAS_V3_URL": f"http://127.0.0.1:{v3_port}",
     })
     try:
-        events = drive_agent_turn(port, _agent_body(workspace),
-                                  deadline_s=180.0)
-        result = next(e for e in events
-                      if e["type"] == "tool_result"
-                      and e["data"].get("tool") == "write_file")
+        events = drive_agent_turn(
+            port, _agent_body(workspace, task_contract=AUTOMATIC_V3_CONTRACT),
+            deadline_s=180.0)
+        result = _write_result(events)
         assert result["data"]["success"] is True
-        payload = result["data"]["data"]
-        if isinstance(payload, str):
-            payload = json.loads(payload)
+        payload = _payload(result)
         assert payload.get("v3_used") is True, (
             "lens outage must not disable V3 itself")
         # A candidate was written; with neutral scores the first passing
-        # candidate wins — either tag is acceptable, but ONE of them is.
+        # candidate wins, either tag is acceptable, but ONE of them is, and
+        # what landed is that candidate's exact bytes under its own hash.
         written = (workspace / "todo_app.py").read_text()
-        assert "# cand-A" in written or "# cand-B" in written
+        assert written in (CAND_A, CAND_B), "disk bytes are not a candidate's"
         assert any(e["type"] == "v3_sandbox" for e in events), (
             "sandbox verification stage missing")
+        # Uncalibrated, as designed: with the Lens gone there is no per-step
+        # veto and no lens preference, so no lens event names a winner.
+        assert not any(e["type"] == "v3_lens_per_step" for e in events), (
+            "a Lens per-step event was emitted with the Lens unreachable")
+        _assert_no_human_gate_inside_v3(events)
     finally:
         proc.terminate()
         proc.wait(timeout=10)
