@@ -9,6 +9,7 @@ stream, so a detector cannot pass by flagging everything.
 No live stack: streams are literals and the workspace is a tmp_path.
 """
 import importlib.util
+import json
 import re
 import sys
 from pathlib import Path

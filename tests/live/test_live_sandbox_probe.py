@@ -25,7 +25,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
 import adapters  # noqa: E402
-import adapters  # noqa: E402
 import contract as _contract  # noqa: E402
 import pipeline as P  # noqa: E402
 

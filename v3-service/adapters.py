@@ -1453,11 +1453,6 @@ def extract_inline_script(html: str) -> str:
 
 
 
-def extract_inline_script(html: str) -> str:
-    return "\n".join(m.group(1) for m in _INLINE_SCRIPT_RE.finditer(html or ""))
-
-
-
 # --------------------------------------------------------------- JS probe ---
 
 # Instrumentation only. It never inspects the artifact's identifiers, so it

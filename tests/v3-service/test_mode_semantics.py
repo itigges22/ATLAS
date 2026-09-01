@@ -24,7 +24,6 @@ import symbols  # noqa: E402
 import contract as C  # noqa: E402
 import adapters as A  # noqa: E402
 import pipeline as P  # noqa: E402
-import pipeline as P  # noqa: E402
 import scoring  # noqa: E402
 
 COMPLETE = {"supported": True, "runtime_clean": True, "temporal_progress": True,

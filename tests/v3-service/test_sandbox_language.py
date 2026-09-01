@@ -18,7 +18,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 import adapters  # noqa: E402
 import adapters as A  # noqa: E402
 import pipeline as P  # noqa: E402
-import pipeline as P  # noqa: E402
 
 
 class _Resp:
