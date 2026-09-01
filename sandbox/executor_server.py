@@ -117,7 +117,18 @@ async def _correlation_id(request, call_next):
     return resp
 
 
-MAX_EXECUTION_TIME = int(os.getenv("MAX_EXECUTION_TIME", "60"))
+from resource_contract import (  # noqa: E402
+    OUTCOME_CANCELLED, OUTCOME_COMPLETED, OUTCOME_MEMORY_EXHAUSTED,
+    OUTCOME_OUTPUT_LIMIT, OUTCOME_PROCESS_LIMIT, OUTCOME_SPAWN_FAILED,
+    OUTCOME_TIMED_OUT, OUTCOME_UNCLASSIFIED, ResourceContract,
+    contract_from_env, outcome_is_complete, run_bounded,
+    EXEC_TOKEN_VAR, _apply_child_limits, _kill_token)
+
+# THE resource contract for every untrusted command, validated here at import.
+# A malformed operator budget stops the executor from starting rather than
+# being clamped into something plausible at the moment a command runs.
+EXEC_CONTRACT = contract_from_env()
+MAX_EXECUTION_TIME = EXEC_CONTRACT.wall_seconds
 WORKSPACE_BASE = Path(os.getenv("WORKSPACE_BASE", "/tmp/sandbox"))
 
 SUPPORTED_LANGUAGES = {
@@ -231,9 +242,13 @@ def list_languages():
         "bash": ["bash", "--version"],
     }
     for lang, cmd in checks.items():
+        # Through the same owner as everything else. The argv here is fixed and
+        # not workspace-controlled, so this is not the case the ceilings exist
+        # for -- but a second spawning path is a second place a future edit can
+        # put an untrusted argument, and one owner is the point.
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-            versions[lang] = result.stdout.strip().split("\n")[0]
+            result = _run_cmd(cmd, timeout=5)
+            versions[lang] = result["stdout"].strip().split("\n")[0]
         except Exception:
             versions[lang] = "not installed"
     return {"languages": versions}
@@ -305,6 +320,14 @@ class ShellResponse(BaseModel):
     elapsed_ms: int
     # Present only when the request asked for it.
     timed_out: bool = False
+    # How the command ended, from the closed vocabulary in resource_contract.
+    # `completed` is the only member that means the command reached its own
+    # end; every other one means it was stopped, and a stopped command
+    # demonstrates nothing about the code it was pointed at. Defaulted so an
+    # older executor answering a newer proxy is read as unclassified rather
+    # than as success.
+    outcome: str = "internal_unclassified"
+    peak_memory_bytes: int = 0
     observation: Optional[ShellObservation] = None
 
 
@@ -779,6 +802,12 @@ def background_start(request: BackgroundStartRequest):
     if request.env:
         env.update(request.env)
     try:
+        # The same ceilings the foreground path installs. A background job is
+        # untrusted code with a longer life, not a different trust class, and
+        # before this it was the one execution site with no memory bound at
+        # all. setsid comes from the shared owner's preexec, which is also
+        # what /jobs/stop's killpg depends on.
+        env[EXEC_TOKEN_VAR] = uuid.uuid4().hex
         proc = subprocess.Popen(
             ["bash", "-c", request.command],
             cwd=str(cwd),
@@ -787,7 +816,7 @@ def background_start(request: BackgroundStartRequest):
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
-            start_new_session=True,  # so /jobs/stop can kill the whole group
+            preexec_fn=_apply_child_limits(EXEC_CONTRACT),
         )
     except (OSError, ValueError) as e:
         raise HTTPException(status_code=500, detail=f"spawn failed: {e}")
@@ -940,6 +969,12 @@ def run_shell(request: ShellRequest):
             exit_code=result["returncode"],
             elapsed_ms=elapsed_ms,
             timed_out=bool(result.get("timed_out")),
+            # HOW it ended, not merely whether it exited zero. A command
+            # stopped at a resource ceiling exits non-zero exactly like a
+            # failing test, and the caller has to be able to tell them apart
+            # without reading stderr for a phrase.
+            outcome=str(result.get("outcome", OUTCOME_UNCLASSIFIED)),
+            peak_memory_bytes=int(result.get("peak_memory_bytes", 0)),
             observation=observation,
         )
     finally:
@@ -1331,74 +1366,27 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
 
 def _run_cmd(cmd: List[str], timeout: int, cwd: Path = None, env: dict = None,
              stdin: Optional[str] = None) -> Dict:
-    """Run a command with timeout and return structured result.
+    """Run one untrusted command through the one resource owner.
 
-    start_new_session + killpg mirrors the /jobs path: on timeout the whole
-    process group dies, so children the command spawned can't outlive it and
-    leak against the container's pids_limit. `stdin` (when not None) is piped
-    to the process as its standard input.
+    Every limit -- time, memory, process count, output bytes -- is installed
+    before the command starts and applies to everything it spawns, however it
+    spawns it. The answer carries HOW the command ended, because a command
+    stopped at a ceiling exits non-zero exactly like a failing test and nothing
+    downstream may confuse the two.
     """
-    run_env = os.environ.copy()
-    if env:
-        run_env.update(env)
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE if stdin is not None else None,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            cwd=str(cwd) if cwd else None,
-            env=run_env,
-            start_new_session=True,
-        )
-    except Exception as e:
-        return {
-            "success": False,
-            "stdout": "",
-            "stderr": str(e),
-            "returncode": -1,
-        }
-    try:
-        stdout, stderr = proc.communicate(input=stdin, timeout=timeout)
-        return {
-            "success": proc.returncode == 0,
-            "stdout": stdout[-4000:],
-            "stderr": stderr[-2000:],
-            "returncode": proc.returncode,
-        }
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            # best-effort: swallow on failure (caller continues)
-            pass
-        try:
-            proc.communicate(timeout=5)  # reap + close pipes
-        except Exception:
-            proc.kill()
-        return {
-            "success": False,
-            "stdout": "",
-            "stderr": f"Execution timed out after {timeout}s",
-            "returncode": -1,
-            # Structural, not inferred from the message: a caller that had to
-            # parse "timed out" out of stderr would be parsing prose to reach
-            # a decision.
-            "timed_out": True,
-        }
-    except Exception as e:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            # best-effort: swallow on failure (caller continues)
-            pass
-        return {
-            "success": False,
-            "stdout": "",
-            "stderr": str(e),
-            "returncode": -1,
-        }
+    result = run_bounded(cmd, EXEC_CONTRACT.for_request(timeout),
+                         cwd=cwd, env=env, stdin=stdin)
+    return {
+        "success": result.success,
+        "stdout": result.stdout[-4000:],
+        "stderr": result.stderr[-2000:],
+        "returncode": result.returncode,
+        "timed_out": result.outcome == OUTCOME_TIMED_OUT,
+        "outcome": result.outcome,
+        "peak_memory_bytes": result.peak_memory_bytes,
+        "peak_processes": result.peak_processes,
+        "survivors": result.survivors,
+    }
 
 
 def _classify_error(stderr: str) -> Optional[str]:
@@ -1461,11 +1449,12 @@ def execute_python(code, test_code, workspace, timeout, requirements, stdin=None
     # Lint
     lint_score = None
     try:
-        lr = subprocess.run(
+        # Through the owner: pylint parses model-authored code, which makes
+        # this an untrusted execution however fixed its argv looks.
+        lr = _run_cmd(
             ["python", "-m", "pylint", "--score=y", "--exit-zero", str(main_file)],
-            capture_output=True, text=True, timeout=15
-        )
-        m = re.search(r"rated at ([\d.]+)/10", lr.stdout)
+            timeout=15)
+        m = re.search(r"rated at ([\d.]+)/10", lr["stdout"])
         if m:
             lint_score = float(m.group(1))
     except Exception:
