@@ -82,7 +82,12 @@ def strip_reasoning_leak(text: str) -> str:
     Covers all three shapes: a closed `<think>...</think>` pair, an orphan
     closing tag (`...</think>answer` — keep the answer), and an orphan opening
     tag (`answer<think>truncated...` — keep the answer, drop the unclosed
-    reasoning to end-of-text)."""
+    reasoning to end-of-text).
+
+    Leading whitespace left behind by a removed block is framing and goes.
+    Trailing bytes stay: when the content is an artifact, its final newline is
+    part of the artifact, and this helper runs on every completion before any
+    extractor sees it."""
     if not text:
         return text
     out = _THINK_BLOCK.sub("", text)
@@ -94,7 +99,7 @@ def strip_reasoning_leak(text: str) -> str:
     # content, if any, precedes the open; everything after is reasoning.
     if "<think>" in out:
         out = out.split("<think>", 1)[0]
-    return out.strip()
+    return out.lstrip()
 
 
 def extract_code(response: str) -> str:
@@ -107,28 +112,38 @@ def extract_code(response: str) -> str:
     - Raw code without blocks
     - optional <think>...</think> reasoning blocks (stripped before extraction)
 
+    The bytes come back exactly as the model wrote them. The fence is framing
+    and is not returned; everything inside it is, including the final newline
+    when there is one, none when there is not, and every trailing blank line.
+    Nothing here normalizes whitespace, line endings or indentation. Every
+    candidate hash, selection record, authorization identity and disk write
+    downstream is computed from this return value, so a byte dropped here is
+    a candidate that matches nothing it was compared against. Only leading
+    framing -- prose or whitespace before an unfenced artifact -- is trimmed.
+
     Args:
         response: Raw LLM response text
 
     Returns:
-        Extracted Python code
+        The artifact's exact bytes
     """
     # Strip template-emitted thinking blocks first; they can consume tokens
     # before the actual code output
     think_pattern = r'<think>.*?</think>'
-    response = re.sub(think_pattern, '', response, flags=re.DOTALL).strip()
+    response = re.sub(think_pattern, '', response, flags=re.DOTALL).lstrip()
 
     # Safety net: strip unclosed <think> tags (edge case where
-    # thinking mode doesn't fully strip thinking)
+    # thinking mode doesn't fully strip thinking). What precedes the tag is
+    # the content, terminator included.
     if '<think>' in response and '</think>' not in response:
-        response = response[:response.index('<think>')].strip()
+        response = response[:response.index('<think>')]
 
     # Try MBPP [BEGIN]...[DONE] delimiters first
     begin_done_pattern = r'\[BEGIN\]\s*\n(.*?)(?:\[DONE\]|$)'
     begin_matches = re.findall(begin_done_pattern, response, re.DOTALL)
     if begin_matches:
         # Return the last match (the model's answer, not the few-shot examples)
-        return begin_matches[-1].strip()
+        return begin_matches[-1]
 
     # Extract fenced code with an optional language label. The V3 service
     # supports multiple languages, so limiting labels to Python leaves fences
@@ -138,12 +153,12 @@ def extract_code(response: str) -> str:
     matches = re.findall(pattern, response, re.DOTALL)
 
     if matches:
-        # Return the longest match (likely the main code block)
-        return max(matches, key=len).strip()
+        # Return the longest match (likely the main code block), verbatim.
+        return max(matches, key=len)
 
-    # No code blocks found, assume raw code
-    # Strip common prefixes/suffixes
-    code = response.strip()
+    # No code blocks found, assume raw code. Leading framing goes; the
+    # artifact's own trailing bytes stay.
+    code = response.lstrip()
 
     # Remove common LLM artifacts
     lines = code.split('\n')
@@ -158,7 +173,7 @@ def extract_code(response: str) -> str:
             continue
         filtered_lines.append(line)
 
-    return '\n'.join(filtered_lines).strip()
+    return '\n'.join(filtered_lines)
 
 
 def chatml_to_messages(prompt: str) -> List[Dict[str, str]]:

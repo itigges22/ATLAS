@@ -549,3 +549,38 @@ func TestNoCandidateApprovalSurfaceExists(t *testing.T) {
 		t.Error("automatic_v3 is not selectable by a trusted client")
 	}
 }
+
+// The bytes on disk are the bytes the selection path named, terminator and
+// all. Every hash in the chain -- the service's selected hash, the
+// authorization identity, the grant, the disk read -- is computed from the
+// same string, so a candidate that ends in two newlines lands with two, and
+// one that ends in none lands with none. This is the delivery half of the
+// exact-byte contract whose extraction half lives in the V3 service.
+func TestDeliveryKeepsTheCandidatesTrailingBytes(t *testing.T) {
+	for name, winner := range map[string]string{
+		"one final newline":     routeWinner,
+		"two trailing newlines": routeWinner + "\n",
+		"no final newline":      strings.TrimSuffix(routeWinner, "\n"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newAutomaticWorld(t, automaticContract, winner, nil, true)
+			res, err := w.write(t)
+			if err != nil {
+				t.Fatalf("write failed: %v", err)
+			}
+			if res == nil || !res.Success {
+				t.Fatalf("delivery failed: %+v", res)
+			}
+			if got := w.disk(t); got != winner {
+				t.Fatalf("disk holds %q, want the exact candidate %q", got, winner)
+			}
+			if res.AuthorizedDeliveryHash != contentSHA256(winner) {
+				t.Errorf("authorization names %s, disk bytes hash to %s",
+					res.AuthorizedDeliveryHash, contentSHA256(winner))
+			}
+			if got := contentSHA256(w.disk(t)); got != *w.selected {
+				t.Errorf("disk hash %s is not the selected hash %s", got, *w.selected)
+			}
+		})
+	}
+}

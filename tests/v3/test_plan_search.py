@@ -241,7 +241,7 @@ class TestExtractCode:
     def test_plain_code_block(self):
         response = "```\ndef foo():\n    return 42\n```"
         code = extract_code_from_response(response)
-        assert code == "def foo():\n    return 42"
+        assert code == "def foo():\n    return 42\n"
 
     def test_raw_code(self):
         response = "def foo():\n    return 42"
@@ -251,7 +251,7 @@ class TestExtractCode:
     def test_with_think_block(self):
         response = "<think>Let me think...</think>\n```python\ndef foo(): pass\n```"
         code = extract_code_from_response(response)
-        assert code == "def foo(): pass"
+        assert code == "def foo(): pass\n"
 
     def test_unclosed_think(self):
         response = "<think>Still thinking\ndef foo(): pass"

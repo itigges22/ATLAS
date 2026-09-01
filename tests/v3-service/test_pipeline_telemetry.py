@@ -164,10 +164,11 @@ def test_unwritable_dir_disables_without_breaking_generation(monkeypatch, tmp_pa
 # changes no decision on the way.
 # =====================================================================
 
-# No trailing newline: extract_code strips the fenced body, so this is the
-# byte string the probe actually enters the pipeline with, and capture is
-# required to reproduce it exactly rather than approximately.
-CAP_ZERO = "def solve(x):\n    return x + 1"
+# Final newline included: the fenced body comes out of extract_code exactly
+# as written, so this is the byte string the probe actually enters the
+# pipeline with, and capture is required to reproduce it exactly rather than
+# approximately.
+CAP_ZERO = "def solve(x):\n    return x + 1\n"
 CAP_ONE = "def solve(x):\n    return x + 2"
 CAP_TWO = "def solve(x):\n    return x + 3"
 
@@ -240,7 +241,9 @@ class CaptureLLM:
         pass
 
     def __call__(self, prompt, temperature, max_tokens, seed, thinking=None):
-        return f"```python\n{CAP_ZERO}\n```", 5, 1.0
+        # The fence closes right after the artifact's own terminator: what is
+        # inside the fence is exactly CAP_ZERO, and that is what comes out.
+        return f"```python\n{CAP_ZERO}```", 5, 1.0
 
 
 def _capture_cases():

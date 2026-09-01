@@ -153,12 +153,12 @@ class TestExtractCodeFromRepair:
     def test_python_block(self):
         response = "Here is the fix:\n```python\ndef solve(n):\n    return n + 1\n```"
         code = extract_code_from_repair(response)
-        assert code == "def solve(n):\n    return n + 1"
+        assert code == "def solve(n):\n    return n + 1\n"
 
     def test_plain_code_block(self):
         response = "Fixed:\n```\ndef solve(n):\n    return n + 1\n```"
         code = extract_code_from_repair(response)
-        assert code == "def solve(n):\n    return n + 1"
+        assert code == "def solve(n):\n    return n + 1\n"
 
     def test_raw_code_fallback(self):
         response = "def solve(n):\n    return n + 1"
@@ -172,12 +172,12 @@ class TestExtractCodeFromRepair:
             "```python\ndef solve(n):\n    return n + 1\n```"
         )
         code = extract_code_from_repair(response)
-        assert code == "def solve(n):\n    return n + 1"
+        assert code == "def solve(n):\n    return n + 1\n"
 
     def test_strips_thinking_blocks(self):
         response = "<think>Let me fix this.</think>\n```python\ndef solve(): pass\n```"
         code = extract_code_from_repair(response)
-        assert code == "def solve(): pass"
+        assert code == "def solve(): pass\n"
 
     def test_empty_response(self):
         code = extract_code_from_repair("")

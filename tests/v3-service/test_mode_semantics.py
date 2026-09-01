@@ -190,6 +190,21 @@ def test_algorithmic_oracle_closes_without_generating(monkeypatch):
     assert rec["candidate_content_hash"] == C.content_hash(result["code"])
 
 
+# 1b. The bytes that close the run are the bytes the model wrote. PROBE_CODE
+# ends in a newline and reaches the pipeline through a fenced response, so
+# this is exact-byte identity across extraction, selection and the hash the
+# proxy will compare against the bytes it holds.
+def test_the_closing_candidate_is_the_models_exact_bytes(monkeypatch):
+    service, _ = _service(monkeypatch, oracle_cases=2, self_test_pass=True)
+    result = _run(service, "solve.py")
+
+    assert result["code"] == PROBE_CODE
+    assert result["code"].endswith("\n")
+    rec = result["evidence_record"]
+    assert rec["candidate_content_hash"] == C.content_hash(PROBE_CODE)
+    assert rec["candidate_content_hash"] == C.content_hash(result["code"])
+
+
 # 2. Algorithmic I/O that does not pass its own suite: no closure claim.
 def test_algorithmic_partial_does_not_close_and_generates(monkeypatch):
     service, calls = _service(monkeypatch, oracle_cases=3, partial_oracle=True)

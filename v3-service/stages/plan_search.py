@@ -396,18 +396,21 @@ def extract_code_from_response(response: str) -> str:
     # both closed <think>...</think> blocks and orphaned closing tags).
     response = strip_reasoning_leak(response)
 
+    # The block comes back verbatim: the fence is framing, the bytes inside
+    # it are the artifact, final newline and trailing blank lines included.
+    # The candidate hash downstream is computed from exactly this value.
     # Try ```python blocks
     py_blocks = re.findall(r'```python\s*\n(.*?)```', response, re.DOTALL)
     if py_blocks:
-        return py_blocks[-1].strip()
+        return py_blocks[-1]
 
     # Try plain ``` blocks
     code_blocks = re.findall(r'```\s*\n(.*?)```', response, re.DOTALL)
     if code_blocks:
-        return code_blocks[-1].strip()
+        return code_blocks[-1]
 
     # Return as-is (may be raw code)
-    return response.strip()
+    return response.lstrip()
 
 
 # ---------------------------------------------------------------------------
