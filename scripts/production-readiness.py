@@ -191,16 +191,16 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
         "go-proxy-test": Gate(
             "go-proxy-test",
             # An explicit budget, because Go's implicit 10m default is not one
-            # this suite ever chose. proxy is a single package of ~1500 tests
-            # that run serially under -race, and it measures 1473s (24m33s)
-            # end to end. CI hit the default and panicked -- and the panic's
-            # own dump named exactly one running test, two seconds in, which
-            # is a suite that ran out of budget rather than one that hung.
-            # 45m is that measurement with room for a slower runner, and it
-            # still bounds a real hang. The number to reduce is the 1473s: a
-            # large cluster of these tests costs a flat ~6s or ~12s each,
-            # which is a wait in the paths they drive, not work.
-            ("go", "test", "-race", "-timeout", "45m", "./..."),
+            # this suite ever chose. proxy is a single package of ~1470 tests
+            # that run serially under -race. It measured 1473s before the
+            # slot-erase retry stopped waiting on a refused erase (every fake
+            # llama-server here answers /slots with 404, and each agent loop
+            # paid 1.5s per slot for four slots), and 279s after. 20m is over
+            # four times that measurement, room for a runner slower than this
+            # machine, and it still bounds a real hang inside one job. A CI
+            # panic here should be read from its goroutine dump: one young
+            # running test means budget, a test stuck for minutes means hang.
+            ("go", "test", "-race", "-timeout", "20m", "./..."),
             cwd=ROOT / "proxy",
             available=lambda: _command_available("go"),
             unavailable_reason="Go is not installed",
