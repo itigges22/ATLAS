@@ -289,6 +289,12 @@ jobs:
         # into a hard failure so the acceptance test can't silently stop
         # gating (skipif is for local dev boxes, never for this job).
         run: |
+          # The default `run:` shell is `bash -e {0}`, without pipefail, so a
+          # pipeline's status is its LAST command's. Piped through tee, a
+          # pytest that printed "2 failed, 48 passed" exited this step 0 and
+          # the job concluded success (run 33548739140 on 365a0c9). pipefail
+          # makes pytest's own status the step's.
+          set -o pipefail
           python -m pytest tests/e2e -v -rs --no-header | tee /tmp/e2e.out
           if grep -q "SKIPPED" /tmp/e2e.out; then
             echo "::error::e2e acceptance test skipped in CI — its preconditions are this job's responsibility"
