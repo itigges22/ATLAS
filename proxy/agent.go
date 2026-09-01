@@ -2863,6 +2863,44 @@ func eraseLlamaSlot(ctx *AgentContext) {
 	log.Printf("[agent] erased %d/%d llama slots — fresh KV cache for this session", erased, slots)
 }
 
+// eraseRetryable classifies a slot-erase response by what the status means,
+// not by its hundreds digit. Retrying costs real time -- 0.5s then 1.0s per
+// slot, at the start of every agent loop -- so a retry is spent only where a
+// second answer can differ from the first.
+//
+// The matrix, read against the pinned llama-server (tools/server at
+// LLAMA_CPP_REV): its error types map to 400 invalid request ("Invalid slot
+// ID", "Invalid action"), 401 authentication, 403 permission, 404 not found,
+// 500 server, 501 not supported ("does not support slots endpoint", and with
+// no --slot-save-path "does not support slots action"), 503 unavailable
+// (model still loading, or no slot free). A slot that is mid-decode is not an
+// error at all: the erase task is deferred and answered when the slot frees,
+// so on the client side that is a slow answer or a transport timeout.
+//
+//	permanent, no retry   400 401 403 404 405 410 501, and any other 4xx: the
+//	                      server understood the request and refused it, or
+//	                      the operation does not exist here. No blind retry
+//	                      on an authentication or permission refusal.
+//	transient, retried    408 409 425 429: timed out, in conflict, too early,
+//	                      rate-limited -- each names a state that passes.
+//	                      5xx other than 501: the server is the one that
+//	                      failed, and 503 is the busy/loading answer.
+//	transport failure     no answer at all: retried, in eraseOneSlot.
+//
+// llama-server itself emits none of 408/409/425/429 on this endpoint; a
+// reverse proxy or gateway in front of it can, and those are exactly the
+// statuses a hundreds-digit rule would have wrongly made final.
+func eraseRetryable(status int) bool {
+	switch status {
+	case http.StatusRequestTimeout, http.StatusConflict,
+		http.StatusTooEarly, http.StatusTooManyRequests:
+		return true
+	case http.StatusNotImplemented:
+		return false
+	}
+	return status >= 500
+}
+
 // eraseOneSlot clears a single KV slot, retrying while it is busy. Reports
 // whether the slot ended up clear.
 func eraseOneSlot(reqCtx context.Context, client *http.Client, llamaURL string, id int) bool {
@@ -2880,13 +2918,7 @@ func eraseOneSlot(reqCtx context.Context, client *http.Client, llamaURL string, 
 			if resp.StatusCode == http.StatusOK {
 				return true
 			}
-			// A 4xx or 501 is the server's answer, not its unavailability:
-			// no such endpoint, no such slot, or slots not enabled. Asking
-			// again cannot change it, and the retry pause exists for a slot
-			// that is busy (503) or a request that got no answer at all.
-			// Every agent-loop start paid 1.5s per slot here against a
-			// server that had already said no.
-			if resp.StatusCode/100 == 4 || resp.StatusCode == http.StatusNotImplemented {
+			if !eraseRetryable(resp.StatusCode) {
 				log.Printf("[agent] erase slot %d: status %d, not retrying",
 					id, resp.StatusCode)
 				return false
