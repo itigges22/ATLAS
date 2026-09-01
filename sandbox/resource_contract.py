@@ -89,14 +89,24 @@ class ResourceContract:
     max_processes: int
     output_bytes: int
     sample_interval: float = 0.05
-    # How much ADDRESS SPACE the kernel rlimit allows above the resident
-    # ceiling the sampler enforces. Address space always exceeds resident set
-    # -- a mapping is reserved before it is touched -- so an rlimit set AT the
-    # resident ceiling fires first and hands back a MemoryError, which exits 1
-    # and reads exactly like a failing test. Above it, the sampler is what
-    # stops a growing command and the rlimit is a backstop for an allocation
-    # that outruns a sample.
-    address_space_headroom: float = 1.5
+    # An OPTIONAL kernel backstop on ADDRESS SPACE, off by default.
+    #
+    # Address space is not memory, and treating it as memory broke every
+    # managed runtime in the sandbox. A JVM reserves tens of gigabytes of
+    # virtual space before touching any of it: javac exited with an empty
+    # CompileError and kotlinc with `OutOfMemoryError: Map failed` from
+    # UnixFileDispatcherImpl.map0, while ruby and php -- which reserve almost
+    # nothing -- passed the same smoke test. The limit was refusing a mapping,
+    # not a memory demand.
+    #
+    # The resident ceiling above is the contract, and the sampler enforces it
+    # across the whole descendant tree from VmHWM, which is a high-water mark:
+    # any sample taken after growth still sees the peak, so a burst between
+    # two samples is caught at the next one rather than missed. That is what
+    # bounds a runaway. A multiple set here re-enables the rlimit at
+    # memory_bytes x this value, for a deployment that wants a second wall and
+    # runs no managed runtime; 0 leaves it off.
+    address_space_multiple: float = 0.0
     # How long a killed group has to die before SIGKILL follows SIGTERM.
     grace_seconds: float = 2.0
 
@@ -114,10 +124,10 @@ class ResourceContract:
         if self.output_bytes <= 0:
             raise ResourceContractError(
                 f"output_bytes must be positive, got {self.output_bytes}")
-        if self.address_space_headroom < 1.0:
+        if self.address_space_multiple and self.address_space_multiple < 1.0:
             raise ResourceContractError(
-                "address_space_headroom must be at least 1.0, got "
-                f"{self.address_space_headroom}")
+                "address_space_multiple must be 0 (off) or at least 1.0, got "
+                f"{self.address_space_multiple}")
         if self.sample_interval <= 0:
             raise ResourceContractError(
                 f"sample_interval must be positive, got {self.sample_interval}")
@@ -142,7 +152,7 @@ class ResourceContract:
             wall_seconds=wall, memory_bytes=self.memory_bytes,
             max_processes=self.max_processes, output_bytes=self.output_bytes,
             sample_interval=self.sample_interval,
-            address_space_headroom=self.address_space_headroom,
+            address_space_multiple=self.address_space_multiple,
             grace_seconds=self.grace_seconds)
 
 
@@ -154,6 +164,16 @@ def _env_int(name: str, default: int) -> int:
         return int(raw)
     except ValueError as exc:
         raise ResourceContractError(f"{name}={raw!r} is not an integer") from exc
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise ResourceContractError(f"{name}={raw!r} is not a number") from exc
 
 
 def contract_from_env() -> ResourceContract:
@@ -168,6 +188,7 @@ def contract_from_env() -> ResourceContract:
         memory_bytes=_env_int("ATLAS_EXEC_MEMORY_BYTES", 2 * 1024 * 1024 * 1024),
         max_processes=_env_int("ATLAS_EXEC_MAX_PROCESSES", 256),
         output_bytes=_env_int("ATLAS_EXEC_OUTPUT_BYTES", 32 * 1024 * 1024),
+        address_space_multiple=_env_float("ATLAS_EXEC_ADDRESS_SPACE_MULTIPLE", 0.0),
     )
     c.validate()
     return c
@@ -339,10 +360,12 @@ def _apply_child_limits(contract: ResourceContract):
     carries it whatever the command spawns.
     """
 
-    ceiling = int(contract.memory_bytes * contract.address_space_headroom)
+    ceiling = int(contract.memory_bytes * contract.address_space_multiple) \
+        if contract.address_space_multiple else 0
 
     def _limits():
-        resource.setrlimit(resource.RLIMIT_AS, (ceiling, ceiling))
+        if ceiling:
+            resource.setrlimit(resource.RLIMIT_AS, (ceiling, ceiling))
         # A file the command writes is not the concern here; the executor's own
         # buffer is bounded separately. This bounds a single runaway file that
         # would fill the container's writable layer.
@@ -526,11 +549,11 @@ def run_bounded(cmd: List[str], contract: ResourceContract,
 
     returncode = proc.returncode
 
-    # The kernel rlimit can outrun the sampler: a process allocating in large
-    # blocks reaches the ceiling between two reads and dies of its own
-    # MemoryError, which exits 1 and is indistinguishable from a failing test.
-    # ru_maxrss is what tells them apart, and it is a measurement rather than a
-    # reading of the child's own words.
+    # A child that died on its own before a sample saw it -- on the optional
+    # address-space rlimit, or on the container's own cgroup limit -- exits in
+    # a way that is indistinguishable from a failing test. ru_maxrss is the
+    # kernel's own peak for that child and everything it reaped, so it tells
+    # them apart by measurement rather than by reading the child's words.
     if outcome == OUTCOME_COMPLETED and (out_pump.overflowed or err_pump.overflowed):
         # Closing the pipe at the cap sends SIGPIPE, so the command frequently
         # dies before the sampler reads the overflow flag and lands on the

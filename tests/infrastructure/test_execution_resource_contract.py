@@ -73,8 +73,13 @@ def test_a_budget_that_cannot_be_enforced_fails_closed():
     # cap at or above the per-command memory ceiling kills the server first.
     with pytest.raises(rc.ResourceContractError):
         rc.ResourceContract(**{**base, "output_bytes": 256 * MiB}).validate()
+    # 0 means the optional address-space backstop is off; anything between 0
+    # and 1 would be a ceiling below the resident contract, which is not a
+    # narrowing anyone can act on.
+    rc.ResourceContract(**{**base, "address_space_multiple": 0}).validate()
+    rc.ResourceContract(**{**base, "address_space_multiple": 2.0}).validate()
     with pytest.raises(rc.ResourceContractError):
-        rc.ResourceContract(**{**base, "address_space_headroom": 0.5}).validate()
+        rc.ResourceContract(**{**base, "address_space_multiple": 0.5}).validate()
 
 
 def test_a_malformed_operator_value_fails_at_startup(monkeypatch):
@@ -119,13 +124,18 @@ def test_a_gradual_allocator_is_stopped_and_named(small):
             " time.sleep(0.001)\"", small)
     assert r.outcome == rc.OUTCOME_MEMORY_EXHAUSTED
     assert not r.success
-    assert r.peak_memory_bytes <= small.memory_bytes * small.address_space_headroom
+    # The sampler is the enforcement now that the address-space rlimit is
+    # off by default, and the bound it holds to is unchanged: 1 MiB per
+    # millisecond can add at most ~50 MiB inside one 0.05s interval, which is
+    # a tenth of this ceiling. Measured overshoot here is 1.04-1.10x.
+    assert r.peak_memory_bytes <= small.memory_bytes * 1.5
 
 
 def test_a_rapid_allocator_is_stopped_and_named(small):
-    # Large blocks outrun the sampler and die on the kernel rlimit instead,
-    # with a MemoryError and exit 1 -- byte-for-byte a failing test. The
-    # child's own peak is what tells them apart.
+    # Large blocks can cross the ceiling between two samples. VmHWM is a
+    # high-water mark, so the next sample still sees the peak and stops the
+    # tree; what the interval bounds is the overshoot, not whether it is
+    # noticed.
     r = run("python3 -c \"a=[]\nwhile True: a.append(bytearray(64<<20))\"", small)
     assert r.outcome == rc.OUTCOME_MEMORY_EXHAUSTED
     assert not r.success
