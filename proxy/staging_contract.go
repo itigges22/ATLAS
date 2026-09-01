@@ -46,6 +46,12 @@ const (
 	stagingExitedNonZero stagingCommandOutcome = "exited_nonzero"
 	// stagingTimedOut: killed at the budget's per-command ceiling.
 	stagingTimedOut stagingCommandOutcome = "timed_out"
+	// stagingResourceExhausted: stopped at a memory, process or output
+	// ceiling. NOT a failure of the candidate: the command never reached its
+	// own conclusion, so it demonstrates nothing about the bytes it was
+	// pointed at. It exits non-zero exactly like a failing test, which is why
+	// it needs its own name rather than sharing exited_nonzero.
+	stagingResourceExhausted stagingCommandOutcome = "resource_exhausted"
 	// stagingCancelled: the request was cancelled while it ran.
 	stagingCancelled stagingCommandOutcome = "cancelled"
 	// stagingRefused: a safety check or the executor declined to run it.
@@ -73,6 +79,7 @@ var stagingCommandOutcomes = map[stagingCommandOutcome]bool{
 	stagingCancelled: true, stagingRefused: true, stagingMutatedTarget: true,
 	stagingMutatedWorkspace: true, stagingUnobservable: true,
 	stagingBudgetExceeded: true, stagingUnavailable: true,
+	stagingResourceExhausted: true,
 }
 
 // stagingIdentity is everything a staging run and its result are about.

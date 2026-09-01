@@ -294,6 +294,11 @@ func stagingUnmetReason(r stagingCommandResult) AuthorizationReason {
 		return ReasonEvidenceRefused
 	case r.Outcome == stagingTimedOut, r.Outcome == stagingBudgetExceeded:
 		return ReasonEvidenceTimedOut
+	case r.Outcome == stagingResourceExhausted:
+		// Not ReasonEvidenceExecutionFailed. The command was stopped before it
+		// could answer, so the obligation is unmet for want of an observation
+		// rather than because an observation went against the candidate.
+		return ReasonEvidenceResourceExhausted
 	case r.Outcome == stagingCancelled:
 		return ReasonEvidenceCancelled
 	case r.Outcome == stagingUnobservable:

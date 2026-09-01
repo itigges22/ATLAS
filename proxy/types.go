@@ -564,6 +564,16 @@ type RunCommandOutput struct {
 	// one. It does not change the exit status, and is recorded so no consumer
 	// has to infer completeness from length.
 	OutputTruncated bool `json:"output_truncated,omitempty"`
+	// Outcome is HOW the command ended, from the executor's closed vocabulary.
+	// A command stopped at a resource ceiling exits non-zero exactly like a
+	// failing one, so the exit code alone cannot tell a reader whether the
+	// command answered the question it was asked. Absent or unrecognised is
+	// read as unclassified, never as completed.
+	Outcome ExecutionOutcome `json:"outcome,omitempty"`
+	// PeakMemoryBytes is what the command and everything it spawned actually
+	// reached. Telemetry only: no decision reads it, and it is never shown to
+	// the model.
+	PeakMemoryBytes int `json:"-"`
 }
 
 // -- background commands --

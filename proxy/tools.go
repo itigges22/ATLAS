@@ -54,6 +54,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -4496,7 +4497,15 @@ func runCommandTool() *ToolDef {
 				// would hand the model a silent failure.
 				errMsg = "the command was killed on its timeout"
 			}
-			if out.ExitCode != 0 {
+			// A command stopped at a resource ceiling is told apart from one
+			// that failed, in the words the model reads. Left as an exit code
+			// and a MemoryError on stderr, "your test suite is broken" and
+			// "your test suite never finished" are the same message, and only
+			// one of them is actionable.
+			if resourceMsg := executionOutcomeMessage(out.Outcome); resourceMsg != "" &&
+				executionStoppedByResource(out.Outcome) {
+				errMsg = resourceMsg
+			} else if out.ExitCode != 0 {
 				errMsg = strings.TrimSpace(out.Stderr)
 				if errMsg == "" {
 					if s := strings.TrimSpace(out.Stdout); s != "" {
@@ -4510,6 +4519,13 @@ func runCommandTool() *ToolDef {
 				errMsg = truncateStr(errMsg, 400)
 				errMsg += ownBackgroundJobHint(ctx, errMsg)
 				errMsg += shellQuotingHint(input.Command, errMsg)
+			}
+			if errMsg == "" && !executionCompleted(out.Outcome) {
+				// Exit zero from a command that did not reach its own end.
+				// Silence here would read as success.
+				if m := executionOutcomeMessage(out.Outcome); m != "" {
+					errMsg = m
+				}
 			}
 			return &ToolResult{
 				Success: runCommandVerifiable(out),
@@ -4578,12 +4594,14 @@ func runViaSandbox(ctx *AgentContext, command, cwd string, timeoutSec int) (RunC
 // "Execution timed out after 5s" in a stderr string to reach a decision.
 func decodeShellResponse(body io.Reader, out *RunCommandOutput) error {
 	var sr struct {
-		Success   bool   `json:"success"`
-		Stdout    string `json:"stdout"`
-		Stderr    string `json:"stderr"`
-		ExitCode  int    `json:"exit_code"`
-		ElapsedMS int    `json:"elapsed_ms"`
-		TimedOut  bool   `json:"timed_out"`
+		Success         bool   `json:"success"`
+		Stdout          string `json:"stdout"`
+		Stderr          string `json:"stderr"`
+		ExitCode        int    `json:"exit_code"`
+		ElapsedMS       int    `json:"elapsed_ms"`
+		TimedOut        bool   `json:"timed_out"`
+		Outcome         string `json:"outcome"`
+		PeakMemoryBytes int    `json:"peak_memory_bytes"`
 	}
 	if err := json.NewDecoder(body).Decode(&sr); err != nil {
 		return fmt.Errorf("decode sandbox response: %w", err)
@@ -4594,6 +4612,11 @@ func decodeShellResponse(body io.Reader, out *RunCommandOutput) error {
 		Stdout: stdout, Stderr: stderr, ExitCode: sr.ExitCode,
 		TimedOut:        sr.TimedOut,
 		OutputTruncated: len(stdout) < len(sr.Stdout) || len(stderr) < len(sr.Stderr),
+		// Canonicalised at the boundary, so an executor that predates the
+		// vocabulary -- or one that grows a member this build has not been
+		// taught -- arrives as unclassified rather than as a completion.
+		Outcome:         canonicalExecutionOutcome(sr.Outcome),
+		PeakMemoryBytes: sr.PeakMemoryBytes,
 	}
 	return nil
 }
@@ -4606,7 +4629,19 @@ func decodeShellResponse(body io.Reader, out *RunCommandOutput) error {
 // arrive here as a nonzero status set by the caller that observed them, so
 // none of them can pass. No string is examined.
 func runCommandVerifiable(out RunCommandOutput) bool {
-	return out.ExitCode == 0 && !out.TimedOut
+	// Exit zero is not enough, and never was. A command stopped at a memory
+	// ceiling exits non-zero, but a command stopped at one after its last
+	// assertion passed could exit zero -- and either way it did not run to its
+	// own end, so it demonstrates nothing.
+	//
+	// Known-incomplete rather than not-completed, because this predicate also
+	// governs debt retirement and what the model is told: an executor too old
+	// to speak the vocabulary cannot report a resource kill, and refusing
+	// everything it says would disable verification for that deployment
+	// without making it safer. Candidate authorization asks the stricter
+	// question, in stagingApplyObservation, because that is where evidence
+	// mints a licence.
+	return out.ExitCode == 0 && !out.TimedOut && !executionKnownIncomplete(out.Outcome)
 }
 
 // runLocally executes a command only when the operator explicitly selects
@@ -4617,8 +4652,27 @@ func runCommandVerifiable(out RunCommandOutput) bool {
 func runLocally(command, cwd string, timeout time.Duration) RunCommandOutput {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "bash", "-c", command)
+	// The same address-space ceiling the sandbox installs, from the same
+	// operator value, applied by the shell before it runs anything: `ulimit
+	// -v` sets RLIMIT_AS, which is inherited across fork and exec, so it
+	// covers whatever the command spawns. Host mode removes the container
+	// backstop by design; it does not get to remove the memory one too.
+	//
+	// What it cannot do is TELL the two apart afterwards. There is no sampler
+	// here, so a command that dies of MemoryError exits 1 like a failing test,
+	// and this route reports unclassified rather than claiming a completion it
+	// cannot demonstrate -- which is why host execution can run commands and
+	// cannot produce verification evidence.
+	cmd := exec.CommandContext(ctx, "bash", "-c",
+		fmt.Sprintf("ulimit -v %d 2>/dev/null; %s", hostAddressSpaceKiB(), command))
 	cmd.Dir = cwd
+	// Its own process group, so the kill below reaches what it started.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	defer func() {
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+	}()
 
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout

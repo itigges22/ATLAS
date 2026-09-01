@@ -170,7 +170,12 @@ func advisoryVetoes(in advisoryInput) []string {
 		switch why {
 		case ReasonEvidenceExecutionFailed:
 			fired[VetoDeclaredVerificationFailed] = true
-		case ReasonProducerUnavailable, ReasonProducerNotRun:
+		case ReasonProducerUnavailable, ReasonProducerNotRun,
+			ReasonEvidenceResourceExhausted:
+			// Resource exhaustion belongs HERE and not with
+			// VetoDeclaredVerificationFailed: the execution that would have
+			// produced this evidence never reached its own end, so what is
+			// missing is the observation, not the candidate's case.
 			fired[VetoExecutionUnavailable] = true
 		case ReasonEvidenceTimedOut, ReasonEvidenceCancelled:
 			fired[VetoCancelledOrTimedOut] = true

@@ -75,6 +75,12 @@ const (
 	ReasonEvidenceTimedOut AuthorizationReason = "evidence_timed_out"
 	// ReasonEvidenceCancelled: the request ended before it could.
 	ReasonEvidenceCancelled AuthorizationReason = "evidence_cancelled"
+	// ReasonEvidenceResourceExhausted: it was stopped at a memory, process or
+	// output ceiling before it reached its own conclusion. Deliberately NOT
+	// ReasonEvidenceExecutionFailed: a command killed at a ceiling exits
+	// non-zero exactly like a failing one, and recording it as a failure
+	// asserts something about the candidate that nothing observed.
+	ReasonEvidenceResourceExhausted AuthorizationReason = "evidence_resource_exhausted"
 	// ReasonUnknown is never chosen deliberately. It is what a contradictory
 	// or unclassified state becomes, and it never authorizes.
 	ReasonUnknown AuthorizationReason = "unknown"
@@ -92,6 +98,7 @@ var authorizationReasons = map[AuthorizationReason]bool{
 	ReasonProducerNotRun: true, ReasonEvidenceExecutionFailed: true,
 	ReasonEvidenceRefused: true, ReasonEvidenceTimedOut: true,
 	ReasonEvidenceCancelled: true, ReasonUnknown: true,
+	ReasonEvidenceResourceExhausted: true,
 }
 
 // authorizingReasons are the ones that grant. Exactly one, and naming the set

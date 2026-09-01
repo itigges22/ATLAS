@@ -92,6 +92,7 @@ func newMatrixWorld(t *testing.T, contract, filename, code string, valid bool) *
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"success":   exit == 0 && !world.shellTimeout,
 				"exit_code": exit,
+				"outcome":   "completed",
 				"stdout":    "", "stderr": "", "timed_out": world.shellTimeout,
 				"observation": map[string]interface{}{
 					"target_before":    map[string]string{observed: before},

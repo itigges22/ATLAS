@@ -176,6 +176,10 @@ type stagingObservation struct {
 	ExitCode        int               `json:"exit_code"`
 	Success         bool              `json:"success"`
 	TimedOut        bool              `json:"timed_out"`
+	// Outcome is how the executor says the command ended. Canonicalised at
+	// the decode, so an executor that predates the vocabulary arrives as
+	// unclassified and cannot be scored as a completion.
+	Outcome ExecutionOutcome `json:"-"`
 	// Cancelled is set by this side when the request context ended the call.
 	Cancelled bool `json:"-"`
 	Path      string
@@ -233,9 +237,10 @@ func stagingRun(ctx *AgentContext, command string, overlay map[string]string,
 		return stagingObservation{Path: observePath, ExitCode: -1}, true
 	}
 	var sr struct {
-		Success     bool `json:"success"`
-		ExitCode    int  `json:"exit_code"`
-		TimedOut    bool `json:"timed_out"`
+		Success     bool   `json:"success"`
+		ExitCode    int    `json:"exit_code"`
+		TimedOut    bool   `json:"timed_out"`
+		Outcome     string `json:"outcome"`
 		Observation *struct {
 			TargetBefore    map[string]string `json:"target_before"`
 			TargetAfter     map[string]string `json:"target_after"`
@@ -249,7 +254,8 @@ func stagingRun(ctx *AgentContext, command string, overlay map[string]string,
 	}
 	obs := stagingObservation{
 		Success: sr.Success, ExitCode: sr.ExitCode, TimedOut: sr.TimedOut,
-		Path: observePath,
+		Outcome: canonicalExecutionOutcome(sr.Outcome),
+		Path:    observePath,
 	}
 	if sr.Observation != nil {
 		obs.TargetBefore = sr.Observation.TargetBefore
@@ -310,6 +316,15 @@ func stagingApplyObservation(out *stagingCommandResult, obs stagingObservation,
 		out.Outcome = stagingMutatedWorkspace
 	case obs.TimedOut:
 		out.Outcome = stagingTimedOut
+	case executionStoppedByResource(obs.Outcome):
+		// Ahead of the exit-code branches on purpose. A memory-killed pytest
+		// exits non-zero, and reading that as exited_nonzero would record a
+		// behavioural failure of the candidate over a run that never finished.
+		out.Outcome = stagingResourceExhausted
+	case !executionCompleted(obs.Outcome):
+		// Cancelled, spawn-failed, or an executor this build cannot read. None
+		// of them ran to an end, and none may be scored as one.
+		out.Outcome = stagingUnobservable
 	case obs.ExitCode == 0 && obs.Success:
 		out.Outcome = stagingExitedZero
 	default:

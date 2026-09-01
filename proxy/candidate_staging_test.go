@@ -30,6 +30,9 @@ type stubEffect struct {
 	WriteOther string
 	ExitCode   int
 	TimedOut   bool
+	// Outcome overrides how the executor says the command ended. Empty means
+	// the ordinary one: completed, or timed out when TimedOut is set.
+	Outcome ExecutionOutcome
 	// Truncated makes the executor say it could not describe the workspace.
 	Truncated bool
 	// HTTPStatus, when non-zero, is returned instead of a result.
@@ -137,6 +140,17 @@ func newStubSandbox(t *testing.T) *stubSandbox {
 		s.overlaysDestroyed++
 		s.mu.Unlock()
 
+		// The executor's own answer about HOW the command ended. A stub that
+		// omitted it would be an executor too old to speak the vocabulary,
+		// which now fails closed -- correct in production, and not what any of
+		// these fixtures are about.
+		outcome := effect.Outcome
+		if outcome == "" {
+			outcome = ExecutionCompleted
+			if effect.TimedOut {
+				outcome = ExecutionTimedOut
+			}
+		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success":    effect.ExitCode == 0 && !effect.TimedOut,
 			"stdout":     "SECRET_OUTPUT hunter2",
@@ -144,6 +158,7 @@ func newStubSandbox(t *testing.T) *stubSandbox {
 			"exit_code":  effect.ExitCode,
 			"elapsed_ms": 1,
 			"timed_out":  effect.TimedOut,
+			"outcome":    string(outcome),
 			"observation": map[string]interface{}{
 				"target_before":    map[string]string{observed: before},
 				"target_after":     map[string]string{observed: after},
@@ -624,6 +639,7 @@ func TestTheStagingRequestSendsOnlyWhatTheInvocationNeeds(t *testing.T) {
 		json.NewDecoder(r.Body).Decode(&body)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": true, "exit_code": 0, "stdout": "", "stderr": "",
+			"outcome": "completed",
 			"observation": map[string]interface{}{
 				"target_before":    map[string]string{"solve.py": contentSHA256(stagedCode)},
 				"target_after":     map[string]string{"solve.py": contentSHA256(stagedCode)},
@@ -691,7 +707,13 @@ func TestTheExecutorCannotDeclareItsOwnResultTrusted(t *testing.T) {
 	req := liveStagingReq(t, ctx, "pytest -q")
 	res, _ := stageCandidate(ctx, req)
 
-	if res.Commands[0].Outcome != stagingExitedNonZero {
+	// The forged envelope also names an `outcome` -- "exited_zero", a word from
+	// the STAGING vocabulary rather than the executor's. It is not a member of
+	// the execution vocabulary this build reads, so it canonicalises to
+	// unclassified and the command is recorded as unobserved: an executor
+	// speaking a language this build cannot check has demonstrated nothing,
+	// which is a stronger answer than scoring its exit code.
+	if res.Commands[0].Outcome != stagingUnobservable {
 		t.Errorf("outcome %q; the executor's own claim was believed", res.Commands[0].Outcome)
 	}
 	if len(res.authorizingOutcomes()) != 0 {

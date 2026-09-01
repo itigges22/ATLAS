@@ -402,7 +402,7 @@ func TestTheStagingOutcomeVocabularyIsClosed(t *testing.T) {
 		stagingExitedZero, stagingExitedNonZero, stagingTimedOut,
 		stagingCancelled, stagingRefused, stagingMutatedTarget,
 		stagingMutatedWorkspace, stagingUnobservable, stagingBudgetExceeded,
-		stagingUnavailable,
+		stagingUnavailable, stagingResourceExhausted,
 	}
 	for _, o := range required {
 		if !stagingCommandOutcomes[o] {
