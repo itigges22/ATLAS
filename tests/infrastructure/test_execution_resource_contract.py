@@ -145,15 +145,21 @@ def test_the_runaway_that_took_the_host_down(small):
          " out.append(current)\n current += -1\""],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     try:
+        # Watched for long enough that a loaded machine does not turn a real
+        # demonstration into a flaky one: the point is that nothing STOPS it,
+        # not how fast it gets there.
         grew = 0
-        for _ in range(40):
+        deadline = time.time() + 30
+        while time.time() < deadline:
             time.sleep(0.05)
             grew = max(grew, rc.group_usage(unbounded.pid)[0])
             if grew > small.memory_bytes:
                 break
+            if unbounded.poll() is not None:
+                break
         assert grew > small.memory_bytes, (
             "the previous owner should allow growth past the ceiling; "
-            f"reached {grew}")
+            f"reached {grew} of {small.memory_bytes}")
     finally:
         rc._kill_group(unbounded.pid, 0.2)
         unbounded.wait(timeout=5)

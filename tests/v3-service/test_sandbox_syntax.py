@@ -3,6 +3,8 @@ import sys
 from pathlib import Path
 
 import pytest
+
+from tests.conftest import run_shell_sync
 from fastapi import HTTPException
 
 SANDBOX_DIR = Path(__file__).parents[2] / "sandbox"
@@ -108,8 +110,7 @@ def test_shell_overlay_runs_without_mutating_workspace(tmp_path):
     sandbox.WORKSPACE_ROOT = workspace
     sandbox.WORKSPACE_BASE = tmp_path
     try:
-        response = sandbox.run_shell(
-            sandbox.ShellRequest(
+        response = run_shell_sync(sandbox, sandbox.ShellRequest(
                 command="python3 -m py_compile app.py",
                 cwd=str(workspace),
                 files={"app.py": "print('candidate overlay')\n"},
@@ -135,8 +136,7 @@ def test_shell_overlay_translates_absolute_workspace_paths(tmp_path):
     sandbox.WORKSPACE_ROOT = workspace
     sandbox.WORKSPACE_BASE = tmp_path
     try:
-        response = sandbox.run_shell(
-            sandbox.ShellRequest(
+        response = run_shell_sync(sandbox, sandbox.ShellRequest(
                 command=f"python3 -m py_compile {workspace}/app.py",
                 cwd=str(workspace),
                 files={"app.py": "print('candidate overlay')\n"},
@@ -161,8 +161,7 @@ def test_shell_overlay_rejects_path_traversal(tmp_path):
     sandbox.WORKSPACE_BASE = tmp_path
     try:
         with pytest.raises(HTTPException):
-            sandbox.run_shell(
-                sandbox.ShellRequest(
+            run_shell_sync(sandbox, sandbox.ShellRequest(
                     command="true",
                     cwd=str(workspace),
                     files={"../escape.py": "print('nope')\n"},
@@ -186,8 +185,7 @@ def test_shell_snapshot_skips_external_symlinks(tmp_path):
     sandbox.WORKSPACE_ROOT = workspace
     sandbox.WORKSPACE_BASE = tmp_path
     try:
-        response = sandbox.run_shell(
-            sandbox.ShellRequest(
+        response = run_shell_sync(sandbox, sandbox.ShellRequest(
                 command="test ! -e link.txt",
                 cwd=str(workspace),
                 files={"candidate.py": "print('ok')\n"},
@@ -212,8 +210,7 @@ def test_shell_snapshot_preserves_safe_internal_symlinks(tmp_path):
     sandbox.WORKSPACE_ROOT = workspace
     sandbox.WORKSPACE_BASE = tmp_path
     try:
-        response = sandbox.run_shell(
-            sandbox.ShellRequest(
+        response = run_shell_sync(sandbox, sandbox.ShellRequest(
                 command="test -L link.txt && test \"$(cat link.txt)\" = inside",
                 cwd=str(workspace),
                 files={"candidate.py": "print('ok')\n"},
@@ -238,8 +235,7 @@ def test_shell_snapshot_keeps_small_node_modules(tmp_path):
     sandbox.WORKSPACE_ROOT = workspace
     sandbox.WORKSPACE_BASE = tmp_path
     try:
-        response = sandbox.run_shell(
-            sandbox.ShellRequest(
+        response = run_shell_sync(sandbox, sandbox.ShellRequest(
                 command="test -f node_modules/tiny/index.js",
                 cwd=str(workspace),
                 files={"candidate.js": "console.log('ok')\n"},
@@ -263,8 +259,7 @@ def test_shell_snapshot_skips_large_artifacts(tmp_path):
     sandbox.WORKSPACE_ROOT = workspace
     sandbox.WORKSPACE_BASE = tmp_path
     try:
-        response = sandbox.run_shell(
-            sandbox.ShellRequest(
+        response = run_shell_sync(sandbox, sandbox.ShellRequest(
                 command="test ! -e model.gguf",
                 cwd=str(workspace),
                 files={"candidate.py": "print('ok')\n"},
@@ -291,8 +286,7 @@ def test_shell_snapshot_fails_when_byte_limit_is_exceeded(tmp_path):
     sandbox.SHELL_SNAPSHOT_MAX_BYTES = 4
     try:
         with pytest.raises(HTTPException) as exc:
-            sandbox.run_shell(
-                sandbox.ShellRequest(
+            run_shell_sync(sandbox, sandbox.ShellRequest(
                     command="true",
                     cwd=str(workspace),
                     files={"candidate.py": "print('ok')\n"},

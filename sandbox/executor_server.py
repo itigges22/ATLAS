@@ -48,6 +48,7 @@ import os
 import shutil
 import signal
 import tempfile
+import asyncio
 import subprocess
 import logging
 import re
@@ -57,7 +58,7 @@ import uuid
 from collections import deque
 from typing import Dict, Optional, List
 from pathlib import Path
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO)
@@ -89,32 +90,87 @@ def _load_service_token() -> str:
 SERVICE_TOKEN = _load_service_token()
 
 
-@app.middleware("http")
-async def _require_service_token(request, call_next):
-    if SERVICE_TOKEN and request.url.path not in ("/health", "/languages"):
+# Pure ASGI middleware, not BaseHTTPMiddleware, and the reason is cancellation.
+#
+# `@app.middleware("http")` builds a BaseHTTPMiddleware, which interposes on
+# the receive channel: it consumes the ASGI messages itself and hands the
+# endpoint a substitute. `http.disconnect` never arrives, so
+# `Request.is_disconnected()` inside the handler returns False forever and a
+# caller that went away is invisible. Measured directly -- the same probe
+# reports "disconnected at 1.0s" without a middleware and "never disconnected"
+# with one.
+#
+# These two do nothing that needs the body, so they operate on the scope and
+# wrap `send`, leaving `receive` untouched for whoever is downstream.
+
+
+class _ServiceTokenMiddleware:
+    """Reject unauthenticated calls before they reach a route."""
+
+    _OPEN_PATHS = ("/health", "/languages")
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not SERVICE_TOKEN:
+            await self.app(scope, receive, send)
+            return
+        if scope.get("path") in self._OPEN_PATHS:
+            await self.app(scope, receive, send)
+            return
         import hmac
-        got = request.headers.get("authorization", "")
+        got = ""
+        for name, value in scope.get("headers", []):
+            if name.lower() == b"authorization":
+                got = value.decode("latin-1")
+                break
         if not hmac.compare_digest(got, f"Bearer {SERVICE_TOKEN}"):
-            from fastapi.responses import JSONResponse
-            return JSONResponse(status_code=401, content={
+            body = json.dumps({
                 "error": "unauthorized",
                 "detail": "internal service auth is enabled; send "
                           "Authorization: Bearer <service-token> "
-                          "(secrets/service-token)"})
-    return await call_next(request)
+                          "(secrets/service-token)"}).encode()
+            await send({"type": "http.response.start", "status": 401,
+                        "headers": [(b"content-type", b"application/json"),
+                                    (b"content-length",
+                                     str(len(body)).encode())]})
+            await send({"type": "http.response.body", "body": body})
+            return
+        await self.app(scope, receive, send)
 
 
-# Registered AFTER the token middleware: Starlette wraps in reverse
-# registration order (last = outermost), and the correlation ID must be
-# set/echoed even on requests the auth middleware rejects with 401.
-@app.middleware("http")
-async def _correlation_id(request, call_next):
-    rid = request.headers.get("x-atlas-request-id", "")
-    _set_rid(rid)
-    resp = await call_next(request)
-    if rid:
-        resp.headers["X-ATLAS-Request-ID"] = rid
-    return resp
+class _CorrelationIDMiddleware:
+    """Carry the caller's request id into the logs and back out again."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        rid = ""
+        for name, value in scope.get("headers", []):
+            if name.lower() == b"x-atlas-request-id":
+                rid = value.decode("latin-1")
+                break
+        _set_rid(rid)
+
+        async def _send(message):
+            if rid and message["type"] == "http.response.start":
+                message.setdefault("headers", [])
+                message["headers"] = list(message["headers"]) + [
+                    (b"x-atlas-request-id", rid.encode("latin-1"))]
+            await send(message)
+
+        await self.app(scope, receive, _send)
+
+
+# Added in this order so the correlation id is outermost: it must be set and
+# echoed even on a request the token middleware rejects.
+app.add_middleware(_ServiceTokenMiddleware)
+app.add_middleware(_CorrelationIDMiddleware)
 
 
 from resource_contract import (  # noqa: E402
@@ -919,12 +975,45 @@ def background_stop(job_id: str):
 
 
 @app.post("/shell", response_model=ShellResponse)
-def run_shell(request: ShellRequest):
-    """Run a shell command against the bind-mounted workspace."""
+async def run_shell(request: ShellRequest, http: Request):
+    """Run a shell command against the bind-mounted workspace.
+
+    Async, and the reason is cancellation. A caller that goes away -- a reset
+    connection, a closed one, an aborted request, a shutdown -- used to leave
+    the command running to its own deadline, holding a CPU and a memory budget
+    for an answer nobody would read, and producing evidence about a request
+    that no longer existed. A synchronous handler cannot notice: it is already
+    blocked in the threadpool when the socket dies.
+
+    So the work runs in a worker and this coroutine watches the connection.
+    Starlette's is_disconnected is the supported way to ask; the executor's own
+    cancellation callback is the supported way to tell. Nothing here touches a
+    socket directly, and the bounded runner still owns every ceiling and every
+    kill -- cancellation is one more reason it already knows how to stop for,
+    and it stays distinct from a timeout and from resource exhaustion in the
+    outcome it reports.
+    """
     if not request.command or not request.command.strip():
         raise HTTPException(status_code=400, detail="command is required")
 
     timeout = min(max(1, request.timeout), MAX_EXECUTION_TIME)
+
+    # One flag per request, never shared. A flag reused across requests is how
+    # a closed descriptor cancels whoever inherits its number next.
+    gone = threading.Event()
+
+    async def _watch_downstream():
+        """Set the flag when the caller stops waiting for the answer."""
+        try:
+            while not gone.is_set():
+                if await http.is_disconnected():
+                    gone.set()
+                    return
+                await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # a transport that cannot be asked is not a cancel
+            return
 
     snapshot = None
     root = WORKSPACE_ROOT
@@ -946,8 +1035,19 @@ def run_shell(request: ShellRequest):
             before_digest = _workspace_digest(root)
 
         start = time.time()
-        result = _run_cmd(["bash", "-c", command],
-                          timeout=timeout, cwd=cwd, env=request.env)
+        watcher = asyncio.ensure_future(_watch_downstream())
+        try:
+            result = await asyncio.to_thread(
+                _run_cmd, ["bash", "-c", command], timeout, cwd, request.env,
+                None, gone.is_set)
+        except asyncio.CancelledError:
+            # An explicit cancellation or a shutdown. The worker is told to
+            # stop by the same flag the watcher uses, and it takes the process
+            # tree with it before this returns.
+            gone.set()
+            raise
+        finally:
+            watcher.cancel()
         elapsed_ms = int((time.time() - start) * 1000)
 
         if request.observe_paths is not None:
@@ -1365,7 +1465,7 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
 # ---------------------------------------------------------------------------
 
 def _run_cmd(cmd: List[str], timeout: int, cwd: Path = None, env: dict = None,
-             stdin: Optional[str] = None) -> Dict:
+             stdin: Optional[str] = None, cancelled=None) -> Dict:
     """Run one untrusted command through the one resource owner.
 
     Every limit -- time, memory, process count, output bytes -- is installed
@@ -1375,7 +1475,7 @@ def _run_cmd(cmd: List[str], timeout: int, cwd: Path = None, env: dict = None,
     downstream may confuse the two.
     """
     result = run_bounded(cmd, EXEC_CONTRACT.for_request(timeout),
-                         cwd=cwd, env=env, stdin=stdin)
+                         cwd=cwd, env=env, stdin=stdin, cancelled=cancelled)
     return {
         "success": result.success,
         "stdout": result.stdout[-4000:],

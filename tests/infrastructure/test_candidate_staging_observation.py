@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import run_shell_sync
+
 SANDBOX_DIR = Path(__file__).resolve().parents[2] / "sandbox"
 
 
@@ -57,7 +59,7 @@ CANDIDATE = "print(7)\n"
 
 
 def shell(executor, command, files=None, observe=None, timeout=30):
-    return executor.run_shell(executor.ShellRequest(
+    return run_shell_sync(executor, executor.ShellRequest(
         command=command, files=files, observe_paths=observe, timeout=timeout))
 
 

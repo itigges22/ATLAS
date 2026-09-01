@@ -217,6 +217,22 @@ Swap is disabled for the sandbox (`memswap_limit` tracks `mem_limit`): a
 swapping test is a hung one, and swap hides an over-commit rather than
 absorbing it.
 
+## Cancelling a command by going away
+
+A caller that stops waiting for an answer cancels the command. The executor's
+`/shell` handler watches the request's own connection through Starlette's
+`is_disconnected`, and tells the bounded runner to stop through the same
+cancellation callback every other stop uses — a reset connection, a closed one,
+an explicitly aborted request and a graceful shutdown all arrive the same way.
+
+The distinction is kept in the answer: `cancelled` is its own outcome, separate
+from `timed_out` and from `memory_exhausted`, `process_limit_exceeded` and
+`output_limit_exceeded`. A cancelled command produces no verification evidence,
+mints no candidate grant, and takes its whole process tree with it — including
+descendants that left the process group. Cancelling twice is the same as
+cancelling once, a neighbouring command is unaffected, and the watcher for each
+request is per-request, so a reused file descriptor cannot cancel a later one.
+
 ## Building for verification without claiming the deployable tag
 
 `docker compose build atlas-proxy` writes `ghcr.io/itigges22/atlas-proxy:dev` —
@@ -250,6 +266,25 @@ Before any build, record what is actually running, so the tag can be restored:
 docker inspect -f '{{.Image}}' atlas-atlas-proxy-1
 docker inspect -f '{{index .Config.Labels "com.docker.compose.image"}}' atlas-atlas-proxy-1
 ```
+
+## Cancellation
+
+A caller that goes away stops the command it asked for. A reset connection, a
+closed one, an aborted request or a shutdown all reach the executor's bounded
+runner through its cancellation callback, which kills the process tree the same
+way a timeout does — and reports `cancelled`, which is a different outcome from
+`timed_out` and from the resource ones, so a stopped command is never mistaken
+for a finished one.
+
+This required the executor's middlewares to be pure ASGI rather than
+`BaseHTTPMiddleware`. The latter interposes on the receive channel, so
+`http.disconnect` never reaches the endpoint and `Request.is_disconnected()`
+returns False forever: measured directly, the same probe reports "disconnected
+at 1.0s" without a middleware and "never disconnected" with one.
+
+Graceful shutdown **drains** rather than cutting in-flight work off, so the
+bound it completes within is the running command's own deadline
+(`MAX_EXECUTION_TIME`, or a shorter per-request one). Nothing survives it.
 
 ## Truthful results
 
