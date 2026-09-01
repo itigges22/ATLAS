@@ -2880,6 +2880,17 @@ func eraseOneSlot(reqCtx context.Context, client *http.Client, llamaURL string, 
 			if resp.StatusCode == http.StatusOK {
 				return true
 			}
+			// A 4xx or 501 is the server's answer, not its unavailability:
+			// no such endpoint, no such slot, or slots not enabled. Asking
+			// again cannot change it, and the retry pause exists for a slot
+			// that is busy (503) or a request that got no answer at all.
+			// Every agent-loop start paid 1.5s per slot here against a
+			// server that had already said no.
+			if resp.StatusCode/100 == 4 || resp.StatusCode == http.StatusNotImplemented {
+				log.Printf("[agent] erase slot %d: status %d, not retrying",
+					id, resp.StatusCode)
+				return false
+			}
 			log.Printf("[agent] erase slot %d: status %d (attempt %d/%d)",
 				id, resp.StatusCode, attempt, attempts)
 		} else {

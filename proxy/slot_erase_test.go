@@ -64,3 +64,34 @@ func TestEraseStopsWhenTheRequestIsCancelled(t *testing.T) {
 		t.Errorf("cancellation should stop the retries promptly, took %v", elapsed)
 	}
 }
+
+// A server that answers 404 (no such route) or 501 (slots endpoint not
+// enabled) has answered. Nothing about waiting changes that answer, and the
+// wait was real: 0.5s + 1.0s per slot, four slots, at the start of every
+// agent loop that ran against a llama-server without the endpoint -- which is
+// every test fake in this package, and cost the suite six seconds per loop.
+func TestEraseDoesNotRetryADefinitiveRefusal(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusNotImplemented, http.StatusBadRequest} {
+		var calls int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt32(&calls, 1)
+			http.Error(w, "no", status)
+		}))
+		client := &http.Client{Timeout: 2 * time.Second}
+
+		start := time.Now()
+		ok := eraseOneSlot(context.Background(), client, srv.URL, 0)
+		elapsed := time.Since(start)
+		srv.Close()
+
+		if ok {
+			t.Errorf("status %d: a refused erase was reported clear", status)
+		}
+		if got := atomic.LoadInt32(&calls); got != 1 {
+			t.Errorf("status %d: expected exactly one call, got %d", status, got)
+		}
+		if elapsed > 400*time.Millisecond {
+			t.Errorf("status %d: a definitive refusal should not wait, took %v", status, elapsed)
+		}
+	}
+}
