@@ -109,6 +109,19 @@ jobs:
         if: matrix.subset == 'tests/v3-service' || matrix.subset == 'tests/infrastructure'
         run: pip install -r sandbox/requirements-runtime.txt
 
+      - name: install the lens API layer (no torch)
+        # tests/v3/test_lens_online_learning_freeze.py imports
+        # geometric-lens/main.py to assert what the freeze flag does to the
+        # read path, and that module imports fastapi, pydantic and httpx at
+        # module scope. Without them the whole file errors on collection,
+        # which is what failed here. Only the API lines, at the pins the image
+        # ships: the file's torch and xgboost entries are a ~2 GB install this
+        # subset never touches. Same shape as the tree-sitter line above.
+        if: matrix.subset == 'tests/v3'
+        run: |
+          grep -E '^(fastapi|pydantic|httpx)==' geometric-lens/requirements.txt \
+            | xargs pip install
+
       - name: install lens dependencies (CPU torch)
         if: matrix.subset == 'geometric-lens/tests'
         # Mirrors geometric-lens/Dockerfile: CPU-only torch wheel (the
