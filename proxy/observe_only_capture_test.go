@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"go/ast"
 	"go/parser"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // What the observe-only machinery actually writes on a real delivery.
@@ -33,7 +35,17 @@ func captureShadow(t *testing.T, fn func()) []map[string]interface{} {
 
 	fn()
 
-	sink.finalize()
+	// The production shutdown path, not finalize(). finalize() writes the
+	// footer and releases the descriptor without closing the queue, so the
+	// writer goroutine is still draining into a file that is already closed:
+	// records submitted late in fn() are lost, and the goroutine never exits.
+	// Every assertion in this package about what production recorded rests on
+	// this helper, and one of them failed exactly that way -- a delivered
+	// candidate whose consumed_authorized event was missing from the capture,
+	// under full-suite load, in a test that passes in isolation.
+	if err := sink.close(context.Background(), 10*time.Second); err != nil {
+		t.Fatalf("the capture did not finalise: %v", err)
+	}
 	body, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -232,5 +244,45 @@ func TestTheObserversAreSilentWithNoSink(t *testing.T) {
 	// And the grant is minted either way: capture observes, it never gates.
 	if a.Grant == nil {
 		t.Errorf("no grant with the sink off: %s", a.Refusal)
+	}
+}
+
+// The capture helper loses nothing.
+//
+// A shadow sink writes from its own goroutine. Releasing the descriptor while
+// that goroutine is still draining silently drops whatever was still queued,
+// and every assertion in this package about what production recorded is only
+// as good as the capture underneath it. The footer counts what the sink was
+// handed and what it wrote, so the two have to balance.
+func TestTheCaptureHelperLosesNoRecord(t *testing.T) {
+	const submitted = 5000
+	recs := captureShadow(t, func() {
+		sink := activeShadowSink.Load()
+		for i := 0; i < submitted; i++ {
+			sink.submit(map[string]interface{}{
+				"record_kind": "capture_probe", "seq": i,
+				"influences_live_decision": false,
+			})
+		}
+	})
+	if got := len(recordsOfKind(recs, "capture_probe")); got != submitted {
+		t.Errorf("%d of %d records survived the capture", got, submitted)
+	}
+	footers := recordsOfKind(recs, "task_contract_shadow_footer")
+	if len(footers) != 1 {
+		t.Fatalf("%d footers, want exactly one: a capture without one is incomplete",
+			len(footers))
+	}
+	f := footers[0]
+	accepted, _ := f["accepted"].(float64)
+	written, _ := f["written"].(float64)
+	dropped, _ := f["dropped"].(float64)
+	errs, _ := f["errors"].(float64)
+	if accepted != written+dropped {
+		t.Errorf("the sink accepted %.0f records and accounted for %.0f "+
+			"(%.0f written, %.0f dropped)", accepted, written+dropped, written, dropped)
+	}
+	if errs != 0 {
+		t.Errorf("%.0f capture write errors: the descriptor closed under the writer", errs)
 	}
 }
