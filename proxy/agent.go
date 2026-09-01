@@ -6726,20 +6726,6 @@ func declaredOrOwnedDeliverables(ctx *AgentContext, expected []string) []string 
 	return out
 }
 
-func sessionHasTombstones(ctx *AgentContext) bool {
-	if ctx == nil {
-		return false
-	}
-	ctx.LedgerMu.Lock()
-	defer ctx.LedgerMu.Unlock()
-	for _, d := range ctx.Ledger {
-		if d.Tombstoned {
-			return true
-		}
-	}
-	return false
-}
-
 // blockingTombstone reports whether anything was removed that this run cannot
 // account for.
 //

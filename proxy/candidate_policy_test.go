@@ -14,9 +14,6 @@ import (
 // and whether it may LAND, which is about evidence this machine produced about
 // those bytes.
 
-const policyDeclaredOutputs = `{"task_mode":"work","output_knowledge":"declared",` +
-	`"expected_outputs":["solve.py"]}`
-
 // A candidate the service declined to certify still reaches staging. This is
 // the ordering the audit found closed: the trusted producer runs against the
 // candidate, so a candidate discarded before staging can never be measured.

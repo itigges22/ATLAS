@@ -2,7 +2,6 @@ package main
 
 import (
 	"log"
-	"os"
 	"strings"
 )
 
@@ -428,15 +427,6 @@ func deliveryRefusalMessage(reason string) string {
 	}
 	return "the generated candidate was not authorized to replace your content (" +
 		reason + ") — your own content was kept"
-}
-
-// readLedgerBytesOrEmpty is a small convenience for the settlement side.
-func readLedgerBytesOrEmpty(path string) []byte {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	return b
 }
 
 // kind is the validation kind an observation implies, using exactly the

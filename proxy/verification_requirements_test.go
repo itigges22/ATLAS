@@ -98,7 +98,6 @@ func TestCommandTextDoesNotDecideStrength(t *testing.T) {
 // its assets can support.
 func TestObservedStrengthIsCappedByAssetAuthority(t *testing.T) {
 	const code = "print(7)\n"
-	const cmd = "python3 solve.py"
 
 	t.Run("client-supplied assets support behavioral", func(t *testing.T) {
 		w := newMatrixWorld(t, `{"task_mode":"work","verification_knowledge":"declared",`+

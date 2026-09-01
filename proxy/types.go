@@ -915,13 +915,6 @@ type AgentContext struct {
 	routeEntryMu  sync.Mutex
 	routeEntrySeq int
 
-	// v3InvocationSeq numbers the candidate generations this request has
-	// made. One V3 call is one invocation, and evidence about a candidate
-	// from one invocation must never bind to a candidate from another --
-	// the counter is what makes those two facts distinguishable.
-	v3InvocationMu  sync.Mutex
-	v3InvocationSeq int
-
 	// grants holds the one-time authorization grants this request has
 	// minted, keyed by canonical grant id. A grant is spent exactly once at
 	// the delivery owner; nothing else may read or clear one.

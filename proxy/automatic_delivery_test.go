@@ -382,8 +382,7 @@ func TestCaptureOnlySuppressesAutomaticDelivery(t *testing.T) {
 	// Unsupported adapter, so the decision under test is the automatic one
 	// rather than a strict authorization that would have happened anyway.
 	w := newAutomaticWorld(t, automaticContract, routeWinner, nil, false)
-	var recs []map[string]interface{}
-	recs = captureShadow(t, func() {
+	recs := captureShadow(t, func() {
 		if _, err := w.write(t); err != nil {
 			t.Fatalf("write failed: %v", err)
 		}

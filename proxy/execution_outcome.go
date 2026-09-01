@@ -157,10 +157,3 @@ func hostAddressSpaceKiB() int64 {
 	// the other.
 	return int64(float64(bytes) * 1.5 / 1024)
 }
-
-// hostExecutionAllowed reports whether the operator selected host execution.
-// Read here so the resource owner and the tool path agree about which world
-// they are in.
-func hostExecutionAllowed() bool {
-	return os.Getenv("ATLAS_VERIFY_IN") == "host"
-}

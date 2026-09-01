@@ -2759,7 +2759,7 @@ func editFileTool() *ToolDef {
 						"Re-sending it will not help. You are being asked to reproduce a span "+
 						"verbatim AND change it, which is what just failed — use %s. "+
 						"If you meant to REPLACE the whole file, use write_file with the "+
-						"complete new contents.", alt))
+						"complete new contents", alt))
 			}
 
 			// Sanitise the replacement string before splicing it in. The

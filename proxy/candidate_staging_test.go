@@ -53,9 +53,6 @@ type stubSandbox struct {
 	seen []string
 	// overlaysDestroyed counts teardown, one per request.
 	overlaysDestroyed int
-	// otherState is the non-candidate part of the workspace, shared across
-	// commands within one staging run and reset per request.
-	perRequestOther string
 	// staged is the overlay bytes each command was handed, keyed by command.
 	// It is what proves a run happened against the candidate rather than
 	// against whatever was on disk.

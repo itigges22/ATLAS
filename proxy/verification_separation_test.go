@@ -101,11 +101,11 @@ func TestOneRecordCarryingBothIdentitiesClearsBoth(t *testing.T) {
 func TestRunAMutateRunBLeavesAStale(t *testing.T) {
 	tc := sepContract([]string{"solve.py"}, []string{"pytest", "make check"})
 	ctx, dir := sepCtx(t, tc)
-	h := sepWrite(t, ctx, dir, "solve.py", "print('one')\n")
+	sepWrite(t, ctx, dir, "solve.py", "print('one')\n")
 	a := sepStamp(ctx, "pytest", nil)
 
 	// A material mutation between the two runs.
-	h = sepWrite(t, ctx, dir, "solve.py", "print('two')\n")
+	h := sepWrite(t, ctx, dir, "solve.py", "print('two')\n")
 	b := sepStamp(ctx, "make check", nil)
 	cover := sepStamp(ctx, "python3 solve.py", map[string]string{"solve.py": h})
 	ctx.VerificationEvidence = []VerificationRecord{a, b, cover}
