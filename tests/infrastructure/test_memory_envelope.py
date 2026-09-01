@@ -49,10 +49,12 @@ def declared(compose_text):
 
 
 def test_every_service_declares_a_memory_budget(declared):
-    for var in ("ATLAS_LLAMA_MEM", "ATLAS_LENS_MEM", "ATLAS_V3_MEM",
-                "ATLAS_PROXY_MEM", "ATLAS_SANDBOX_MEM"):
+    for var in ("ATLAS_LENS_MEM", "ATLAS_V3_MEM", "ATLAS_PROXY_MEM",
+                "ATLAS_SANDBOX_MEM"):
         assert var in declared, f"{var} has no mem_limit default"
         assert declared[var] > 0
+    # The inference service is the exception, deliberately: see below.
+    assert declared.get("ATLAS_LLAMA_MEM") == 0
 
 
 def test_the_declared_maxima_fit_the_host_they_are_written_for(compose_text, declared):
@@ -60,7 +62,7 @@ def test_the_declared_maxima_fit_the_host_they_are_written_for(compose_text, dec
     host = 15731 * (1 << 20)          # what `free` reports on a 16 GiB machine
     reserve = 1610612736              # the compose default for the host reserve
     assert f"ATLAS_HOST_RESERVE_BYTES:-{reserve}" in compose_text
-    total = reserve + sum(declared.values())
+    total = reserve + sum(declared.values())  # the unset inference term is 0
     assert total <= host, (
         f"the declared maxima total {total / (1 << 30):.2f} GiB on a "
         f"{host / (1 << 30):.2f} GiB host")
@@ -79,11 +81,26 @@ def test_one_command_cannot_consume_the_sandbox(compose_text, declared):
     assert sandbox - per_command >= 256 * (1 << 20)
 
 
-def test_the_model_is_no_longer_the_unbounded_largest_process(declared):
-    """Its lack of a limit is why the kernel chose it."""
-    assert declared["ATLAS_LLAMA_MEM"] > 0
-    # Sized above the measured steady resident set of a 12B Q4 model.
-    assert declared["ATLAS_LLAMA_MEM"] >= 9 * (1 << 30)
+def test_the_inference_limit_ships_unset_pending_a_canary(compose_text, declared):
+    """A limit below the peak is a certain kill, not reclaim.
+
+    The obvious fix for the OOM victim was a cgroup limit, and the first draft
+    of the compose file shipped one at 9.5 GiB. Measuring the deployed server
+    showed that is below what it already uses: process peak RSS 10.31 GiB, an
+    anonymous working set of 8.81 GiB once its swapped pages are counted back,
+    and 16 MiB of reclaimable page cache to give back under pressure. So it
+    stays unenforced until a real-model canary establishes a value with
+    measured headroom, and the accounting term carries the expectation.
+    """
+    assert declared["ATLAS_LLAMA_MEM"] == 0, (
+        "an inference limit is enforced without canary evidence")
+    m = re.search(r"ATLAS_LLAMA_BUDGET_BYTES:-(\d+)", compose_text)
+    assert m, "the envelope has no accounting term for the largest component"
+    # Above the measured peak resident set, not below it.
+    assert int(m.group(1)) >= 10.31 * (1 << 30)
+    llama = compose_text[compose_text.index("  llama-server:"):
+                         compose_text.index("  geometric-lens:")]
+    assert "canary" in llama, "the compose file does not say why it is unset"
 
 
 def test_the_sandbox_may_not_swap(compose_text):
@@ -94,7 +111,8 @@ def test_the_sandbox_may_not_swap(compose_text):
 def test_the_proxy_is_told_the_whole_envelope(compose_text):
     proxy = compose_text[compose_text.index("  atlas-proxy:"):]
     for var in ("ATLAS_HOST_MEMORY_BYTES", "ATLAS_HOST_RESERVE_BYTES",
-                "ATLAS_LLAMA_MEM", "ATLAS_LENS_MEM", "ATLAS_V3_MEM",
+                "ATLAS_LLAMA_MEM", "ATLAS_LLAMA_BUDGET_BYTES",
+                "ATLAS_LENS_MEM", "ATLAS_V3_MEM",
                 "ATLAS_PROXY_MEM", "ATLAS_SANDBOX_MEM",
                 "ATLAS_EXEC_MEMORY_BYTES", "ATLAS_EXEC_CONCURRENCY"):
         assert var in proxy, f"the proxy cannot check the envelope without {var}"

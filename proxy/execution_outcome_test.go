@@ -394,9 +394,8 @@ func TestAnEnvelopeThatDoesNotFitTheHostIsRefused(t *testing.T) {
 	fits := memoryEnvelope{
 		HostBytes: 15*GiB + GiB/3, ReserveBytes: 3 * GiB / 2,
 		Budgets: []memoryBudget{
-			{"inference", 9728 * (1 << 20)}, {"lens", 1792 * (1 << 20)},
-			{"v3-service", 512 * (1 << 20)}, {"proxy", 256 * (1 << 20)},
-			{"sandbox", 1536 * (1 << 20)},
+			{"lens", 1792 * (1 << 20), true}, {"v3-service", 512 * (1 << 20), true},
+			{"proxy", 256 * (1 << 20), true}, {"sandbox", 1536 * (1 << 20), true},
 		},
 		PerCommandBytes: GiB, SandboxBytes: 1536 * (1 << 20), Concurrency: 1,
 	}
@@ -409,16 +408,49 @@ func TestAnEnvelopeThatDoesNotFitTheHostIsRefused(t *testing.T) {
 
 	// The deployment as it actually stood: an 11 GiB sandbox beside an
 	// unbounded 9 GiB model on a 15 GiB host.
+	//
+	// The enforced maxima ALONE do not catch it, and that is the lesson. With
+	// the model unbounded there is no inference maximum to add, so eleven
+	// gigabytes of sandbox plus the small services plus the reserve fits --
+	// which is exactly how every process came to be inside its own limit at
+	// the moment the kernel went looking for something to kill. What catches
+	// it is the remainder: what the enforced budgets leave over for the one
+	// component nothing holds.
 	asItWas := fits
 	asItWas.Budgets = []memoryBudget{
-		{"inference", 9728 * (1 << 20)}, {"sandbox", 11 * GiB},
+		{"sandbox", 11 * GiB, true}, {"inference", 11 * GiB, false},
 	}
 	asItWas.SandboxBytes = 11 * GiB
-	if problems := asItWas.validate(); len(problems) == 0 {
-		t.Fatal("the deployment that killed the model validated")
+	if len(asItWas.validate()) != 0 {
+		t.Fatal("the enforced maxima are expected to fit here; the point is that " +
+			"fitting is not sufficient")
 	}
-	if !strings.Contains(executionEnvelopeRefusal(asItWas), "over by") {
-		t.Errorf("the refusal does not say by how much: %q", executionEnvelopeRefusal(asItWas))
+	over := asItWas.unenforcedOverruns()
+	if len(over) != 1 || !strings.Contains(over[0], "inference") {
+		t.Fatalf("the configuration that killed the model was not reported: %v", over)
+	}
+	// The overrun is reported WITH its size, which is what separates the two
+	// configurations: the historical one misses by more than ten gigabytes,
+	// today's by about one.
+	if !strings.Contains(over[0], "11.00 GiB") {
+		t.Errorf("the report does not say what was expected: %q", over[0])
+	}
+
+	// A refusal still exists, for the case it was built for: enforced maxima
+	// that over-commit. Setting an inference limit AND an eleven-gigabyte
+	// sandbox is a number an operator can edit, and it is refused.
+	enforcedOver := fits
+	enforcedOver.Budgets = append(append([]memoryBudget{}, fits.Budgets...),
+		memoryBudget{"inference", 9728 * (1 << 20), true})
+	for i := range enforcedOver.Budgets {
+		if enforcedOver.Budgets[i].Name == "sandbox" {
+			enforcedOver.Budgets[i] = memoryBudget{"sandbox", 11 * GiB, true}
+		}
+	}
+	enforcedOver.SandboxBytes = 11 * GiB
+	if !strings.Contains(executionEnvelopeRefusal(enforcedOver), "over by") {
+		t.Errorf("an over-committed enforced set was not refused: %q",
+			executionEnvelopeRefusal(enforcedOver))
 	}
 
 	// Concurrency has to fit too, or raising it is a silent over-commit.
@@ -458,7 +490,7 @@ func TestAMalformedEnvelopeFailsClosed(t *testing.T) {
 	const GiB = int64(1) << 30
 	base := memoryEnvelope{
 		HostBytes: 16 * GiB, ReserveBytes: GiB,
-		Budgets:      []memoryBudget{{"inference", 8 * GiB}, {"sandbox", GiB}},
+		Budgets:      []memoryBudget{{"inference", 8 * GiB, true}, {"sandbox", GiB, true}},
 		SandboxBytes: GiB, PerCommandBytes: GiB / 2, Concurrency: 1,
 	}
 	if len(base.validate()) != 0 {
@@ -470,7 +502,7 @@ func TestAMalformedEnvelopeFailsClosed(t *testing.T) {
 		t.Error("an envelope with no host reserve validated")
 	}
 	zeroBudget := base
-	zeroBudget.Budgets = []memoryBudget{{"inference", 0}}
+	zeroBudget.Budgets = []memoryBudget{{"inference", 0, true}}
 	if len(zeroBudget.validate()) == 0 {
 		t.Error("a component with no budget validated")
 	}
@@ -483,5 +515,97 @@ func TestAMalformedEnvelopeFailsClosed(t *testing.T) {
 	zeroConcurrency.Concurrency = 0
 	if len(zeroConcurrency.validate()) == 0 {
 		t.Error("zero concurrency validated")
+	}
+}
+
+// An unbounded component is not a maximum, and pretending otherwise is the
+// mistake that made the first draft of this envelope dangerous.
+//
+// The inference service has no cgroup limit: its measured peak resident set is
+// above the value that was proposed for it, and a hard limit under the peak
+// produces a certain kill rather than reclaim. So its budget is an
+// EXPECTATION. It is excluded from the maxima sum -- an unbounded component
+// has no maximum to add -- and reported separately when the expectation does
+// not fit what the enforced budgets leave.
+func TestAnUnenforcedBudgetIsReportedAndNotSummed(t *testing.T) {
+	const GiB = int64(1) << 30
+	e := memoryEnvelope{
+		HostBytes: 15*GiB + GiB/3, ReserveBytes: 3 * GiB / 2,
+		Budgets: []memoryBudget{
+			{"lens", 1792 * (1 << 20), true}, {"v3-service", 512 * (1 << 20), true},
+			{"proxy", 256 * (1 << 20), true}, {"sandbox", 1536 * (1 << 20), true},
+			{"inference", 11 * GiB, false},
+		},
+		PerCommandBytes: GiB, SandboxBytes: 1536 * (1 << 20), Concurrency: 1,
+	}
+	// The enforced maxima fit, so execution is not refused: a configuration an
+	// operator can fix by editing a number is what the refusal is for.
+	if problems := e.validate(); len(problems) != 0 {
+		t.Fatalf("the enforced maxima do not fit: %v", problems)
+	}
+	if executionEnvelopeRefusal(e) != "" {
+		t.Error("an unbounded component refused execution")
+	}
+	// But it IS reported: 11 GiB expected against what four enforced budgets
+	// and the reserve leave.
+	over := e.unenforcedOverruns()
+	if len(over) != 1 || !strings.Contains(over[0], "inference") {
+		t.Fatalf("the unbounded overrun is not reported: %v", over)
+	}
+	if !strings.Contains(over[0], "not held to a limit") {
+		t.Errorf("the report does not say it is unbounded: %q", over[0])
+	}
+	// Enforcing it instead moves it into the sum, where it does not fit.
+	enforced := e
+	enforced.Budgets = append([]memoryBudget{}, e.Budgets...)
+	enforced.Budgets[4].Enforced = true
+	if len(enforced.validate()) == 0 {
+		t.Error("enforcing an 11 GiB inference budget on a 15 GiB host validated")
+	}
+	if len(enforced.unenforcedOverruns()) != 0 {
+		t.Error("an enforced budget is still reported as an overrun")
+	}
+	// And a fitting expectation is silent.
+	small := e
+	small.Budgets = append([]memoryBudget{}, e.Budgets...)
+	small.Budgets[4].Bytes = 5 * GiB
+	if len(small.unenforcedOverruns()) != 0 {
+		t.Errorf("a fitting expectation was reported: %v", small.unenforcedOverruns())
+	}
+}
+
+// ATLAS_LLAMA_MEM enforces; ATLAS_LLAMA_BUDGET_BYTES only accounts. Setting
+// the first must not leave the second silently shadowing it.
+func TestTheInferenceBudgetIsEnforcedOnlyWhenTheLimitIsSet(t *testing.T) {
+	t.Setenv("ATLAS_HOST_MEMORY_BYTES", "16495915008")
+	t.Setenv("ATLAS_LLAMA_BUDGET_BYTES", "11811160064")
+	t.Setenv("ATLAS_LLAMA_MEM", "")
+	e := envelopeFromEnv()
+	var inference *memoryBudget
+	for i := range e.Budgets {
+		if e.Budgets[i].Name == "inference" {
+			inference = &e.Budgets[i]
+		}
+	}
+	if inference == nil {
+		t.Fatal("the inference term is missing from the envelope entirely")
+	}
+	if inference.Enforced {
+		t.Error("an unset ATLAS_LLAMA_MEM produced an enforced budget")
+	}
+	if inference.Bytes != 11811160064 {
+		t.Errorf("expectation %d", inference.Bytes)
+	}
+	t.Setenv("ATLAS_LLAMA_MEM", "9728m")
+	e = envelopeFromEnv()
+	for _, b := range e.Budgets {
+		if b.Name == "inference" {
+			if !b.Enforced {
+				t.Error("a set ATLAS_LLAMA_MEM did not enforce")
+			}
+			if b.Bytes != 9728*(1<<20) {
+				t.Errorf("the expectation shadowed the limit: %d", b.Bytes)
+			}
+		}
 	}
 }

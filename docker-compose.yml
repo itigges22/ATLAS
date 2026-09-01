@@ -36,14 +36,26 @@ services:
       - ./inference/entrypoint-v3.1.sh:/entrypoint.sh:ro
     ports:
       - "127.0.0.1:${ATLAS_LLAMA_PORT:-8080}:8080"
-    # The model's own budget. It was the OOM victim precisely because it had
-    # none: unbounded and largest is what the kernel's victim selection looks
-    # for. A limit here does not make it use less, it makes the kernel reclaim
-    # its page cache under pressure instead of killing it -- and it makes the
-    # deployment's total a number that can be checked. Sized from a 12B Q4
-    # model's measured resident set with headroom; `atlas init` writes the
-    # host-appropriate value.
-    mem_limit: ${ATLAS_LLAMA_MEM:-9728m}
+    # The model's budget, and why it is UNSET.
+    #
+    # It was the OOM victim precisely because it had no limit: unbounded and
+    # largest is what the kernel's victim selection looks for. The obvious fix
+    # is a cgroup limit, and the first draft of this file shipped one at 9.5
+    # GiB. Measuring the deployed server showed that value is below what it
+    # already uses: process peak RSS 10.31 GiB, anonymous working set 8.81 GiB
+    # once the 2.1 GiB it has swapped is counted back, and only 16 MiB of
+    # reclaimable page cache to give back under pressure. A hard limit under
+    # the peak does not produce reclaim, it produces a certain kill of the one
+    # process everything else depends on -- trading a rare host-pressure event
+    # for a reliable outage.
+    #
+    # So it stays unenforced until a real-model canary establishes a value with
+    # measured headroom. `0` is docker's own spelling of "no limit", which is
+    # the state this service is in today; ATLAS_LLAMA_BUDGET_BYTES carries the
+    # measured expectation for the envelope arithmetic instead. Setting
+    # ATLAS_LLAMA_MEM enforces whatever you put in it; do that only with canary
+    # evidence, and never below the observed peak.
+    mem_limit: ${ATLAS_LLAMA_MEM:-0}
     ulimits:
       memlock: -1
       stack: 67108864
@@ -420,7 +432,11 @@ services:
       # its own limit at the moment the kernel picks a victim.
       - ATLAS_HOST_MEMORY_BYTES=${ATLAS_HOST_MEMORY_BYTES:-}
       - ATLAS_HOST_RESERVE_BYTES=${ATLAS_HOST_RESERVE_BYTES:-1610612736}
-      - ATLAS_LLAMA_MEM=${ATLAS_LLAMA_MEM:-9728m}
+      # Unset by default: the enforced limit. See the inference service above.
+      - ATLAS_LLAMA_MEM=${ATLAS_LLAMA_MEM:-}
+      # The measured expectation, used for accounting only. Above the deployed
+      # server's observed peak resident set of 10.31 GiB.
+      - ATLAS_LLAMA_BUDGET_BYTES=${ATLAS_LLAMA_BUDGET_BYTES:-11811160064}
       - ATLAS_LENS_MEM=${ATLAS_LENS_MEM:-1792m}
       - ATLAS_V3_MEM=${ATLAS_V3_MEM:-512m}
       - ATLAS_PROXY_MEM=${ATLAS_PROXY_MEM:-256m}

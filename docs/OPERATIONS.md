@@ -166,13 +166,37 @@ model:
 
 | Component | Variable | Default | Basis |
 | --- | --- | --- | --- |
-| inference | `ATLAS_LLAMA_MEM` | 9.5 GiB | measured steady resident set + headroom |
+| inference | `ATLAS_LLAMA_MEM` | **unset** | see below — a limit below its peak is a certain kill |
 | geometric lens | `ATLAS_LENS_MEM` | 1.75 GiB | measured peak 1.56 GiB |
 | sandbox | `ATLAS_SANDBOX_MEM` | 1.5 GiB | one 1 GiB command + the executor and its buffers |
 | v3-service | `ATLAS_V3_MEM` | 0.5 GiB | measured peak 52 MiB |
 | proxy | `ATLAS_PROXY_MEM` | 0.25 GiB | measured peak 33 MiB |
 | host reserve | `ATLAS_HOST_RESERVE_BYTES` | 1.5 GiB | kernel, container daemon, logging, shutdown |
-| **total** | | **15.0 GiB** | on a 15.36 GiB host: 0.36 GiB headroom |
+| **total (enforced)** | | **5.5 GiB** | on a 15.36 GiB host: 9.86 GiB left for the unbounded model |
+
+**Why the inference service has no limit.** Its measured peak resident set is
+10.31 GiB, its anonymous working set is 8.81 GiB once the 2.11 GiB it has
+swapped is counted back, and it has 16 MiB of reclaimable page cache — so a
+hard limit under the peak yields a kill, not reclaim. It ships unset until a
+real-model canary establishes a value with measured headroom, with
+`ATLAS_LLAMA_BUDGET_BYTES` carrying the measured expectation for accounting.
+Setting `ATLAS_LLAMA_MEM` enforces whatever you put in it: do that only with
+canary evidence, and never below the observed peak.
+
+This has a consequence worth stating plainly: **the enforced-maxima check alone
+would not have caught the configuration that killed it.** With the model
+unbounded there is no inference maximum to add, so an 11 GiB sandbox plus the
+small services plus the reserve fits a 15 GiB host — which is exactly how every
+process came to be inside its own limit at the moment the kernel went looking
+for a victim. What catches it is the **remainder**: what the enforced budgets
+leave over for the one component nothing holds. Today that is 9.86 GiB against
+an expectation of 11 GiB, and the proxy reports the shortfall at startup. Under
+the old 11 GiB sandbox it was 0.33 GiB against 11 GiB.
+
+An overrun is reported, not refused. The refusal is for enforced maxima that
+over-commit — a number an operator can edit. An unbounded component that
+outgrows the remainder needs a different fix (a validated limit, or a smaller
+model), and disabling execution would not make the machine safer.
 
 Set `ATLAS_HOST_MEMORY_BYTES` to your machine's RAM to turn that arithmetic
 into a check. When it is declared and the sum does not fit, the proxy **refuses
@@ -210,6 +234,15 @@ name alone:
 docker build -t atlas-proxy:my-slice-check ./proxy      # never :dev
 ATLAS_IMAGE_TAG=my-slice-check docker compose config    # check it resolves
 ```
+
+**A tag is not an identity.** The image ID is. A tag can be rewritten under a
+running container, and once the old image is pruned the tag cannot be put back
+— the deployable name then points at something the running container is not,
+and nothing about inspecting the tag reveals it. Acquisition runners refuse to
+launch from `:dev` or `:latest` for that reason, pin the exact `sha256:` image
+ID plus the built binary's hash before the first case, and report a missing
+historical image rather than pulling or rebuilding one: a reconstructed image
+is a different artifact wearing the same name.
 
 Before any build, record what is actually running, so the tag can be restored:
 

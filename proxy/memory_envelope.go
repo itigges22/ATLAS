@@ -23,10 +23,15 @@ import (
 // assumed to be fine, it is reported as unvalidated, and the per-command
 // contract carries the safety on its own until someone declares one.
 
-// memoryBudget is one component's hard maximum, as the operator declared it.
+// memoryBudget is one component's budget, as the operator declared it.
 type memoryBudget struct {
 	Name  string
 	Bytes int64
+	// Enforced is whether a cgroup limit actually holds this component to
+	// Bytes. An unenforced budget is an EXPECTATION, and the difference
+	// decides what the sum means: adding an unenforced number into a
+	// "the maxima fit" check would be inventing a ceiling nobody set.
+	Enforced bool
 }
 
 // memoryEnvelope is the whole declaration.
@@ -49,13 +54,47 @@ type memoryEnvelope struct {
 
 func (e memoryEnvelope) declared() bool { return e.HostBytes > 0 }
 
-// total is every simultaneously reachable hard maximum, plus the reserve.
+// total is every simultaneously reachable HARD maximum, plus the reserve.
+//
+// Unenforced budgets are excluded on purpose. A component with no cgroup limit
+// has no maximum to add: its real ceiling is the host, and folding an expected
+// figure in here would turn a measurement into a promise.
 func (e memoryEnvelope) total() int64 {
 	sum := e.ReserveBytes
 	for _, b := range e.Budgets {
-		sum += b.Bytes
+		if b.Enforced {
+			sum += b.Bytes
+		}
 	}
 	return sum
+}
+
+// remainder is what is left for everything that is NOT held to a limit.
+func (e memoryEnvelope) remainder() int64 { return e.HostBytes - e.total() }
+
+// unenforcedOverruns names each unbounded component whose declared expectation
+// does not fit in what the enforced budgets leave.
+//
+// Reported, never refused. The refusal exists for maxima that over-commit --
+// a configuration error an operator can fix by editing a number. An unbounded
+// component that outgrows the remainder is a different problem with a
+// different fix (validate a limit for it, or give it a smaller model), and
+// disabling execution would not make the machine any safer.
+func (e memoryEnvelope) unenforcedOverruns() []string {
+	var out []string
+	rem := e.remainder()
+	for _, b := range e.Budgets {
+		if b.Enforced || b.Bytes <= 0 {
+			continue
+		}
+		if b.Bytes > rem {
+			out = append(out, fmt.Sprintf(
+				"%s is not held to a limit and is expected to reach %s, which is "+
+					"more than the %s the enforced budgets leave",
+				b.Name, humanBytes(b.Bytes), humanBytes(rem)))
+		}
+	}
+	return out
 }
 
 // validate reports every way the declaration cannot hold. All of them, not the
@@ -152,13 +191,28 @@ func envelopeFromEnv() memoryEnvelope {
 		e.Concurrency = n
 	}
 	for name, key := range map[string]string{
-		"inference": "ATLAS_LLAMA_MEM", "lens": "ATLAS_LENS_MEM",
-		"v3-service": "ATLAS_V3_MEM", "proxy": "ATLAS_PROXY_MEM",
-		"sandbox": "ATLAS_SANDBOX_MEM",
+		"lens": "ATLAS_LENS_MEM", "v3-service": "ATLAS_V3_MEM",
+		"proxy": "ATLAS_PROXY_MEM", "sandbox": "ATLAS_SANDBOX_MEM",
 	} {
 		if b := envBytes(key); b > 0 {
-			e.Budgets = append(e.Budgets, memoryBudget{Name: name, Bytes: b})
+			e.Budgets = append(e.Budgets, memoryBudget{Name: name, Bytes: b, Enforced: true})
 		}
+	}
+	// The inference service is declared in two parts, because what it is
+	// EXPECTED to use and what it is HELD to are different facts and only one
+	// of them exists today. ATLAS_LLAMA_MEM is the cgroup limit and ships
+	// unset: the deployed server's own peak resident set is above the value
+	// that was proposed for it, and a hard limit under the peak turns an
+	// occasional host-pressure event into a certain kill of the one process
+	// the whole system depends on. ATLAS_LLAMA_BUDGET_BYTES is the measured
+	// expectation, used for accounting so the arithmetic stays honest about
+	// the largest term rather than omitting it.
+	if enforced := envBytes("ATLAS_LLAMA_MEM"); enforced > 0 {
+		e.Budgets = append(e.Budgets, memoryBudget{
+			Name: "inference", Bytes: enforced, Enforced: true})
+	} else if expected := envBytes("ATLAS_LLAMA_BUDGET_BYTES"); expected > 0 {
+		e.Budgets = append(e.Budgets, memoryBudget{
+			Name: "inference", Bytes: expected, Enforced: false})
 	}
 	sort.Slice(e.Budgets, func(i, j int) bool { return e.Budgets[i].Name < e.Budgets[j].Name })
 	return e
