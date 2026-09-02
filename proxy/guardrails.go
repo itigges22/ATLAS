@@ -636,6 +636,49 @@ func fileSHA256(ctx *AgentContext, path string) string {
 // sessionWriteHashes snapshots the sha256 of every file this session wrote,
 // keyed by the path as the model sent it. Taken at the moment a verifying
 // run succeeds, it records WHICH bytes that run vouched for.
+// changedPathsForCoverage is every path a passing run may cover: the raw
+// paths write_file registered as session writes, and the canonical paths of
+// every code deliverable the ledger recorded this session -- which is where an
+// edit tool's landing is written down.
+//
+// The verification demand (decideVerificationDemand -> codeDeliverablesFor)
+// already asks about the ledger's deliverables. The coverage that answered it
+// read only the session-write map, which edit_file and structural_edit never
+// wrote to and no edit tool wrote to for a delivered candidate, so a run that
+// named an edited file covered nothing and every edit task under task_mode
+// work ended verification_demanded_unmet. Reading both sides from the ledger's
+// canonical identity closes that asymmetry without touching what the
+// session-write map means to its other readers: the overwrite guard's notion
+// of the model's own draft, the debug fast path, the manifest note and the V3
+// project context are unchanged.
+//
+// Coverage states only that a run named a path whose current bytes hash to
+// this value. It proves nothing about correctness, and the ledger's own
+// validation still settles mutation debt.
+func changedPathsForCoverage(ctx *AgentContext) []string {
+	if ctx == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for p := range ctx.SessionWrites {
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	for _, p := range codeDeliverablesFor(ctx, nil) {
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func sessionWriteHashes(ctx *AgentContext) map[string]string {
 	if ctx == nil || len(ctx.SessionWrites) == 0 {
 		return nil

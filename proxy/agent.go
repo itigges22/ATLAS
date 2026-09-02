@@ -2215,7 +2215,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						// actually named and the exact bytes they held. Lens
 						// labeling reads these — never the session-wide flag.
 						covered := map[string]string{}
-						for p := range ctx.SessionWrites {
+						for _, p := range changedPathsForCoverage(ctx) {
 							if commandNamesPath(rc.Command, p) {
 								if h := fileSHA256(ctx, p); h != "" {
 									covered[p] = h

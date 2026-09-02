@@ -94,8 +94,10 @@ func deliverEditCandidate(ctx *AgentContext, tool, path, relPath,
 	if err != nil {
 		if errors.Is(err, context.Canceled) || (ctx.Ctx != nil && ctx.Ctx.Err() != nil) {
 			lifecycle.finish(ctx, routingCancelled, "", "")
-			keep.Cancelled = &ToolResult{Success: false,
-				Error: tool + " cancelled — no content was written"}
+			// Classified as no mutation, which is what the message says: the
+			// ledger must not observe a path nothing touched, or a cancelled
+			// edit becomes a deliverable the run is then asked to verify.
+			keep.Cancelled = noMutation(tool + " cancelled — no content was written")
 			return keep
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
