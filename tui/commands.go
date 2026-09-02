@@ -128,6 +128,9 @@ const slashCommandHelp = `Slash commands
   /undo                   Revert the last commit (keep changes in tree).
   /run <cmd>              Run a shell command in the working dir.
   /ask <message>          Send one message as a question, not a work request.
+  /candidate-policy [p]   Show or set how V3 candidates may replace the model's
+                          own bytes: strict (default), advisory, or automatic.
+                          Session-wide; resets with a new session.
   /good                   👍 the last pass — bank it as lens-training data.
   /bad                    👎 the last pass — bank it as a negative example.
   /review                 List files the last pass wrote (with verdicts).
@@ -407,6 +410,29 @@ func (m *tuiModel) handleSlash(input string) (consumed bool, cmd tea.Cmd, quit b
 		m.startNewSession()
 		return true, nil, false
 
+	case "/candidate-policy":
+		// A session-wide control, like the permission mode: the user names the
+		// policy, the TUI sends the proxy's typed value with every request of
+		// this session, and nothing about the message changes. No argument
+		// shows the current selection.
+		if len(args) == 0 {
+			m.chat = append(m.chat, chatMessage{Role: roleSystem, Meta: "policy",
+				Body: candidatePolicyLabel(m.candidatePolicy)})
+			return true, nil, false
+		}
+		value, ok := candidatePolicyValue(args[0])
+		if !ok || len(args) != 1 {
+			m.chat = append(m.chat, chatMessage{Role: roleSystem, Meta: "error",
+				Body: "/candidate-policy takes one of: strict, advisory, automatic"})
+			return true, nil, false
+		}
+		if value == candidatePolicyStrict {
+			value = "" // the default sends nothing
+		}
+		m.candidatePolicy = value
+		m.chat = append(m.chat, chatMessage{Role: roleSystem, Meta: "policy",
+			Body: candidatePolicyLabel(m.candidatePolicy)})
+		return true, nil, false
 	case "/ask":
 		// One request answered as a question rather than as work. The mode is
 		// a control the user operates; nothing here reads what they typed, so

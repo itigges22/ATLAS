@@ -211,4 +211,7 @@ func (m *tuiModel) saveSession() {
 func (m *tuiModel) startNewSession() {
 	m.sessionUID = newSessionID()
 	m.sessionCreatedAt = time.Now().UTC().Format(time.RFC3339)
+	// A new session starts at the default policy. The selection belonged to
+	// the work of the previous one.
+	m.candidatePolicy = ""
 }

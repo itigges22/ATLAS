@@ -378,6 +378,51 @@ type taskContract struct {
 	TaskMode        taskMode `json:"task_mode"`
 	ExpectedOutputs []string `json:"expected_outputs,omitempty"`
 	Verification    []string `json:"verification,omitempty"`
+	// CandidatePolicy is the user's selection of how a V3 candidate may
+	// replace the model's own bytes, in the proxy's typed values. Omitted
+	// when the user selected nothing, which the proxy reads as strict.
+	CandidatePolicy string `json:"candidate_policy,omitempty"`
+}
+
+// candidatePolicy is a session-wide control the user operates with
+// /candidate-policy. The names are the proxy's registered values; the TUI
+// spells them the way the user typed the command, and sends the typed value.
+// Nothing here reads the message: the same sentence goes out under any policy.
+//
+// The default is strict, and the TUI sends nothing for it, so a session that
+// never touched the control is indistinguishable on the wire from one that
+// never had it. The selection resets with a new session.
+const (
+	candidatePolicyStrict    = "strict"
+	candidatePolicyAdvisory  = "advisory"
+	candidatePolicyAutomatic = "automatic_v3"
+)
+
+// candidatePolicyValue maps the user's word to the proxy's typed value.
+// "automatic" is the user-facing spelling of automatic_v3; the other two are
+// spelled the same on both sides. Anything else is not a policy.
+func candidatePolicyValue(word string) (string, bool) {
+	switch word {
+	case "strict":
+		return candidatePolicyStrict, true
+	case "advisory":
+		return candidatePolicyAdvisory, true
+	case "automatic", "automatic_v3":
+		return candidatePolicyAutomatic, true
+	}
+	return "", false
+}
+
+// candidatePolicyLabel is how the header and /candidate-policy describe the
+// current selection.
+func candidatePolicyLabel(policy string) string {
+	switch policy {
+	case candidatePolicyAdvisory:
+		return "Candidate policy: advisory (candidates are scored, never delivered)"
+	case candidatePolicyAutomatic:
+		return "Candidate policy: automatic (V3's selected candidate lands on the file the model's tool call names)"
+	}
+	return "Candidate policy: strict (default; a candidate lands only on trusted declared verification)"
 }
 
 type demoOpts struct {
@@ -395,6 +440,9 @@ type demoOpts struct {
 	// to prove an external or legacy caller is still accepted; ordinary owned
 	// traffic must never reach that path by accident.
 	omitTaskContract bool
+	// candidatePolicy is the session's selection, in the proxy's typed value.
+	// Empty sends nothing, which the proxy reads as strict.
+	candidatePolicy string
 }
 
 // sendChatOpts opens an SSE POST to /v1/agent and forwards each parsed
@@ -420,7 +468,7 @@ func sendChatOpts(ctx context.Context, proxyURL, message, workingDir, mode,
 		if mode == "" {
 			mode = taskModeWork
 		}
-		contract = &taskContract{TaskMode: mode}
+		contract = &taskContract{TaskMode: mode, CandidatePolicy: opts.candidatePolicy}
 	}
 	body, err := json.Marshal(agentRequest{
 		Message:             message,
