@@ -50,7 +50,16 @@ func deliverEditCandidate(ctx *AgentContext, tool, path, relPath,
 	// one ending recorded for it whatever happens below.
 	entry := mintRouteEntry(ctx)
 	lifecycle := newRouteLifecycle(entry)
+	// The attribution is deferred first so it runs last: the ending it copies
+	// has been recorded by then, by the branch that decided it or by the
+	// fail-closed default.
+	defer lifecycle.recordAttribution(ctx)
 	defer lifecycle.finalizeDefault(ctx)
+	// The one read of the request's policy on this route, made where the
+	// entry is minted so every ending, however early, knows the mode it ran
+	// under. Read once here and handed down; the delivery owner never reads it.
+	mode, source := candidatePolicyOf(ctx)
+	lifecycle.notePolicy(mode, source)
 
 	// The structured intent of THIS call: the tool the model actually invoked,
 	// the canonical target it named, the pre-edit artifact and the caller's own
@@ -185,10 +194,10 @@ func deliverEditCandidate(ctx *AgentContext, tool, path, relPath,
 	if meta.Envelope != nil {
 		selected = meta.Envelope.Identity.CandidateContentHash
 	}
-	mode, _ := candidatePolicyOf(ctx)
 	delivery := authorizeCandidateDelivery(ctx, entry, path, improved, evID,
 		meta.Envelope, pool, selected, unmet, observed, scope,
 		automaticIntent{Mode: mode, Vetoes: vetoes})
+	lifecycle.noteAuthorization(delivery, evID, contentSHA256(improved), vetoes)
 	// The same policy owner the new-file route asks, over the same kinds of
 	// fact. An edit route that decided this for itself is how the two paths
 	// disagreed about what a candidate had to show before it could land.
@@ -222,6 +231,7 @@ func deliverEditCandidate(ctx *AgentContext, tool, path, relPath,
 		BaselinePreserved: delivery.BaselinePreserved,
 		Write:             editDeliveryWriter(tool),
 	})
+	lifecycle.noteDelivery(out)
 	if derr != nil && result == nil {
 		// Refused before any byte moved: nothing mutated, and the caller's own
 		// edit is still the alternative.

@@ -1756,7 +1756,13 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// default means a branch that forgets to speak still records the
 	// fail-closed member instead of leaving an entry that never ended.
 	lifecycle := newRouteLifecycle(entry)
+	// The attribution is deferred first so it runs last, over the recorded
+	// ending. The one read of the request's policy on this route happens
+	// here, where the entry is minted, so every ending knows its mode.
+	defer lifecycle.recordAttribution(ctx)
 	defer lifecycle.finalizeDefault(ctx)
+	mode, policySource := candidatePolicyOf(ctx)
+	lifecycle.notePolicy(mode, policySource)
 	if skipped, why := generationSkipped(ctx, observeInvocationFeasibility(ctx, entry)); skipped {
 		// No candidate is generated. The run continues through the same
 		// direct-write path a V3 outage takes, so nothing about the plan, the
@@ -2121,10 +2127,10 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	vetoes := advisoryVetoes(vetoInput)
 	var delivery deliveryAuthorization
 	if candidateProposed {
-		mode, _ := candidatePolicyOf(ctx)
 		delivery = authorizeCandidateDelivery(ctx, entry, path, code, evID,
 			v3Result.Evidence, observed, selected, unmet, deliveredCheck, scope,
 			automaticIntent{Mode: mode, Vetoes: vetoes})
+		lifecycle.noteAuthorization(delivery, evID, contentSHA256(code), vetoes)
 	}
 	// THE policy owner. It reads the typed answer, the trusted observations and
 	// the disqualifying facts, and says which of the honest decisions this
@@ -2416,6 +2422,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		lifecycle.finish(ctx, routingCandidateAuthorized, contentSHA256(code), "")
 		result, outcome, err := deliverAuthorizedCandidate(ctx, path, code,
 			delivery.Grant, final, delivery.MetCommands, delivery.BaselinePreserved)
+		lifecycle.noteDelivery(outcome)
 		if err != nil {
 			if result == nil {
 				// Refused before any byte moved. Nothing mutated, nothing

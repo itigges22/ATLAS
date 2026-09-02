@@ -2611,12 +2611,17 @@ var shadowGuardOwners = map[string]bool{
 	// nothing back, and whether the decision it describes delivered is a field
 	// on the record rather than something the sink is asked about.
 	"recordCandidatePolicyDecision": true,
-	"contractOutputs":               true,
-	"shadowCanonicalSet":            true,
-	"shadowHashes":                  true,
-	"shadowCompareSets":             true,
-	"shadowHash":                    true,
-	"main":                          true,
+	// One typed answer per route entry to why an automatic candidate did not
+	// land, composed from facts the owners above already recorded. It writes
+	// once at route exit and reads nothing back; that no live owner reads the
+	// facts or the answer is pinned by name in automatic_attribution_test.go.
+	"(*routeLifecycle).recordAttribution": true,
+	"contractOutputs":                     true,
+	"shadowCanonicalSet":                  true,
+	"shadowHashes":                        true,
+	"shadowCompareSets":                   true,
+	"shadowHash":                          true,
+	"main":                                true,
 }
 
 // funcIdentity renders a declaration the way shadowGuardOwners keys it.

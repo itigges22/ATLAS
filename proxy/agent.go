@@ -3915,6 +3915,9 @@ const (
 	// One mutation the candidate producer was never consulted for, and the
 	// predicate that turned it away.
 	shadowSchemaVersionGenerationBypass = 1
+	// One typed answer per route entry to why an automatic candidate did not
+	// land, copied from the decisions the live owners recorded.
+	shadowSchemaVersionAutomaticAttribution = 1
 )
 
 // canonicalSource keeps an unknown decision source out of the record. The

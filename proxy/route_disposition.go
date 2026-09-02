@@ -97,6 +97,23 @@ func deliveryDispositionLanded(d deliveryDisposition) bool {
 type routeLifecycle struct {
 	entry routeEntry
 	once  sync.Once
+	// ended and reason are what finish recorded, kept so the attribution
+	// written at route exit copies the ending rather than re-deciding it.
+	ended  routingDisposition
+	reason AuthorizationReason
+	// auto is what the route hands the automatic-delivery attribution as it
+	// goes; attributed makes that record, like the ending, a once-only event.
+	auto       automaticFacts
+	attributed sync.Once
+}
+
+// ending is the recorded disposition, or the fail-closed member when the
+// entry has not ended.
+func (l *routeLifecycle) ending() (routingDisposition, AuthorizationReason) {
+	if l == nil || l.ended == "" {
+		return routingUnclassified, ""
+	}
+	return l.ended, l.reason
 }
 
 func newRouteLifecycle(entry routeEntry) *routeLifecycle {
@@ -115,6 +132,7 @@ func (l *routeLifecycle) finish(ctx *AgentContext, d routingDisposition,
 		if !knownRoutingDisposition(d) {
 			d = routingUnclassified
 		}
+		l.ended, l.reason = d, reason
 		sink := activeShadowSink.Load()
 		if !sink.enabled() {
 			return
