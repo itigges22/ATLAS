@@ -54,19 +54,36 @@ func TestCandidatePolicyWordsMapToTheTypedValues(t *testing.T) {
 	}
 }
 
-// The default sends nothing; strict is the proxy's reading of nothing.
-func TestCandidatePolicyDefaultIsStrictAndSendsNothing(t *testing.T) {
+// The selection is explicit on the wire, strict included. An omitted field is
+// the proxy's cue to apply the operator default, so a TUI that displayed
+// strict while sending nothing could be running under whatever the server
+// chose. What the header shows is what the request says.
+func TestCandidatePolicyIsAlwaysExplicitOnTheWire(t *testing.T) {
+	// A fresh model, before any command: strict, and it says so.
+	fresh := &tuiModel{}
+	fresh.startNewSession()
+	if fresh.candidatePolicy != candidatePolicyStrict {
+		t.Fatalf("a new session selected %q, want %q", fresh.candidatePolicy, candidatePolicyStrict)
+	}
+	body := captureContractWithPolicy(t, taskModeWork, fresh.candidatePolicy, "Create app.py.")
+	if got := contractOf(t, body)["candidate_policy"]; got != "strict" {
+		t.Errorf("a new session sent candidate_policy=%v, want \"strict\"", got)
+	}
+	// Explicitly chosen strict: the same explicit value.
 	m := &tuiModel{}
-	if m.candidatePolicy != "" {
-		t.Fatal("a fresh model has a policy selected")
-	}
 	m.handleSlash("/candidate-policy strict")
-	if m.candidatePolicy != "" {
-		t.Errorf("selecting strict stored %q; the default must send nothing", m.candidatePolicy)
+	if m.candidatePolicy != candidatePolicyStrict {
+		t.Errorf("selecting strict stored %q, want %q", m.candidatePolicy, candidatePolicyStrict)
 	}
-	tc := contractOf(t, captureContract(t, taskModeWork, "Create app.py."))
-	if _, ok := tc["candidate_policy"]; ok {
-		t.Errorf("a default request carried candidate_policy=%v", tc["candidate_policy"])
+	body = captureContractWithPolicy(t, taskModeWork, m.candidatePolicy, "Create app.py.")
+	if got := contractOf(t, body)["candidate_policy"]; got != "strict" {
+		t.Errorf("explicit strict sent candidate_policy=%v, want \"strict\"", got)
+	}
+	// And the request path itself never sends an empty selection: a caller
+	// that set nothing still declares strict.
+	body = captureContractWithPolicy(t, taskModeWork, "", "Create app.py.")
+	if got := contractOf(t, body)["candidate_policy"]; got != "strict" {
+		t.Errorf("an unset selection sent candidate_policy=%v, want \"strict\"", got)
 	}
 }
 
@@ -142,8 +159,8 @@ func TestCandidatePolicyPersistsForTheSessionAndResetsWithANewOne(t *testing.T) 
 		t.Errorf("/candidate-policy did not report the current selection: %q", m.chat[len(m.chat)-1].Body)
 	}
 	m.startNewSession()
-	if m.candidatePolicy != "" {
-		t.Errorf("a new session kept the previous selection %q", m.candidatePolicy)
+	if m.candidatePolicy != candidatePolicyStrict {
+		t.Errorf("a new session selected %q, want strict", m.candidatePolicy)
 	}
 }
 

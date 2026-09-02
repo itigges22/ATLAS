@@ -132,9 +132,12 @@ operator configuration** (`ATLAS_CANDIDATE_POLICY`), in that order, defaulting t
 nothing else, and a structural test asserts it names no service or model type.
 
 In the TUI the user selects it with `/candidate-policy strict|advisory|automatic`,
-a session-wide control shown in the header and reset by a new session; the
-default sends nothing and is read as `strict`. An unrecognised value in a request
-is refused at the boundary. An unrecognised
+a session-wide control shown in the header and reset to strict by a new session.
+The TUI always sends its selection explicitly, strict included: an omitted field
+is the proxy's cue to apply the operator default, so a client that showed strict
+while sending nothing would be running under whatever the server chose. Clients
+that omit the field keep inheriting `ATLAS_CANDIDATE_POLICY`. An unrecognised
+value in a request is refused at the boundary. An unrecognised
 value in the environment falls back to `strict`, because refusing every request
 in a deployment over a typo in a variable is worse than running the behaviour
 every client already has.

@@ -426,9 +426,6 @@ func (m *tuiModel) handleSlash(input string) (consumed bool, cmd tea.Cmd, quit b
 				Body: "/candidate-policy takes one of: strict, advisory, automatic"})
 			return true, nil, false
 		}
-		if value == candidatePolicyStrict {
-			value = "" // the default sends nothing
-		}
 		m.candidatePolicy = value
 		m.chat = append(m.chat, chatMessage{Role: roleSystem, Meta: "policy",
 			Body: candidatePolicyLabel(m.candidatePolicy)})

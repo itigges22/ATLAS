@@ -379,9 +379,11 @@ type taskContract struct {
 	ExpectedOutputs []string `json:"expected_outputs,omitempty"`
 	Verification    []string `json:"verification,omitempty"`
 	// CandidatePolicy is the user's selection of how a V3 candidate may
-	// replace the model's own bytes, in the proxy's typed values. Omitted
-	// when the user selected nothing, which the proxy reads as strict.
-	CandidatePolicy string `json:"candidate_policy,omitempty"`
+	// replace the model's own bytes, in the proxy's typed values. Always
+	// present: an omitted field is the proxy's cue to apply the OPERATOR
+	// default, and a TUI that showed strict while sending nothing would be
+	// running under whatever the server chose. Strict is sent as "strict".
+	CandidatePolicy string `json:"candidate_policy"`
 }
 
 // candidatePolicy is a session-wide control the user operates with
@@ -389,9 +391,10 @@ type taskContract struct {
 // spells them the way the user typed the command, and sends the typed value.
 // Nothing here reads the message: the same sentence goes out under any policy.
 //
-// The default is strict, and the TUI sends nothing for it, so a session that
-// never touched the control is indistinguishable on the wire from one that
-// never had it. The selection resets with a new session.
+// The default is strict, and the TUI sends it explicitly, so the policy the
+// header shows is the policy the proxy applies even where an operator set a
+// different default for clients that omit the field. The selection resets to
+// strict with a new session.
 const (
 	candidatePolicyStrict    = "strict"
 	candidatePolicyAdvisory  = "advisory"
@@ -441,7 +444,8 @@ type demoOpts struct {
 	// traffic must never reach that path by accident.
 	omitTaskContract bool
 	// candidatePolicy is the session's selection, in the proxy's typed value.
-	// Empty sends nothing, which the proxy reads as strict.
+	// An unset selection is sent as strict: owned traffic never leaves the
+	// field to the operator default.
 	candidatePolicy string
 }
 
@@ -468,7 +472,11 @@ func sendChatOpts(ctx context.Context, proxyURL, message, workingDir, mode,
 		if mode == "" {
 			mode = taskModeWork
 		}
-		contract = &taskContract{TaskMode: mode, CandidatePolicy: opts.candidatePolicy}
+		policy := opts.candidatePolicy
+		if policy == "" {
+			policy = candidatePolicyStrict
+		}
+		contract = &taskContract{TaskMode: mode, CandidatePolicy: policy}
 	}
 	body, err := json.Marshal(agentRequest{
 		Message:             message,

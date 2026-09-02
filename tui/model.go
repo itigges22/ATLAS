@@ -144,10 +144,11 @@ type tuiModel struct {
 	// quietly declare later real work to be a question.
 	pendingTaskMode taskMode
 	// candidatePolicy is the session's selection from /candidate-policy, in
-	// the proxy's typed value. Empty is the default, strict, and sends
-	// nothing. Session-wide on purpose -- a person who chose automatic
-	// delivery chose it for the work they are doing, not for one message --
-	// and reset by a new session so the choice never outlives the work.
+	// the proxy's typed value. Strict by default and sent explicitly, so the
+	// header and the request always agree. Session-wide on purpose -- a
+	// person who chose automatic delivery chose it for the work they are
+	// doing, not for one message -- and reset to strict by a new session so
+	// the choice never outlives the work.
 	candidatePolicy string
 
 	// Session persistence. sessionUID is the stable id for the on-disk
@@ -385,6 +386,9 @@ func newTUIModel(proxyURL string) tuiModel {
 	)
 
 	return tuiModel{
+		// Strict from the first frame, and sent as such: the header never shows
+		// a policy the request does not carry.
+		candidatePolicy:     candidatePolicyStrict,
 		proxyURL:            proxyURL,
 		events:              make(chan Envelope, 256),
 		state:               newPipelineState(),
