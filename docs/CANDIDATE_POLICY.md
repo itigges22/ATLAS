@@ -255,6 +255,53 @@ the bytes that were withdrawn. Reporting both as a retained baseline, over the
 hash of whatever ended up on disk, is how the model's own content came to be
 recorded under `candidate_hash`.
 
+## Why an automatic candidate did not land
+
+Separate again, and answered last: once per route entry, at route exit, the
+proxy writes an `automatic_delivery_attribution` record saying what became of
+the automatic question on that entry. It is derived from the decisions the
+live owners already made -- the mode the policy resolver returned, the refusal
+the eligibility owner named, the mint's reason, the delivery outcome, the
+disposition the lifecycle recorded -- and recomputes nothing. No owner reads
+it; with the capture off nothing is built.
+
+The record carries `outcome` (`landed`, `not_landed`, `not_applicable`) and a
+`refusal` from a closed vocabulary (`proxy/automatic_attribution.go`), joined
+to the other records by request, route entry, invocation and candidate
+identity where present, and the policy mode and source. A landed candidate has
+an empty refusal. Under strict or advisory the outcome is `not_applicable`
+with `policy_not_automatic`.
+
+| Refusal | Established by |
+| --- | --- |
+| `policy_not_automatic` | the policy resolver: strict, advisory or the default was in force |
+| `route_not_entered` | analysis-side only: the producer was never consulted, so no entry exists; the `candidate_generation_bypass` record names the predicate |
+| `no_candidate_produced` | the producer returned nothing, or nothing different from the caller's bytes |
+| `v3_unavailable` | the producer was unreachable, or generation is disabled |
+| `v3_timed_out` | the producer did not answer in time |
+| `cancelled` | the request ended first (the route or the cancellation veto observed it) |
+| `route_gate_revoked` | the route's own gate withdrew the candidate: rewrote beyond the edit, swapped language, did not parse, not closure-eligible |
+| `hard_veto` | the veto owner observed a disqualifying fact not named below |
+| `no_selection_identity` | the service named no selected candidate |
+| `selected_hash_mismatch` | the service selected other bytes than arrived, or a grant was spent on bytes it did not name |
+| `candidate_identity_incomplete` | the binding identity could not carry a grant |
+| `no_mutation_scope` | the tool call bounded no mutation |
+| `target_not_grounded` | no declared output and no structured mutation target |
+| `target_mismatch` | the target the grant or delivery was about is not the structured target |
+| `scope_expansion` | the candidate left its mutation boundary or reached an unauthorised path |
+| `stale_baseline` | the target or workspace moved between decision and delivery |
+| `authorization_unavailable` | no closure path, no supporting adapter, an owed prerequisite, an unusable service record |
+| `grant_not_minted` | eligible, and the mint still refused for another reason |
+| `capture_only_suppressed` | an acquisition control took the licence |
+| `delivery_failed` | a grant was spent and the bytes did not land as authorized |
+| `unattributed` | the facts fit no reason or contradict each other; an analysis treats this as a contradiction, never a guess |
+
+Invalid or wrong-language candidates are dropped inside the V3 service before
+the proxy's veto owner sees them, so a live acquisition attributes those as
+`route_gate_revoked` or `no_candidate_produced`; the proxy's hard veto is the
+second line, pinned by the policy owner's own tests and classified in
+validations as defence in depth not exercised live.
+
 ## The decisions
 
 Closed vocabulary. Every value is a statement about what happened, never about

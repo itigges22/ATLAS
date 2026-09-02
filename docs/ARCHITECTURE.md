@@ -324,7 +324,29 @@ different prompt bytes. It affects prompt reproducibility only, not behaviour;
 for exactly this reason.
 
 `SessionWrites` is a separate, older map keyed on the raw model-supplied path;
-`proxy/types.go` documents the aliasing that follows from that.
+`proxy/types.go` documents the aliasing that follows from that. Its readers are
+the write_file overwrite guard's notion of the model's own draft, the active
+debug fast path, the session manifest note, V3 project context, the artifact
+gate's drift check and the edit-tool leniency gates; none of that changes here.
+
+The work contract's verification demand (`decideVerificationDemand`) takes the
+code deliverables it asks about from the ledger, where every mutation tool's
+landing is recorded canonically by `recordLedgerEffect`. The coverage that
+answers it -- which paths a passing run named, and the bytes they held -- is
+computed by `changedPathsForCoverage` in `proxy/guardrails.go`: the session
+writes plus the ledger's canonical code deliverables, so the demand and its
+coverage read one identity. Before that, coverage read only the session-write
+map, which `edit_file` and `structural_edit` never wrote to and no edit tool
+wrote to for a delivered candidate, so every edit task under `task_mode: work`
+ended `verification_demanded_unmet` whatever the model ran. Coverage states
+only that a run named a changed path over its current bytes; completion still
+needs that run, a later mutation still re-arms the demand, and the ledger's own
+validation still settles mutation debt. A cancelled edit reports no mutation
+and the ledger observes nothing for it. `structural_edit` records its
+validation as not run (it performs no check of its own on the bytes it
+splices), so a task whose only mutation is a structural edit ends
+`unresolved_mutation_debt` unless something else validates the file: a known,
+separate limit.
 
 ### Tool-selection bias mitigations
 

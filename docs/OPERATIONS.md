@@ -60,8 +60,14 @@ Containment and startup rules:
 
 ### Reading a capture
 
-One JSON object per line. Two record kinds during the run — a request snapshot
-and one record per live gate evaluation — and a footer written at shutdown.
+One JSON object per line. Two record kinds carry the contract observation — a
+request snapshot and one record per live gate evaluation — plus the
+observe-only candidate records (`shadow_invocation_feasibility`,
+`shadow_route_disposition`, `candidate_policy_decision`,
+`candidate_authorization_decision`, `authorization_grant_event`,
+`shadow_delivery_disposition`, `candidate_mutation_scope`,
+`candidate_generation_bypass`, `automatic_delivery_attribution`), and a footer
+written at shutdown.
 
 An acquisition is **clean** only when all of these hold:
 
