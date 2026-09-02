@@ -423,7 +423,7 @@ whether the observer and its sink can influence policy, and stays false. A schem
 new version with a closed field set and a reader for it — never a redefinition of an existing
 version, and never a parser that shrugs at unknown fields.
 
-Clients: the TUI sends `work` for an ordinary message and `question` for a one-shot `/ask <message>`;
+Clients: the TUI sends `work` for an ordinary message and `question` for a one-shot `/ask <message>`, and sends the session's `candidate_policy` when the user selected one with `/candidate-policy` (default strict, nothing sent);
 the e2e and reliability harnesses send `work`. `expected_outputs` and `verification` are carried and
 validated but **not yet migrated** — deliverable and verification obligations are still derived the
 old way.

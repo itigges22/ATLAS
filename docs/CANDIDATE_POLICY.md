@@ -46,7 +46,10 @@ is everything that was never about evidence:
   attributable, and the candidate instance id separates duplicate bytes and
   hash-prefix collisions;
 - the bytes are non-blank and materially different from the baseline;
-- the canonical target is valid, inside the workspace, and declared;
+- the canonical target is valid, inside the workspace, and grounded: either
+  the client declared it as an expected output, or -- when the client declared
+  no outputs at all -- it is the exact canonical target of the model's own
+  structured mutation call (see "The structured mutation target" below);
 - the structured mutation scope admits these exact bytes;
 - no undeclared path is added or altered, and no protected asset is mutated;
 - workspace, target, route, baseline and candidate identity are all fresh;
@@ -76,6 +79,41 @@ session approval and no candidate confirmation UI: the competition between
 candidates is internal, and asking a person to adjudicate it would be asking
 them to review work they cannot see.
 
+### The structured mutation target
+
+The ordinary interactive request declares no outputs. A person typing into the
+TUI has told the client nothing structured about which files the task requires,
+and the TUI sends none rather than guess them from the prose. Until now that
+left `automatic_v3` with nothing to bind a delivery to, so the selected
+candidate never reached the artifact for exactly the traffic the pipeline
+exists to serve.
+
+What such a request does have, once the model acts, is a structured tool call:
+`write_file` or one of the edit tools, with a canonical path in its parsed
+arguments. That path is the **structured mutation target**. Under
+`automatic_v3`, for a `work` request that declared no outputs, it grounds the
+delivery of the selected candidate to that one path. It comes from the parsed
+call and from nothing else: not the user's prose, not the model's prose, not a
+filename in a message, not a plan or a summary or a Lens output.
+
+It is a narrow thing on purpose:
+
+- it is not an obligation. It never becomes an expected output, never enters
+  completion, and never says a file the user asked for exists;
+- it authorizes no other path, no additional file, and no deletion, move,
+  rename or command; the existing permission flow for dangerous tools is
+  untouched and cannot consult it;
+- declared outputs are never widened by it: a request that named outputs is
+  bound to those outputs on every basis;
+- strict and advisory never use it, and a `question` request can create no
+  mutation authority at all;
+- every hard veto, the one-time grant, the exact-byte comparison, the disk
+  re-read and the settlement apply exactly as they do for a declared target.
+
+The grant records which grounding it used (`declared_output` or
+`structured_mutation_target`), and structural tests pin that only the
+authorization owners read it.
+
 ### The withdrawn `confirm` mode
 
 An earlier draft carried a fourth mode, `confirm`, which would have presented a
@@ -93,7 +131,10 @@ operator configuration** (`ATLAS_CANDIDATE_POLICY`), in that order, defaulting t
 `candidatePolicyOf` reads the validated contract and the process environment and
 nothing else, and a structural test asserts it names no service or model type.
 
-An unrecognised value in a request is refused at the boundary. An unrecognised
+In the TUI the user selects it with `/candidate-policy strict|advisory|automatic`,
+a session-wide control shown in the header and reset by a new session; the
+default sends nothing and is read as `strict`. An unrecognised value in a request
+is refused at the boundary. An unrecognised
 value in the environment falls back to `strict`, because refusing every request
 in a deployment over a typo in a variable is worse than running the behaviour
 every client already has.
