@@ -104,6 +104,11 @@ type authorizationGrant struct {
 	// SelectedCandidateID is what the pipeline picked, recorded so the two
 	// facts stay distinguishable. Selection is not authorization.
 	SelectedCandidateID string
+	// TargetGrounding names what made the target a legitimate place for a
+	// candidate to land: the client's declared output, or the structured
+	// mutation target of the tool call itself. Recorded so a reader can tell
+	// the two apart; consulted by nothing.
+	TargetGrounding string
 	// Basis is WHY this licence exists: a declared floor that trusted evidence
 	// met, or a V3 selection that cleared every safety requirement with no
 	// floor to meet. Recorded on the grant so a later reader never has to
@@ -185,18 +190,43 @@ func mintAuthorizationGrant(ctx *AgentContext, in authorizationInput,
 			return nil, false, "the decision did not authorize"
 		}
 	}
-	// Target knowledge must be contract-declared. A grant over a target the
-	// client never named is the one thing no amount of evidence can fix, and a
-	// request that stated no output knowledge has named nothing.
-	if ctx.TaskContract == nil || !in.OutputKnowledgeDeclared {
-		return nil, false, "output knowledge was not declared"
-	}
+	// The target has to be GROUNDED: something structured, from the client or
+	// from the model's own tool call, has to have named exactly this path. A
+	// grant over a path nothing named is the one thing no amount of evidence
+	// can fix.
+	//
+	// Strict grounds it one way: the client declared the path as an expected
+	// output. automatic_v3 may also ground it in the structured mutation
+	// target -- the canonical path in the parsed arguments of the tool call
+	// this candidate belongs to -- because the ordinary interactive request
+	// declares no outputs and the substitution is for that one attempted
+	// mutation only. Neither grounding is ever read from prose.
+	//
 	// Canonical before the check: obligations hold canonical paths, and an
 	// alias spelling of a declared target is still that target. Resolving
 	// afterwards would let `./solve.py` be refused and `solve.py` accepted.
+	if ctx.TaskContract == nil {
+		return nil, false, "output knowledge was not declared"
+	}
 	target := resolveAgentPath(ctx, in.TargetPath)
-	if !targetIsAuthorized(in.Obligations, target) {
+	grounding := ""
+	switch {
+	case in.OutputKnowledgeDeclared && targetIsAuthorized(in.Obligations, target):
+		grounding = targetGroundingDeclaredOutput
+	case in.OutputKnowledgeDeclared:
+		// The client named outputs and this is not one of them. No tool call
+		// widens a declared set, under any basis.
 		return nil, false, "the target is not declared"
+	case basis == grantBasisAutomaticV3:
+		// No declared outputs: only the model's own structured call can
+		// ground the target, and only for the automatic basis.
+		ok, why := structuredMutationTargetGrounds(ctx, CandidatePolicyAutomaticV3, in.Scope, target)
+		if !ok {
+			return nil, false, why
+		}
+		grounding = targetGroundingStructuredMutationTarget
+	default:
+		return nil, false, "output knowledge was not declared"
 	}
 	// The structured intent of the call this candidate belongs to. A licence
 	// is bounded by the mutation its own tool call defined: the target it
@@ -289,6 +319,7 @@ func mintAuthorizationGrant(ctx *AgentContext, in authorizationInput,
 		EvidenceSetID:       evidenceSetIdentity(in.Evidence),
 		SelectedCandidateID: selectedCandidateID,
 		Basis:               basis,
+		TargetGrounding:     grounding,
 		MutationScopeID:     in.Scope.identity(),
 	}
 

@@ -61,6 +61,10 @@ type deliveryAuthorization struct {
 	// concluded, because the suppression discards the grant and not the answer.
 	CaptureOnly    bool
 	WouldAuthorize bool
+	// TargetGrounding is what grounded the target of the minted grant: the
+	// client's declared output, or the structured mutation target under
+	// automatic_v3. Empty when nothing was minted.
+	TargetGrounding string
 }
 
 // mayDeliver reports whether the candidate may land under the typed answer.
@@ -110,28 +114,44 @@ func authorizeCandidateDelivery(ctx *AgentContext, entry routeEntry, path, code 
 	// The one question that decides ownership, asked of the obligation owner
 	// rather than inferred from how many obligations came back.
 	declared := outputKnowledgeDeclared(ctx)
+	// The second way a request can be this owner's: the user selected
+	// automatic_v3, the client declared no outputs, and the model's own
+	// structured tool call names exactly this target. Read from the contract's
+	// mode and the scope derived from the parsed arguments -- never from what
+	// anyone wrote. Declared outputs are never widened by a call, so the
+	// structured target is consulted only when there are none.
+	structured := false
+	if !declared {
+		structured, _ = structuredMutationTargetGrounds(ctx, automatic.Mode, scope, resolved)
+	}
+	obligations := requestObligations(ctx)
+	// Whether the target has any grounding at all. Decided here, once, and
+	// handed to the automatic eligibility so the policy owner's answer and
+	// the mint's cannot disagree about it.
+	targetGrounded := (declared && targetIsAuthorized(obligations, resolved)) || structured
 	unmet = classifyStructuralUnmet(ctx, resolved, observed, unmet)
 	in := authorizationInput{
-		Obligations:             requestObligations(ctx),
-		TargetPath:              resolved,
-		CandidateHash:           hash,
-		Identity:                asked,
-		Evidence:                evidence,
-		Envelope:                envelope,
-		BaselineWitnessCommand:  witness,
-		Unmet:                   unmet,
-		OutputKnowledgeDeclared: declared,
-		RouteEntry:              entry,
-		Scope:                   scope,
-		CandidateBytes:          code,
+		Obligations:              obligations,
+		TargetPath:               resolved,
+		CandidateHash:            hash,
+		Identity:                 asked,
+		Evidence:                 evidence,
+		Envelope:                 envelope,
+		BaselineWitnessCommand:   witness,
+		Unmet:                    unmet,
+		OutputKnowledgeDeclared:  declared,
+		StructuredTargetGrounded: structured,
+		RouteEntry:               entry,
+		Scope:                    scope,
+		CandidateBytes:           code,
 	}
 	d := decideAuthorization(ctx, in)
 	recordAuthorizationDecision(ctx, in, d)
-
-	// Contractless traffic, and a contract that stated no output knowledge.
-	// There is nothing for a typed answer to be about, and the existing
-	// delivery decision keeps its exact previous behaviour.
-	if !declared {
+	// Contractless traffic, a contract that stated no output knowledge under
+	// strict or advisory, and an automatic request whose tool call named no
+	// usable target: there is nothing for a typed answer to be about, and the
+	// existing delivery decision keeps its exact previous behaviour.
+	if !declared && !structured {
 		return deliveryAuthorization{Typed: false, Decision: d}
 	}
 
@@ -152,6 +172,7 @@ func authorizeCandidateDelivery(ctx *AgentContext, entry routeEntry, path, code 
 			CandidateHash:       hash,
 			Identity:            asked,
 			Scope:               scope,
+			TargetGrounded:      targetGrounded,
 		})
 	if !d.Authorized {
 		if !auth.AutomaticEligible {
@@ -186,6 +207,7 @@ func authorizeCandidateDelivery(ctx *AgentContext, entry routeEntry, path, code 
 		return auth
 	}
 	auth.Grant = g
+	auth.TargetGrounding = g.TargetGrounding
 	return auth
 }
 

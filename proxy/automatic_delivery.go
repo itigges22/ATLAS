@@ -53,6 +53,7 @@ const (
 	automaticNotTheWinner       = "candidate_is_not_the_selected_winner"
 	automaticIdentityIncomplete = "candidate_identity_incomplete"
 	automaticNoScope            = "no_structured_mutation_scope"
+	automaticTargetNotGrounded  = "target_not_declared_or_structured"
 	automaticEligible           = ""
 )
 
@@ -78,6 +79,12 @@ type automaticEligibilityInput struct {
 	Identity V3EvidenceProvenance
 	// Scope is the structured intent of the tool call that produced them.
 	Scope mutationScope
+	// TargetGrounded says the target has a grounding: the client declared it
+	// as an output, or the request selected automatic_v3, declared no outputs,
+	// and the model's own structured call names exactly this path. Decided by
+	// the authorization owner, the only reader of both; a target nobody
+	// grounded gets no automatic delivery however good the candidate looks.
+	TargetGrounded bool
 }
 
 // automaticDeliveryAllowed answers whether an automatic grant may be minted,
@@ -127,6 +134,9 @@ func automaticDeliveryAllowed(in automaticEligibilityInput) (bool, string) {
 	}
 	if !in.Scope.valid() {
 		return false, automaticNoScope
+	}
+	if !in.TargetGrounded {
+		return false, automaticTargetNotGrounded
 	}
 	return true, automaticEligible
 }

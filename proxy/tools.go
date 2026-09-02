@@ -2078,6 +2078,12 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		observed, unmet = append(observed, behavioral...), why
 		stagingMutatedAssets = mutatedAssets
 	}
+	if candidateProposed && evID.InvocationID == "" {
+		// No producer spoke -- a request that declared no outputs owes no
+		// syntax obligation -- but the candidate is still this route entry's
+		// and these exact bytes, and the authorization owner binds to that.
+		evID = proposedCandidateIdentity(ctx, entry, code)
+	}
 	selected := ""
 	if v3Result != nil && v3Result.Evidence != nil {
 		selected = v3Result.Evidence.Identity.CandidateContentHash

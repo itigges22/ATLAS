@@ -178,6 +178,12 @@ type authorizationInput struct {
 	// statement a client can make indistinguishable from silence, and would
 	// hand the candidate to the legacy decision on the strength of it.
 	OutputKnowledgeDeclared bool
+	// StructuredTargetGrounded is the other way this decision owns a request:
+	// automatic_v3 was selected and the structured mutation target of the tool
+	// call names exactly the candidate's target. Set by the delivery owner from
+	// structuredMutationTargetGrounds; read here only to say truthfully that
+	// the answer influences a live decision.
+	StructuredTargetGrounded bool
 	// Scope is the structured intent of the tool call this candidate belongs
 	// to: which target it may touch and what boundary it may not leave. It
 	// narrows and never grants -- a licence is refused without one, and no
@@ -244,13 +250,22 @@ func baselinePreservedBy(o taskObligation, witnessCommand string,
 // identity before obligations, obligations before evidence, evidence before
 // strength. A refusal names the first thing that was wrong, so a reader learns
 // what to fix rather than that something was.
+// influencesLiveDecision is the one derivation of the decision's own weight:
+// it reaches a live delivery when the request declared output knowledge, or
+// when automatic_v3 grounded the target in the model's structured call. The
+// decision and its record both read this, so they cannot disagree, and neither
+// hardcodes an answer.
+func (in authorizationInput) influencesLiveDecision() bool {
+	return in.OutputKnowledgeDeclared || in.StructuredTargetGrounded
+}
+
 func decideAuthorization(ctx *AgentContext, in authorizationInput) AuthorizationDecision {
 	// Whether this answer decides anything is a property of the REQUEST, not
 	// of the answer: a request that STATED what it produces is one this owns,
 	// and a request that stated nothing is not.
 	d := AuthorizationDecision{
 		Reason:                 ReasonUnknown,
-		InfluencesLiveDecision: in.OutputKnowledgeDeclared,
+		InfluencesLiveDecision: in.influencesLiveDecision(),
 	}
 
 	// No stated output knowledge, so there is nothing to authorize on. This is
@@ -520,7 +535,8 @@ func recordAuthorizationDecision(ctx *AgentContext, in authorizationInput,
 		// -- deriving it here from the obligation count would make the record
 		// disagree with the answer it describes, and would call a
 		// verification-only contract owned when the output route is not.
-		"influences_live_decision": in.OutputKnowledgeDeclared,
-		"build_version":            APIVersion,
+		"influences_live_decision":   in.influencesLiveDecision(),
+		"structured_target_grounded": in.StructuredTargetGrounded,
+		"build_version":              APIVersion,
 	})
 }

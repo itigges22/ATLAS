@@ -244,7 +244,8 @@ func TestAmbiguousSelectionIdentityFailsClosed(t *testing.T) {
 		Identity: V3EvidenceProvenance{RequestID: "r", InvocationID: "i",
 			CandidateInstanceID: "c", WorkspaceStateHash: "w",
 			CandidateHash: contentSHA256(routeWinner)},
-		Scope: automaticTestScope(t),
+		Scope:          automaticTestScope(t),
+		TargetGrounded: true,
 	}
 	if ok, _ := automaticDeliveryAllowed(base); !ok {
 		t.Fatal("the complete case is not eligible")
@@ -272,6 +273,8 @@ func TestAmbiguousSelectionIdentityFailsClosed(t *testing.T) {
 			automaticIdentityIncomplete},
 		{"no scope", func(i *automaticEligibilityInput) { i.Scope = mutationScope{} },
 			automaticNoScope},
+		{"target not grounded", func(i *automaticEligibilityInput) { i.TargetGrounded = false },
+			automaticTargetNotGrounded},
 		{"a veto fired", func(i *automaticEligibilityInput) { i.Vetoes = []string{VetoSyntaxOrStructural} },
 			automaticHardVeto},
 		{"not automatic", func(i *automaticEligibilityInput) { i.Mode = CandidatePolicyStrict },

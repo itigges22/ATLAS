@@ -906,12 +906,22 @@ func TestTheDecisionReachesNoLiveWrite(t *testing.T) {
 			t.Errorf("the record hardcodes %s instead of deriving it", hardcoded)
 		}
 	}
-	// Derived from the same field the decision reads, so the record and the
-	// answer it describes cannot disagree.
-	if !strings.Contains(body, `"influences_live_decision": in.OutputKnowledgeDeclared`) {
-		t.Error("the record does not derive its own weight from the request")
+	// Derived once, from the request, and read by both the decision and its
+	// record, so the two cannot disagree. The derivation itself names the two
+	// facts that give a decision weight: declared output knowledge, or a
+	// structured mutation target under automatic_v3.
+	if strings.Count(body, "in.influencesLiveDecision()") != 2 {
+		t.Error("the decision and its record do not both derive their weight from the one derivation")
 	}
-	if !strings.Contains(body, "InfluencesLiveDecision: in.OutputKnowledgeDeclared") {
-		t.Error("the decision does not derive its own weight from the request")
+	i := strings.Index(body, "func (in authorizationInput) influencesLiveDecision() bool {")
+	if i < 0 {
+		t.Fatal("the weight derivation is gone")
+	}
+	derivation := body[i:]
+	derivation = derivation[:strings.Index(derivation, "\n}")]
+	for _, must := range []string{"in.OutputKnowledgeDeclared", "in.StructuredTargetGrounded"} {
+		if !strings.Contains(derivation, must) {
+			t.Errorf("the weight derivation no longer reads %s", must)
+		}
 	}
 }

@@ -83,6 +83,22 @@ func nextInvocationIdentity(ctx *AgentContext, entry routeEntry,
 	}
 }
 
+// proposedCandidateIdentity is the identity of a proposed candidate when no
+// producer minted one: the same binding nextInvocationIdentity makes, for the
+// same route entry and the same bytes, so the two can never name one candidate
+// differently.
+//
+// Identity is not evidence. The syntax producer above mints an identity only
+// alongside a record about a DECLARED obligation, and a request that declared
+// no outputs has none -- which left the ordinary interactive candidate with no
+// identity at all, and an automatic delivery with nothing to bind. The bytes
+// and the route entry exist whether or not anyone declared anything; this
+// names them. It authorizes nothing: an identity with no grounding for its
+// target still gets no grant.
+func proposedCandidateIdentity(ctx *AgentContext, entry routeEntry, code string) candidateEvidenceIdentity {
+	return nextInvocationIdentity(ctx, entry, contentSHA256(code))
+}
+
 // observeDeliveredCandidateSyntax is THE production call path for the
 // proxy-owned syntax producer.
 //

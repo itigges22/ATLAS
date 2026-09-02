@@ -147,6 +147,12 @@ func deliverEditCandidate(ctx *AgentContext, tool, path, relPath,
 		behavioral, why, mutated := observeCandidateVerification(ctx, path, improved, evID)
 		pool, unmet, mutatedAssets = append(pool, behavioral...), why, mutated
 	}
+	if evID.InvocationID == "" {
+		// No producer spoke -- a request that declared no outputs owes no
+		// syntax obligation -- but the candidate is still this route entry's
+		// and these exact bytes, and the authorization owner binds to that.
+		evID = proposedCandidateIdentity(ctx, entry, improved)
+	}
 
 	scopeAdmits, scopeRefusal := false, scopeRefusedNoScope
 	if scopeOK {

@@ -180,6 +180,14 @@ func requestVerificationRequirement(ctx *AgentContext, command string) (Verifica
 // because both derive none.
 //
 // One reader, asking the one owner. Nothing re-derives it from contract fields.
+// requestDeclaresWork reports whether the validated contract declares work.
+// A question declares no mutation and can ground no mutation authority; a
+// request with no contract declared nothing. Read here, in the owner that
+// already reads the validated contract, so no decision elsewhere reads it.
+func requestDeclaresWork(ctx *AgentContext) bool {
+	return ctx != nil && ctx.TaskContract != nil && ctx.TaskContract.TaskMode == TaskModeWork
+}
+
 func outputKnowledgeDeclared(ctx *AgentContext) bool {
 	if ctx == nil || ctx.TaskContract == nil {
 		return false
