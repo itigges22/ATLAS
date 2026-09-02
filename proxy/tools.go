@@ -4133,6 +4133,15 @@ func deleteFileTool() *ToolDef {
 			}
 
 			path := resolveAgentPath(ctx, input.Path)
+			// The approval is spent by this attempt whatever happens next --
+			// a preflight refusal included -- so one answer can never carry
+			// to a later call, and the reference it holds lives exactly as
+			// long as the attempt. `approved` is only ever non-empty when the
+			// user answered this exact call through the permission endpoint.
+			approved, userApproved := takeDeleteApproval(ctx, path)
+			if userApproved {
+				defer approved.release()
+			}
 			info, err := os.Stat(path)
 			if err != nil {
 				return nil, errNoMutation(fmt.Errorf("file not found: %s", input.Path))
@@ -4156,11 +4165,12 @@ func deleteFileTool() *ToolDef {
 			// that window is still possible. What is ruled out is honouring an
 			// approval for bytes that were already different when the user
 			// answered.
-			// The approved route. `approved` is only ever non-empty when the
-			// user answered this exact call through the permission endpoint.
-			approved, userApproved := takeDeleteApproval(ctx, path)
+			// The approved route.
 			if userApproved {
+				// The re-inspection's own reference is needed only for the
+				// comparison and is released with the attempt.
 				now, refusal := inspectDeleteTarget(ctx, rawInput)
+				defer now.release()
 				if refusal != "" || !approved.identityMatches(now) {
 					log.Printf("[delete_file] approval is stale for %s — not deleting", logPath(input.Path))
 					return refusedNoCheck(fmt.Sprintf(

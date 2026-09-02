@@ -353,6 +353,7 @@ func awaitPermission(ctx *AgentContext, toolName, callID string, args json.RawMe
 	select {
 	case d := <-entry.decision:
 		if !d.allow {
+			target.release()
 			return false
 		}
 		if toolName == "delete_file" {
@@ -374,9 +375,11 @@ func awaitPermission(ctx *AgentContext, toolName, callID string, args json.RawMe
 		}
 		return true
 	case <-ctx.Ctx.Done():
+		target.release()
 		return false
 	case <-time.After(permissionTimeout()):
 		log.Printf("[permission] %s timed out for session %q — denying", toolName, ctx.PassID)
+		target.release()
 		return false
 	}
 }
@@ -525,27 +528,47 @@ type deleteTarget struct {
 	SHA256    string // regular files only
 	LinkText  string // symlinks only
 
-	// info is the inspected object itself, compared with os.SameFile. Bytes
-	// are not identity: a file deleted and rewritten with the same contents is
-	// a different object, and an approval for the first must not remove the
-	// second. Kept internal -- inode and device numbers never reach the event,
-	// the model, or the wire.
+	// info is the inspection's own lstat of the path. It supplies the kind
+	// and, at revalidation, the current entry's device and inode for the held
+	// object to be compared against. Bytes are not identity: a file deleted
+	// and rewritten with the same contents is a different object, and an
+	// approval for the first must not remove the second.
 	info os.FileInfo
+	// handle is the held kernel reference to the inspected object, taken at
+	// inspection and kept until whoever owns the approval releases it. It is
+	// what makes the identity a binding rather than two readings of numbers a
+	// filesystem may recycle. Kept internal -- descriptors, inode and device
+	// numbers never reach the event, the model, the logs, or the wire.
+	handle *objectHandle
 }
 
-// identityMatches reports whether two inspections describe the same object in
-// the same state: the same path, the same kind, the same bytes or link text,
-// and -- decisively -- the same filesystem object.
+// release lets go of the held object. Safe on a zero target and safe to call
+// more than once; the handle itself is idempotent.
+func (d deleteTarget) release() { d.handle.release() }
+
+// withoutHandle is the target as a record: what was approved and removed,
+// with no reference left to hold.
+func (d deleteTarget) withoutHandle() deleteTarget { d.handle = nil; return d }
+
+// identityMatches reports whether the object inspected now is the object the
+// user was asked about, in the same state: the object itself, then the same
+// path, kind, bytes or link text, and size.
 //
-// os.SameFile is what makes "same bytes" insufficient. Replacing a file with
-// an identical copy changes the object while leaving every content check
-// happy, and an approval to delete the original must not remove the
-// replacement. Where the platform cannot answer, this fails closed.
+// The object question is answered by the held reference, not by comparing
+// numbers from two inspections. os.SameFile was the previous answer, and it
+// was wrong on ext4: a file removed and rewritten with the same bytes came
+// back with the same inode number, and an approval for the original removed
+// the replacement. The held reference keeps the approved object alive and
+// reads its link count and identity from the object; a replacement cannot
+// pass both. Where no reference is held -- an unsupported platform, a failed
+// pin, or a reference already released -- this refuses rather than guesses.
+//
+// The content, kind, link-text and size checks are unchanged and still catch
+// the in-place changes a held reference does not see: bytes rewritten, a link
+// retargeted, a directory that gained a child (it is no longer empty), a type
+// swapped under the same name.
 func (d deleteTarget) identityMatches(other deleteTarget) bool {
-	if d.info == nil || other.info == nil {
-		return false // no object identity available: refuse rather than guess
-	}
-	if !os.SameFile(d.info, other.info) {
+	if other.info == nil || !d.handle.stillTheObjectAt(other.info) {
 		return false
 	}
 	return d.Canonical == other.Canonical && d.Kind == other.Kind &&
@@ -586,35 +609,49 @@ func inspectDeleteTarget(ctx *AgentContext, args json.RawMessage) (deleteTarget,
 	if err != nil {
 		return deleteTarget{}, fmt.Sprintf("file not found: %s", input.Path)
 	}
-	t := deleteTarget{Canonical: canonical, Rel: input.Path, Size: info.Size(), info: info}
+	// Hold the object before describing it, following nothing, so that what
+	// is described is what is held. A platform that cannot hold it gets no
+	// prompt and no deletion: an approval that could bind to nothing is worse
+	// than no approval.
+	handle, perr := pinObjectFn(canonical)
+	if perr != nil {
+		return deleteTarget{}, "delete_file: " + perr.Error()
+	}
+	t := deleteTarget{Canonical: canonical, Rel: input.Path, Size: info.Size(), info: info, handle: handle}
+	// Every refusal below happens after the reference was taken, so every
+	// refusal lets go of it. The caller owns the reference only on success.
+	refuse := func(msg string) (deleteTarget, string) {
+		t.release()
+		return deleteTarget{}, msg
+	}
 	switch {
 	case info.Mode()&os.ModeSymlink != 0:
 		link, lerr := os.Readlink(canonical)
 		if lerr != nil {
-			return deleteTarget{}, "delete_file: the link could not be read"
+			return refuse("delete_file: the link could not be read")
 		}
 		t.Kind, t.LinkText = deleteTargetSymlink, link
 	case info.IsDir():
 		entries, derr := os.ReadDir(canonical)
 		if derr != nil {
-			return deleteTarget{}, "delete_file: the directory could not be read"
+			return refuse("delete_file: the directory could not be read")
 		}
 		if len(entries) > 0 {
-			return deleteTarget{}, fmt.Sprintf(
+			return refuse(fmt.Sprintf(
 				"directory not empty: %s (%d entries) — delete_file only removes files or empty directories",
-				input.Path, len(entries))
+				input.Path, len(entries)))
 		}
 		t.Kind, t.Size = deleteTargetEmptyDir, 0
 	case info.Mode().IsRegular():
 		sum, size, herr := hashFileIdentity(ctx, canonical)
 		if herr != nil {
-			return deleteTarget{}, "delete_file: the file could not be read"
+			return refuse("delete_file: the file could not be read")
 		}
 		t.Kind, t.SHA256, t.Size = deleteTargetFile, sum, size
 	default:
 		// Devices, sockets, pipes: an approval this cannot honour is worse
 		// than no approval.
-		return deleteTarget{}, "delete_file: unsupported target type"
+		return refuse("delete_file: unsupported target type")
 	}
 	return t, ""
 }
@@ -674,27 +711,59 @@ type approvedDeletion struct {
 }
 
 // grantDeleteApproval records the user's decision against the exact target.
+// The grant owns the target's held reference from here until the tool takes
+// it. A grant that was never taken is released when the next one replaces it
+// and, failing that, when the loop exits (releaseDeleteApproval).
 func grantDeleteApproval(ctx *AgentContext, callID string, t deleteTarget) {
+	if ctx == nil {
+		t.release()
+		return
+	}
+	ctx.mu.Lock()
+	previous := ctx.approvedDelete
+	ctx.approvedDelete = &approvedDeletion{target: t, callID: callID}
+	ctx.lastDeleteCallID = callID
+	ctx.mu.Unlock()
+	if previous != nil {
+		previous.target.release()
+	}
+}
+
+// releaseDeleteApproval lets go of an approval no tool ever consumed. It runs
+// at the loop's exit, so a turn that was approved and then ended -- cancelled,
+// timed out, stopped, or finished without the call being executed -- leaves
+// no reference behind. It grants nothing and records nothing.
+func releaseDeleteApproval(ctx *AgentContext) {
 	if ctx == nil {
 		return
 	}
 	ctx.mu.Lock()
-	defer ctx.mu.Unlock()
-	ctx.approvedDelete = &approvedDeletion{target: t, callID: callID}
-	ctx.lastDeleteCallID = callID
+	held := ctx.approvedDelete
+	ctx.approvedDelete = nil
+	ctx.mu.Unlock()
+	if held != nil {
+		held.target.release()
+	}
 }
 
 // takeDeleteApproval consumes the grant for a canonical path. It returns the
-// approved target and whether one was held; either way the grant is gone.
+// approved target and whether one was held; either way the grant is gone. On
+// success the caller owns the target's held reference and must release it
+// when its attempt is over; a grant for a different path is released here,
+// because it is spent either way.
 func takeDeleteApproval(ctx *AgentContext, canonical string) (deleteTarget, bool) {
 	if ctx == nil {
 		return deleteTarget{}, false
 	}
 	ctx.mu.Lock()
-	defer ctx.mu.Unlock()
 	held := ctx.approvedDelete
 	ctx.approvedDelete = nil
-	if held == nil || held.target.Canonical != canonical {
+	ctx.mu.Unlock()
+	if held == nil {
+		return deleteTarget{}, false
+	}
+	if held.target.Canonical != canonical {
+		held.target.release()
 		return deleteTarget{}, false
 	}
 	return held.target, true
@@ -770,7 +839,7 @@ func noteDeletionAttempt(ctx *AgentContext, callID string, t deleteTarget) {
 		ctx.deletionAttempts = map[string]*deletionAttempt{}
 	}
 	ctx.deletionAttempts[t.Canonical] = &deletionAttempt{
-		CallID: callID, Target: t, Removed: true,
+		CallID: callID, Target: t.withoutHandle(), Removed: true,
 	}
 }
 

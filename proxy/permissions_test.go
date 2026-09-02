@@ -879,13 +879,28 @@ func TestDeleteConfirmationStructure(t *testing.T) {
 		}
 	}
 
-	// Revalidation lives next to the removal, not somewhere hopeful.
+	// Revalidation lives next to the removal, not somewhere hopeful. The
+	// revalidation is the identity comparison; the take happens earlier, on
+	// purpose, so that every attempt spends the approval (below).
 	tools := read("tools.go")
-	take := strings.Index(tools, "takeDeleteApproval(ctx, path)")
+	reval := strings.Index(tools, "approved.identityMatches(now)")
 	rm := strings.Index(tools, "if rmErr := os.Remove(path)")
-	if take < 0 || rm < 0 || take > rm || rm-take > 1600 {
-		t.Errorf("the identity revalidation is not adjacent to the removal (take=%d rm=%d)",
-			take, rm)
+	if reval < 0 || rm < 0 || reval > rm || rm-reval > 1600 {
+		t.Errorf("the identity revalidation is not adjacent to the removal (revalidation=%d rm=%d)",
+			reval, rm)
+	}
+	// The approval is spent by the attempt before any preflight can refuse,
+	// so a refusal cannot leave a grant -- and the object reference it holds
+	// -- waiting for a later call.
+	tool := strings.Index(tools, "func deleteFileTool()")
+	if tool < 0 {
+		t.Fatal("deleteFileTool moved; this guard is stale")
+	}
+	body := tools[tool:]
+	take := strings.Index(body, "takeDeleteApproval(ctx, path)")
+	preflight := strings.Index(body, "info, err := os.Stat(path)")
+	if take < 0 || preflight < 0 || take > preflight {
+		t.Errorf("the approval is taken after the preflight (take=%d preflight=%d)", take, preflight)
 	}
 }
 

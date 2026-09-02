@@ -630,6 +630,9 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 			truncateStr(userMessage, 80)),
 	}))
 	defer func() {
+		// A deletion approval the turn never consumed holds a reference to
+		// the object it was about. The turn is over; let it go.
+		releaseDeleteApproval(ctx)
 		// Close the "agent" stage so the pipeline pane stops showing it
 		// running. Without this, the TUI's pipelineState.apply only ever
 		// sees EvtDone (overall finish) and the agent row is stuck in
