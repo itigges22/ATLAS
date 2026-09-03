@@ -715,6 +715,27 @@ that pair and registers it with its relay, ordinary deployments set neither.
 Attribution only: no scoring, selection, authorization or completion logic
 reads these headers, and no candidate bytes or user content enter them.
 
+**The proxy's direct Lens calls carry their own invocation.** The proxy talks
+to the Lens directly on two model-bound paths, per-write scoring
+(`/internal/lens/score-per-step`) and pattern context
+(`/internal/patterns/context`); neither is a V3 candidate invocation. One owner,
+`proxy/lens_identity.go`, builds those requests and stamps the bound
+`X-ATLAS-Request-ID` together with a proxy-owned Lens invocation derived from
+that request id alone: `proxy-lens:` followed by the first 32 hex digits of
+`sha256("atlas/proxy-lens-invocation/v1\n" + request_id)`. It is deterministic
+(a relay can register the pair before any model-bound traffic), the same for
+every direct Lens call within one request, distinct across requests and from
+V3's UUID invocations, and derived from nothing but the typed request id: never
+from prose, paths, candidate bytes, tool arguments or model output, and never
+settable by the model. It travels in the existing `X-ATLAS-V3-Invocation-ID`
+channel; the header name is historical and the value is a general model-bound
+invocation identity. It is a scope label, not a credential: nothing reads it to
+authorise a mutation, permission, candidate or completion, and it never appears
+in SSE events, tool results, prompts or logs. A request id that is absent or
+outside the closed format (`[A-Za-z0-9._:-]{1,128}`) derives no invocation. The
+closed specification and vectors are in
+`proxy/testdata/lens_invocation_vectors.json`.
+
 Every current Lens bundle also contains `model_identity.json`. The service
 requires its model name to match the served-model id reported by
 llama-server's `/v1/models` (with `ATLAS_MODEL_NAME` as the fallback when the
