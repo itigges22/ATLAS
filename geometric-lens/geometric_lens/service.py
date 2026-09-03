@@ -72,10 +72,8 @@ def _probe_served_model() -> str:
     _served_model_id = ""
     base = os.environ.get("LLAMA_URL", "http://llama-server:8080").rstrip("/")
     try:
-        import json as _json
-        from urllib.request import urlopen
-        with urlopen(f"{base}/v1/models", timeout=2.0) as resp:
-            data = _json.loads(resp.read())
+        from geometric_lens.model_transport import model_request
+        data = model_request(f"{base}/v1/models", timeout=2.0)
         models = data.get("data", []) if isinstance(data, dict) else []
         if models and models[0].get("id"):
             _served_model_id = str(models[0]["id"])

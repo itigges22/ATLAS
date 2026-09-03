@@ -1,13 +1,12 @@
 """Extract embeddings from llama-server's /embedding endpoint."""
 
 import base64
-import json
 import logging
 import math
 import os
 import struct
 from typing import Dict, List, Optional, Tuple
-from urllib.request import Request, urlopen
+from .model_transport import model_request
 
 logger = logging.getLogger(__name__)
 
@@ -128,10 +127,9 @@ def _post_embedding(text: str, layers: Optional[List[int]] = None,
         body["layers"] = layers
     if embd_normalize is not None:
         body["embd_normalize"] = embd_normalize
-    payload = json.dumps(body).encode()
-    req = Request(url, data=payload, headers={"Content-Type": "application/json"})
-    with urlopen(req, timeout=timeout) as resp:
-        data = json.loads(resp.read())
+    # One transport for every model-bound call: auth and the bound request /
+    # invocation identity travel with the embedding request (attribution only).
+    data = model_request(url, body, timeout=timeout)
     if not isinstance(data, list) or not data:
         raise ValueError(f"unexpected /embedding response shape: {type(data).__name__}")
     return data[0]

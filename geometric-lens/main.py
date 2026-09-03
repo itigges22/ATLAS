@@ -15,7 +15,8 @@ from pipeline import (
     retrieve_cached_patterns, record_pattern_access,
     write_pattern_async, record_pattern_outcome,
 )
-from geometric_lens.auth_token import auth_headers as _svc_auth_headers
+from geometric_lens.model_transport import (model_headers as _model_headers,
+                                            startup_identity as _startup_identity)
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +63,7 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 from geometric_lens.structured_log import (install as _install_logging,
-                                            set_request_id as _set_rid)
+                                            bind_identity as _bind_identity)
 _install_logging("geometric-lens")
 logger = logging.getLogger(__name__)
 
@@ -249,7 +250,7 @@ def _db_state() -> Dict[str, Any]:
 def _llama_state() -> Dict[str, Any]:
     url = config.llama.base_url.rstrip("/") + "/health"
     try:
-        with httpx.Client(timeout=2.0, headers=_svc_auth_headers()) as client:
+        with httpx.Client(timeout=2.0, headers=_model_headers()) as client:
             r = client.get(url)
         return {"reachable": r.status_code == 200, "status_code": r.status_code}
     except Exception as e:
@@ -274,8 +275,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to load seed patterns: {e}")
 
-    # Boot-time C(x)/G(x) self-test. Records state; never raises.
-    _run_lens_self_test()
+    # Boot-time C(x)/G(x) self-test. Records state; never raises. Startup work
+    # carries the declared startup identity when one is configured (attribution
+    # only), and none otherwise.
+    with _startup_identity():
+        _run_lens_self_test()
     if _BOOT_STATE["lens_enabled"] and not _BOOT_STATE["self_test_pass"]:
         logger.error(
             "Geometric Lens enabled but self-test FAILED: %s. /ready will return 503.",
@@ -325,11 +329,20 @@ async def _require_service_token(request, call_next):
 # set/echoed even on requests the auth middleware rejects with 401.
 @app.middleware("http")
 async def _correlation_id(request, call_next):
-    # Adopt the caller's correlation ID (or none); echo it back so the
-    # whole turn shares one id across services.
+    # Adopt the caller's correlation ID and V3 invocation ID (or none); echo
+    # the correlation ID back so the whole turn shares one id across services.
+    # Both are bound on the ContextVars every ATLAS service uses, so every
+    # model-bound call this request makes (geometric_lens.model_transport)
+    # carries the same pair the caller supplied, and nothing else. They are
+    # cleared when the request ends, whether it returned or raised, so no
+    # later work in this context can inherit them.
     rid = request.headers.get("x-atlas-request-id", "")
-    _set_rid(rid)
-    response = await call_next(request)
+    inv = request.headers.get("x-atlas-v3-invocation-id", "")
+    _bind_identity(rid, inv)
+    try:
+        response = await call_next(request)
+    finally:
+        _bind_identity("", "")
     if rid:
         response.headers["X-ATLAS-Request-ID"] = rid
     return response
@@ -405,7 +418,8 @@ def ready():
             and _BOOT_STATE.get("self_test_retryable")
             and llama_st["reachable"]):
         logger.info("llama-server is reachable now — re-running the lens self-test")
-        _run_lens_self_test()
+        with _startup_identity():
+            _run_lens_self_test()
 
     lens_ok = (not lens_required) or _BOOT_STATE["self_test_pass"]
 
