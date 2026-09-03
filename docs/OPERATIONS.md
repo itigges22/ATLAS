@@ -103,7 +103,12 @@ analysed. In particular:
 - **`request_id` is a join key only.** It is the existing
   `X-ATLAS-Request-ID`, which a client may supply, so it correlates records
   within one capture and carries no authority. It is not a session id, not a
-  task id, and it does not establish who sent anything.
+  task id, and it does not establish who sent anything. The same id, with
+  the `X-ATLAS-V3-Invocation-ID` V3 mints per generation, travels on V3's
+  calls to the Lens and on the Lens's own embedding and identity-probe calls
+  to the model server, so an embedding request can be joined to the exact
+  request and invocation it served; an acquisition relay may require that
+  pair on embedding traffic and refuse calls without it.
 - **Hashes are identities, not secrets.** Paths and verification commands are
   stored as unsalted SHA-256, truncated to 16 hex characters; the user message
   is stored as a full unsalted SHA-256. They exist so two records naming the

@@ -698,6 +698,23 @@ verdict thresholds likewise come from `gx_thresholds.json`. Without either
 calibration, normalized decisions stay neutral/uncalibrated rather than
 borrowing the reference artifact's scale.
 
+**Attribution on model-bound calls.** Every request the Lens makes to the
+model server (`/embedding`, the `/v1/models` identity probe) goes through one
+transport, `geometric_lens/model_transport.py`, which forwards the two
+correlation headers the rest of ATLAS already uses: `X-ATLAS-Request-ID` and
+`X-ATLAS-V3-Invocation-ID`. Their values come only from the identity the Lens
+middleware bound for the current request (the same ContextVars every ATLAS
+Python service uses); V3 sends both on its scoring calls. With no bound
+identity the headers are absent, a partial pair stays partial, and the
+binding is cleared when the request ends, so concurrent requests and
+background work cannot exchange or inherit identities. Startup and readiness
+work (the boot self-test, a `/ready` re-run) carries an identity only when
+`ATLAS_LENS_STARTUP_REQUEST_ID` and `ATLAS_LENS_STARTUP_INVOCATION_ID` are
+both set; an acquisition that requires attributed embedding traffic declares
+that pair and registers it with its relay, ordinary deployments set neither.
+Attribution only: no scoring, selection, authorization or completion logic
+reads these headers, and no candidate bytes or user content enter them.
+
 Every current Lens bundle also contains `model_identity.json`. The service
 requires its model name to match the served-model id reported by
 llama-server's `/v1/models` (with `ATLAS_MODEL_NAME` as the fallback when the
