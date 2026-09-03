@@ -31,7 +31,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -131,12 +130,10 @@ func scoreContentForAgent(ctx context.Context, lensURL, content string) (lensPer
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, "POST",
-		lensURL+"/internal/lens/score-per-step", bytes.NewReader(body))
+	req, err := newLensRequest(reqCtx, "POST", lensURL+"/internal/lens/score-per-step", body)
 	if err != nil {
 		return zero, false
 	}
-	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		log.Printf("[agent-lens] score request failed: %v", err)

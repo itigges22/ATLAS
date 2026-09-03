@@ -566,12 +566,10 @@ func fetchPatternContext(ctx *AgentContext, userMessage string) (string, []strin
 	}
 	reqCtx, cancel := context.WithTimeout(ctx.Ctx, 2*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, "POST",
-		ctx.LensURL+"/internal/patterns/context", bytes.NewReader(body))
+	req, err := newLensRequest(reqCtx, "POST", ctx.LensURL+"/internal/patterns/context", body)
 	if err != nil {
 		return "", nil
 	}
-	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", nil
