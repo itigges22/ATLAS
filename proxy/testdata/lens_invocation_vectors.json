@@ -15,14 +15,14 @@
       "note": "minted proxy request id"
     },
     {
-      "request_id": "glcsd-s-markdown_toc-r2",
-      "invocation_id": "proxy-lens:f1fea6847814e328f384e9c2ef8ba64a",
-      "note": "acquisition case id"
+      "request_id": "req-9e7d1c4b2a6f0358",
+      "invocation_id": "proxy-lens:7cdaec4b83ae19166a3d9bdfbc13a3eb",
+      "note": "a second client-supplied id in the minted shape"
     },
     {
-      "request_id": "sa-connectivity-probe",
-      "invocation_id": "proxy-lens:5fff951d65f8da13e9263eb34c9a5a2c",
-      "note": "connectivity probe id"
+      "request_id": "svc-probe.0a1b:2c3d",
+      "invocation_id": "proxy-lens:b9ae65e471626a626e34ac34a803b725",
+      "note": "an opaque id exercising the dot, colon and hyphen of the closed alphabet"
     },
     {
       "request_id": "a",

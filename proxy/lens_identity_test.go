@@ -76,6 +76,52 @@ func TestLensInvocationVectorsReproduce(t *testing.T) {
 	}
 }
 
+// The committed vectors are identity test data and nothing else: no diagnostic
+// or benchmark case id, no task-family name, no holdout identifier, no
+// experiment prefix. The rule is closed and deterministic: every request id with
+// an identity has one of the opaque shapes below, no id or note carries an
+// underscore (family and case names are snake_case), and no id starts with an
+// acquisition prefix. Vectors that must derive no identity are listed by value.
+var (
+	vectorOpaqueShape     = regexp.MustCompile(`^(req-[0-9a-f]{16}|svc-[a-z]+\.[0-9a-f]{4}:[0-9a-f]{4}|proxy-lens:[0-9a-f]+|a|A{128})$`)
+	vectorMalformedByRule = map[string]bool{"": true, "bad id": true, "req\n1": true, "id/with/slash": true, strings.Repeat("A", 129): true}
+	vectorForbiddenPrefix = []string{"glcsd-", "acdmv-", "sa-", "plens-", "diag-", "s3b-", "stage-"}
+)
+
+func TestVectorsCarryNoExperimentIdentity(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "lens_invocation_vectors.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var spec struct {
+		Vectors []struct {
+			RequestID    string  `json:"request_id"`
+			InvocationID *string `json:"invocation_id"`
+			Note         string  `json:"note"`
+		} `json:"vectors"`
+	}
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range spec.Vectors {
+		if strings.Contains(v.RequestID, "_") || strings.Contains(v.Note, "_") {
+			t.Errorf("%q (%q): underscore; family and case names are snake_case and never belong in vectors", v.RequestID, v.Note)
+		}
+		for _, p := range vectorForbiddenPrefix {
+			if strings.HasPrefix(v.RequestID, p) {
+				t.Errorf("%q: acquisition prefix %q", v.RequestID, p)
+			}
+		}
+		if v.InvocationID != nil {
+			if !vectorOpaqueShape.MatchString(v.RequestID) {
+				t.Errorf("%q: not one of the opaque vector shapes", v.RequestID)
+			}
+		} else if !vectorMalformedByRule[v.RequestID] {
+			t.Errorf("%q: a no-identity vector must be one of the listed malformed values", v.RequestID)
+		}
+	}
+}
+
 func TestLensInvocationIsDeterministicDistinctBoundedAndTyped(t *testing.T) {
 	seen := map[string]string{}
 	for i := 0; i < 2000; i++ {
