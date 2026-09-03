@@ -102,16 +102,21 @@ class RequestIdentityMissing(Exception):
 
 def _service_headers(rid: str = "", invocation_id: str = "") -> dict:
     """Headers for outbound service-to-service calls: forwards the
-    current request's correlation ID so lens/sandbox/llama log records
-    join the same trace. Pass rid explicitly from background threads —
-    a new thread doesn't inherit the request's ContextVar."""
+    current request's correlation ID and V3 invocation ID so lens/sandbox/
+    llama records join the same trace, and so a service that calls the
+    model on this request's behalf (the Lens embedding a candidate) can
+    forward the same pair. Both fall back to the request's ContextVars
+    (structured_log), which the handler binds; pass them explicitly from
+    background threads, which inherit neither. Attribution only: nothing
+    downstream decides on these headers."""
     headers = {"Content-Type": "application/json"}
-    if not rid:
+    if not rid or not invocation_id:
         try:
-            from structured_log import get_request_id
-            rid = get_request_id()
+            from structured_log import get_invocation_id, get_request_id
+            rid = rid or get_request_id()
+            invocation_id = invocation_id or get_invocation_id()
         except ImportError:
-            rid = ""
+            pass
     if rid:
         headers[REQUEST_ID_HEADER] = rid
     if invocation_id:
