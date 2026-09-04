@@ -485,6 +485,20 @@ probes from `scripts/code_quality.py`.
 - Nine real `.env` keys were reported as typos by `atlas config validate`.
 
 
+### CodeQL now scans the TypeScript client
+
+- `javascript-typescript` joins the CodeQL language matrix. The VS Code
+  extension shipped ~5,100 lines of TS/JS that no scanner looked at, so the
+  next client lands on a fully covered tree. The extractor needs no build
+  step, and both Go steps already carry `if: matrix.language == 'go'`.
+- The webview's CSP nonce came from `Math.random()` (the shape every VS Code
+  webview sample uses) and is now `randomBytes(16)` — `js/insecure-randomness`
+  is in the `security-and-quality` pack, and a security token has no business
+  coming from a non-cryptographic PRNG. Not a live hole: `renderHtml`
+  interpolates nothing untrusted and `media/chat.js` writes through
+  `textContent`, so there was no injection point a guessed nonce could unlock.
+
+
 ### Simplification campaign (2026-07-29 → 2026-08)
 
 One component-by-component pass over the whole tree — merge the fragments,
