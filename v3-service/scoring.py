@@ -326,10 +326,13 @@ class LensEnergy(tuple):
     None for a scored candidate."""
 
     failure: Optional[Dict[str, Any]] = None
+    token_assertion: Optional[Dict[str, int]] = None
 
-    def __new__(cls, energy, normalized, calibrated, failure=None):
+    def __new__(cls, energy, normalized, calibrated, failure=None,
+                token_assertion=None):
         self = super().__new__(cls, (energy, normalized, calibrated))
         self.failure = failure
+        self.token_assertion = token_assertion
         return self
 
 
@@ -343,7 +346,7 @@ def score_candidate(code: str) -> Tuple[Optional[float], Optional[float], bool]:
     """
     d = score_candidate_combined(code)
     return LensEnergy(d["cx_energy"], d["cx_normalized"], d["cx_calibrated"],
-                      d.get("failure"))
+                      d.get("failure"), d.get("token_assertion"))
 
 
 # --- Task-type classifier (PC-022) -------------------------------------------

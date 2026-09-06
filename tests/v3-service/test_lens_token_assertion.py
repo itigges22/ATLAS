@@ -10,6 +10,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "v3-service"))
 
 import scoring  # noqa: E402
+import pipeline  # noqa: E402
 
 
 class Response(io.BytesIO):
@@ -53,6 +54,34 @@ def test_same_model_tokenizer_runs_before_lens_and_records_margin(monkeypatch):
     assert out["token_assertion"] == {
         "input_tokens": 1800, "capacity_tokens": 2112,
         "margin_tokens": 312, "max_input_tokens": 1800}
+    energy = scoring.score_candidate("candidate")
+    assert energy.token_assertion["input_tokens"] == 1800
+
+
+def test_candidate_evidence_preserves_both_pre_score_assertions(monkeypatch):
+    _bind(monkeypatch)
+
+    def fake(req, timeout=None):
+        if req.full_url.endswith("/tokenize"):
+            return Response(json.dumps({"tokens": [1, 2, 3]}).encode())
+        if req.full_url.endswith("/internal/lens/gx-score"):
+            return Response(json.dumps(_enabled_score()).encode())
+        if req.full_url.endswith("/internal/lens/score-per-step"):
+            return Response(json.dumps({
+                "enabled": True, "scored": True, "gx_available": True,
+                "n_tokens": 3, "latency_ms": 1,
+                "thresholds": {"off_rails": 0.3, "low": 0.4, "severe": 0.2},
+                "aggregate": {"first_off_rails_idx": -1, "gx_score_min": 0.6,
+                              "gx_score_mean": 0.7, "cx_norm_max": 0.4,
+                              "cx_norm_mean": 0.3},
+            }).encode())
+        raise AssertionError(req.full_url)
+
+    monkeypatch.setattr(scoring.urllib.request, "urlopen", fake)
+    view = pipeline._lens_view("candidate")
+    assert view["token_assertion"]["input_tokens"] == 3
+    assert view["per_step_token_assertion"]["input_tokens"] == 3
+    assert view["lens_failure"] is None
 
 
 def test_over_bound_is_typed_unscored_without_contacting_lens(monkeypatch):

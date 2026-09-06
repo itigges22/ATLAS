@@ -672,9 +672,11 @@ def _lens_view(code: str) -> Dict[str, Any]:
     scored = scoring.score_candidate(code)
     energy, energy_norm, energy_calibrated = scored
     failure = getattr(scored, "failure", None)
+    token_assertion = getattr(scored, "token_assertion", None)
     per_step = scoring.score_candidate_per_step(code)  # PC-207
     per_step = dict(per_step) if isinstance(per_step, dict) else {}
     per_step_failure = per_step.pop("failure", None)
+    per_step_token_assertion = per_step.pop("token_assertion", None)
     if per_step_failure:
         per_step = {}
     if energy is None:
@@ -685,6 +687,8 @@ def _lens_view(code: str) -> Dict[str, Any]:
         failure = {**per_step_failure, "path": "per_step"}
     return {"energy": energy, "energy_norm": energy_norm,
             "energy_calibrated": bool(energy_calibrated),
+            "token_assertion": token_assertion,
+            "per_step_token_assertion": per_step_token_assertion,
             "per_step": per_step, "lens_failure": failure}
 
 
@@ -731,6 +735,8 @@ def _capture_pool_member(capture: "_PoolCapture", candidate, probe_code: str) ->
         lens={"energy": candidate.get("energy"),
               "energy_norm": candidate.get("energy_norm"),
               "energy_calibrated": candidate.get("energy_calibrated"),
+              "token_assertion": candidate.get("token_assertion"),
+              "per_step_token_assertion": candidate.get("per_step_token_assertion"),
               "per_step": candidate.get("per_step"),
               "failure": candidate.get("lens_failure")})
 
