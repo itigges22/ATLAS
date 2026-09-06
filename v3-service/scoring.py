@@ -3,6 +3,7 @@ scoring, task-type classification, language-aware smoke checks, build-command
 verification, and the interactive-task lint."""
 
 import json
+import os
 import urllib.error
 import urllib.request
 from pathlib import PurePath
@@ -27,6 +28,24 @@ from stages.candidate_selection import NONFINITE_SCORE, finite_score
 
 LENS_ERROR = "lens_error"
 LENS_UNREACHABLE = "lens_unreachable"
+TOKEN_ASSERTION_ERROR = "token_assertion_error"
+TOKEN_CAPACITY = "embed_capacity"
+
+SCORING_CAPACITY_ENV = "ATLAS_LENS_SCORING_CAPACITY_TOKENS"
+SCORING_MARGIN_ENV = "ATLAS_LENS_SCORING_MARGIN_TOKENS"
+
+
+class TokenCapacityExceeded(RuntimeError):
+    def __init__(self, input_tokens: int, capacity_tokens: int,
+                 margin_tokens: int, max_input_tokens: int):
+        self.input_tokens = input_tokens
+        self.capacity_tokens = capacity_tokens
+        self.margin_tokens = margin_tokens
+        self.max_input_tokens = max_input_tokens
+        super().__init__(
+            f"candidate has {input_tokens} tokens; diagnostic scoring bound is "
+            f"{max_input_tokens} ({capacity_tokens} qualified minus {margin_tokens} margin)"
+        )
 
 
 def _lens_failure(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -73,6 +92,73 @@ def describe_lens_failure(failure: Dict[str, Any]) -> str:
     return f"{failure.get('kind')}: {failure.get('detail') or ''}".rstrip(": ")
 
 
+def _positive_env(name: str) -> Optional[int]:
+    raw = os.environ.get(name)
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a positive integer") from exc
+    if value <= 0 or str(value) != raw.strip():
+        raise ValueError(f"{name} must be a canonical positive integer")
+    return value
+
+
+def candidate_token_assertion(code: str) -> Optional[Dict[str, int]]:
+    """Count candidate bytes with the serving model's tokenizer before Lens scoring.
+
+    Ordinary deployments leave both variables unset and keep the existing one-call
+    scoring path. A frozen diagnostic sets both. Its declared safety margin is
+    subtracted from the independently qualified embedding capacity; malformed or
+    incomplete configuration fails closed. The tokenizer request uses the same
+    model endpoint and request/invocation identity as generation and Lens traffic.
+    """
+    capacity_raw = os.environ.get(SCORING_CAPACITY_ENV)
+    margin_raw = os.environ.get(SCORING_MARGIN_ENV)
+    if capacity_raw is None and margin_raw is None:
+        return None
+    if capacity_raw is None or margin_raw is None:
+        raise ValueError(f"{SCORING_CAPACITY_ENV} and {SCORING_MARGIN_ENV} must be set together")
+    capacity = _positive_env(SCORING_CAPACITY_ENV)
+    margin = _positive_env(SCORING_MARGIN_ENV)
+    assert capacity is not None and margin is not None
+    if margin >= capacity:
+        raise ValueError("Lens scoring margin must be smaller than qualified capacity")
+
+    body = json.dumps({"content": code, "add_special": True}).encode()
+    req = urllib.request.Request(
+        f"{adapters.INFERENCE_URL}/tokenize",
+        data=body,
+        headers=adapters._service_headers(),
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = json.loads(resp.read())
+    tokens = data.get("tokens") if isinstance(data, dict) else None
+    if not isinstance(tokens, list) or any(isinstance(t, bool) or not isinstance(t, int) for t in tokens):
+        raise ValueError("model tokenizer returned a malformed token list")
+    count = len(tokens)
+    maximum = capacity - margin
+    if count > maximum:
+        raise TokenCapacityExceeded(count, capacity, margin, maximum)
+    return {"input_tokens": count, "capacity_tokens": capacity,
+            "margin_tokens": margin, "max_input_tokens": maximum}
+
+
+def _token_assertion_failure(exc: BaseException) -> Dict[str, Any]:
+    if isinstance(exc, TokenCapacityExceeded):
+        return {"kind": TOKEN_CAPACITY,
+                "input_tokens": exc.input_tokens,
+                "capacity_tokens": exc.capacity_tokens,
+                "margin_tokens": exc.margin_tokens,
+                "max_input_tokens": exc.max_input_tokens,
+                "detail": str(exc)[:200], "stage": "pre_lens_token_assertion"}
+    failure = _failure_from_exception(exc)
+    return {"kind": TOKEN_ASSERTION_ERROR,
+            "detail": failure.get("detail") or type(exc).__name__,
+            "stage": "pre_lens_token_assertion"}
+
+
 def score_candidate_per_step(code: str) -> dict:
     """PC-207 wiring: per-step C(x)+G(x) scoring of a candidate.
 
@@ -90,6 +176,12 @@ def score_candidate_per_step(code: str) -> dict:
     repetition loop would have been visible at first_off_rails_idx<5).
     """
     try:
+        try:
+            token_assertion = candidate_token_assertion(code)
+        except Exception as exc:
+            failure = _token_assertion_failure(exc)
+            print(f"  [lens] per-step unscored ({describe_lens_failure(failure)})", flush=True)
+            return {"failure": failure}
         body = json.dumps({"text": code}).encode()
         req = urllib.request.Request(
             f"{adapters.LENS_URL}/internal/lens/score-per-step",
@@ -132,6 +224,8 @@ def score_candidate_per_step(code: str) -> dict:
             "latency_ms":          float(data.get("latency_ms", 0.0)),
             "thresholds":          thresholds,
         }
+        if token_assertion is not None:
+            result["token_assertion"] = token_assertion
         print(
             f"  [lens] candidate scored: n_tok={result['n_tokens']} "
             f"gx_min={result['gx_score_min']:.3f} gx_mean={result['gx_score_mean']:.3f} "
@@ -186,6 +280,10 @@ def score_candidate_combined(code: str) -> Dict[str, Any]:
     (symptom: C(x)=0.00 / gx=0.50 sentinel pair).
     """
     try:
+        try:
+            token_assertion = candidate_token_assertion(code)
+        except Exception as exc:
+            return _unscored(_token_assertion_failure(exc))
         body = json.dumps({"text": code}).encode()
         req = urllib.request.Request(
             f"{adapters.LENS_URL}/internal/lens/gx-score",
@@ -207,7 +305,7 @@ def score_candidate_combined(code: str) -> Dict[str, Any]:
                                  default=0.5)
         if failure is not None:
             return _unscored(failure)
-        return {
+        result = {
             "cx_energy": finite_score(data["cx_energy"]),
             "cx_normalized": finite_score(data.get("cx_normalized", 0.5)),
             "cx_calibrated": bool(data.get("cx_calibrated", False)),
@@ -215,6 +313,9 @@ def score_candidate_combined(code: str) -> Dict[str, Any]:
             "gx_available": bool(data.get("gx_available", False)),
             "verdict": data.get("verdict", "unavailable"),
         }
+        if token_assertion is not None:
+            result["token_assertion"] = token_assertion
+        return result
     except Exception as e:
         return _unscored(_failure_from_exception(e))
 
