@@ -2124,6 +2124,7 @@ class V3PipelineService:
             accepted=probe_passed, record=probe_result, phase="probe",
             lens={"energy": probe_energy_raw, "energy_norm": probe_energy_norm,
                   "energy_calibrated": probe_cx_calibrated,
+                  "token_assertion": probe_scores.get("token_assertion"),
                   "gx_score": probe_scores.get("gx_score"),
                   "verdict": probe_scores.get("verdict"),
                   "failure": probe_scores.get("failure")})
