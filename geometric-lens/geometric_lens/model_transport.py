@@ -23,6 +23,7 @@ import contextlib
 import json
 import logging
 import os
+import urllib.error
 from typing import Any, Dict, Iterator, Optional
 from urllib.request import Request, urlopen
 
@@ -42,6 +43,48 @@ INVOCATION_ID_HEADER = "X-ATLAS-V3-Invocation-ID"
 # half an identity is not one.
 STARTUP_REQUEST_ID_ENV = "ATLAS_LENS_STARTUP_REQUEST_ID"
 STARTUP_INVOCATION_ID_ENV = "ATLAS_LENS_STARTUP_INVOCATION_ID"
+
+# How much of an error body is read for its message. llama-server's error
+# envelope is a few hundred bytes; anything larger is not one.
+_ERROR_BODY_LIMIT = 4096
+
+
+class ModelServerHTTPError(RuntimeError):
+    """The model server answered a model-bound call with an HTTP error.
+
+    Carries the status and the server's own message (llama-server wraps it
+    in {"error": {"code", "message", "type"}}), so a caller can tell a
+    physical-batch refusal from a crash without matching on exception text.
+    """
+
+    def __init__(self, status: int, message: str, url: str = ""):
+        self.status = int(status)
+        self.message = message
+        self.url = url
+        super().__init__(f"HTTP {self.status} from {url or 'model server'}: {message}")
+
+
+def _error_message(exc: urllib.error.HTTPError) -> str:
+    """The server's message for an HTTP error: the envelope's `error.message`
+    when the body is one, else the status reason. One bounded line."""
+    try:
+        body = exc.read(_ERROR_BODY_LIMIT)
+    except Exception:  # noqa: BLE001 - a body that cannot be read has no message
+        body = b""
+    message = ""
+    try:
+        parsed = json.loads(body.decode("utf-8", "replace")) if body else None
+    except ValueError:
+        parsed = None
+    if isinstance(parsed, dict):
+        err = parsed.get("error")
+        if isinstance(err, dict) and isinstance(err.get("message"), str):
+            message = err["message"]
+        elif isinstance(err, str):
+            message = err
+    if not message:
+        message = str(getattr(exc, "reason", "") or "").strip() or f"status {exc.code}"
+    return " ".join(message.split())[:512]
 
 
 def identity_headers() -> Dict[str, str]:
@@ -74,8 +117,11 @@ def model_request(url: str, payload: Optional[Dict[str, Any]] = None,
     data = json.dumps(payload).encode() if payload is not None else None
     req = Request(url, data=data,
                   headers=model_headers("application/json" if data is not None else None))
-    with urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read())
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        raise ModelServerHTTPError(exc.code, _error_message(exc), url) from exc
 
 
 def startup_identity_pair() -> Optional[tuple]:

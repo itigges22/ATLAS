@@ -4,6 +4,41 @@
 
 ## [Unreleased]
 
+### Lens scoring boundary
+
+A candidate longer than llama-server's physical batch (`ATLAS_UBATCH`)
+cannot be embedded: the server refuses the request with HTTP 500 (`input
+(2055 tokens) is too large to process. increase the physical batch size
+(current batch size: 2048)`). The Lens answered that with its defaults,
+energy 0.0 / normalized 0.5 / gx 0.5 / verdict `error`, and the min-energy
+selector ranked the candidate first on the lowest energy in the pool.
+Observed in a candidate-selection acquisition on 2026-09-04, where the
+mechanism gate stopped the analysis on that record.
+
+**Changed**
+
+- Every Lens scoring answer says `scored`. An unscored answer carries a
+  typed `failure` (`embed_capacity` with the server's `input_tokens` and
+  `capacity_tokens`, `model_server_error`, `model_server_unreachable`,
+  `embedding_contract`, `nonfinite_score` for a NaN or infinite value,
+  `internal`) and `null` in every score field; consumers read a score
+  field that is not a finite number as unscored as well, and the min-energy
+  rank key never orders on one. Nothing is truncated or split: a Lens score is one forward over the
+  whole sequence ([ADR 0010](docs/adr/0010-lens-capacity-boundary-is-typed.md)).
+- v3-service records the failure on the candidate and in the pool capture,
+  ranks an unscored candidate after every scored one, delivers it only as
+  the last verified candidate standing (the `selected` event says
+  `lens_scored: false`), emits `lens_unscored`, and allocates the k=3 floor
+  with reason `unscored` when the probe itself is unscored. A Lens answer
+  in the older shape (`verdict: "error"` with numbers attached) is read as
+  unscored too. `atlas bench` ranks its pool the same way.
+- The lens reports the embedding capacity it knows on `/health` and
+  `/ready` (`embed_capacity_tokens`, declared through the new
+  `LLAMA_EMBED_CAPACITY_TOKENS`, which compose sets from `ATLAS_UBATCH`, or
+  observed from a refusal). The proxy marks `lens_scoring` partial when that
+  capacity is below `ATLAS_MAX_TOKENS`, and logs an unscored write without
+  applying any threshold to it. `/ready` keeps its gate.
+
 ### Verbatim reproduction
 
 Every edit failure observed on the 12B traced to one thing: the model cannot

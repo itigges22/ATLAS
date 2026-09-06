@@ -90,8 +90,21 @@ type lensThresholds struct {
 	Severe   float64 `json:"severe"`
 }
 
+// lensFailure is why the lens did not score an input. `embed_capacity` is
+// llama-server refusing the embedding because the input exceeds its physical
+// batch (ATLAS_UBATCH); the two counts are the server's own. It is a transport
+// limit on this deployment, reported as such, and never a score.
+type lensFailure struct {
+	Kind           string `json:"kind"`
+	InputTokens    int    `json:"input_tokens,omitempty"`
+	CapacityTokens int    `json:"capacity_tokens,omitempty"`
+	Status         int    `json:"status,omitempty"`
+	Detail         string `json:"detail,omitempty"`
+}
+
 type lensPerStepResult struct {
 	Enabled     bool            `json:"enabled"`
+	Scored      *bool           `json:"scored,omitempty"`
 	GxAvailable bool            `json:"gx_available"`
 	NTokens     int             `json:"n_tokens"`
 	HiddenDim   int             `json:"hidden_dim"`
@@ -99,6 +112,7 @@ type lensPerStepResult struct {
 	Aggregate   lensAggregate   `json:"aggregate"`
 	LatencyMS   float64         `json:"latency_ms"`
 	Thresholds  *lensThresholds `json:"thresholds,omitempty"`
+	Failure     *lensFailure    `json:"failure,omitempty"`
 	Error       string          `json:"error,omitempty"`
 }
 
@@ -115,10 +129,12 @@ func (r lensPerStepResult) calibratedThresholds() (low, severe float64, ok bool)
 }
 
 // scoreContentForAgent calls /internal/lens/score-per-step on the given
-// text and returns the parsed result. Fail-soft: returns (zero, false)
-// on any error so a lens outage degrades to "no signal" rather than
-// breaking the agent loop. Carries the agent's ctx so client cancellation
-// kills the lens call too.
+// text and returns the parsed result. Fail-soft: returns (_, false) on any
+// error so a lens outage degrades to "no signal" rather than breaking the
+// agent loop. An answer that says it did not score (a typed failure, or no
+// tokens scored) is returned with false as well, its failure attached, so
+// nothing downstream can read it as a verdict. Carries the agent's ctx so
+// client cancellation kills the lens call too.
 func scoreContentForAgent(ctx context.Context, lensURL, content string) (lensPerStepResult, bool) {
 	var zero lensPerStepResult
 	if lensURL == "" || content == "" {
@@ -149,8 +165,19 @@ func scoreContentForAgent(ctx context.Context, lensURL, content string) (lensPer
 		log.Printf("[agent-lens] score parse failed: %v", err)
 		return zero, false
 	}
-	if !r.Enabled || r.NTokens == 0 {
+	if !r.Enabled {
 		return zero, false
+	}
+	if r.Failure != nil || (r.Scored != nil && !*r.Scored) || r.NTokens == 0 {
+		if r.Failure != nil {
+			// Counts are stated in prose: the log filter masks `<name>token<...>=`
+			// pairs as credentials, and these are the numbers an operator needs.
+			log.Printf("[agent-lens] unscored (%s): input %d tokens, embed capacity %d tokens, status %d",
+				r.Failure.Kind, r.Failure.InputTokens, r.Failure.CapacityTokens, r.Failure.Status)
+		} else {
+			log.Printf("[agent-lens] unscored: no tokens scored (%s)", truncateStr(r.Error, 120))
+		}
+		return r, false
 	}
 	return r, true
 }
@@ -707,6 +734,27 @@ func buildDimensions(lens LensStatus, asa ASAStatus) []StatusDimension {
 	} else if reachable && lens.CostFieldLoaded && !lens.GxLoaded {
 		scoring, scoringDetail = "partial", "C(x) loaded; G(x) missing"
 	}
+	// Capacity. One score is one embedding request, and llama-server refuses
+	// any input longer than its physical batch (ATLAS_UBATCH). When the lens
+	// knows that capacity and it is below the per-turn generation ceiling,
+	// the longest writes this proxy can produce come back unscored (typed,
+	// never a neutral number), so raw scoring is partial. An unknown capacity
+	// changes nothing; calibration and intervention are not affected.
+	if scoring != "disabled" && lens.EmbedCapacityTokens > 0 {
+		if ceiling := agentMaxTokens(); lens.EmbedCapacityTokens < ceiling {
+			source := lens.EmbedCapacitySource
+			if source == "" {
+				source = "reported"
+			}
+			scoring = "partial"
+			scoringDetail = fmt.Sprintf(
+				"%s for inputs up to %d tokens (%s embed capacity); "+
+					"ATLAS_MAX_TOKENS=%d allows longer writes, which are reported "+
+					"unscored. Raise ATLAS_UBATCH (VRAM: ~ubatch x n_embd x 280 B) "+
+					"or lower ATLAS_MAX_TOKENS",
+				scoringDetail, lens.EmbedCapacityTokens, source, ceiling)
+		}
+	}
 
 	// Calibration.
 	calibration := "disabled"
@@ -754,7 +802,12 @@ type LensStatus struct {
 	GxLoaded        bool   `json:"gx_loaded"`
 	CxCalibrated    bool   `json:"cx_calibrated"`
 	GxCalibrated    bool   `json:"gx_calibrated"`
-	Hint            string `json:"hint"`
+	// The longest input one score can be computed from: llama-server's
+	// physical batch (`-ub`, ATLAS_UBATCH) as the lens reports it, declared
+	// by the deployment or observed from a refusal. 0 when unknown.
+	EmbedCapacityTokens int    `json:"embed_capacity_tokens"`
+	EmbedCapacitySource string `json:"embed_capacity_source"`
+	Hint                string `json:"hint"`
 }
 
 type ASAStatus struct {
@@ -781,6 +834,9 @@ type lensHealthShape struct {
 			GxCalibrated    bool   `json:"gx_calibrated"`
 			SelfTestPass    bool   `json:"self_test_pass"`
 			SelfTestError   string `json:"self_test_error"`
+			// Pointer: the lens reports null while the capacity is unknown.
+			EmbedCapacityTokens *int   `json:"embed_capacity_tokens"`
+			EmbedCapacitySource string `json:"embed_capacity_source"`
 		} `json:"lens"`
 	} `json:"subsystems"`
 }
@@ -820,6 +876,10 @@ func probeLensStatus(ctx context.Context, lensBaseURL string) LensStatus {
 	out.GxLoaded = h.Subsystems.Lens.GxLoaded
 	out.CxCalibrated = h.Subsystems.Lens.CxCalibrated
 	out.GxCalibrated = h.Subsystems.Lens.GxCalibrated
+	if h.Subsystems.Lens.EmbedCapacityTokens != nil && *h.Subsystems.Lens.EmbedCapacityTokens > 0 {
+		out.EmbedCapacityTokens = *h.Subsystems.Lens.EmbedCapacityTokens
+		out.EmbedCapacitySource = h.Subsystems.Lens.EmbedCapacitySource
+	}
 
 	switch {
 	case !out.CostFieldLoaded:

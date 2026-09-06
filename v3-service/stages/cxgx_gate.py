@@ -75,7 +75,11 @@ GX_DEEP_RATIO = 0.75
 
 # Verdicts that mean G(x) has no calibration for the served model — its
 # score scale is unknown, so no escalation may be inferred from it.
-_UNCALIBRATED_VERDICTS = frozenset(("uncalibrated", "unavailable", "error"))
+# "unscored" is the probe the Lens could not score at all (its input
+# exceeded the embedding server's physical batch, the Lens was unreachable):
+# there is no score to read, calibrated or not.
+_UNCALIBRATED_VERDICTS = frozenset(("uncalibrated", "unavailable", "error",
+                                    "unscored"))
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +175,7 @@ def base_tier(cx_normalized: float, cx_calibrated: bool) -> str:
     An uncalibrated C(x) carries no comparable scale, so it selects the
     floor tier instead of a table row.
     """
-    if not cx_calibrated:
+    if not cx_calibrated or cx_normalized is None:
         return FLOOR_TIER
     return select_tier(normalized_energy=cx_normalized,
                        default_tier=FLOOR_TIER)
@@ -186,7 +190,7 @@ def gx_escalation(gx_score: float, gx_available: bool,
     and 0 whenever G(x) is missing or uncalibrated for this model, since
     the boundary the bands are measured against would not exist.
     """
-    if not gx_available:
+    if not gx_available or gx_score is None:
         return 0
     if gx_verdict and gx_verdict in _UNCALIBRATED_VERDICTS:
         return 0
@@ -279,7 +283,9 @@ def allocate(cx_normalized: float = 0.5,
     if capped_from:
         reason = "budget_capped"
     elif not cx_calibrated and not escalation:
-        reason = "uncalibrated"
+        # An unscored probe is named as such: the floor was allocated
+        # because there was no score, not because the score had no scale.
+        reason = "unscored" if gx_verdict == "unscored" else "uncalibrated"
     else:
         reason = "gated"
 

@@ -6,6 +6,7 @@ lens outage, an empty candidate. Filling that response's missing fields
 with their defaults yields gx=0.500 for every candidate, which is
 indistinguishable from a real verdict that happened to tie, and leaves
 candidate selection with nothing to choose on while looking healthy.
+Such an answer is reported as a typed failure and nothing else.
 """
 
 import io
@@ -27,13 +28,15 @@ def _score(payload):
 
 def test_zero_tokens_reports_no_signal_not_a_neutral_score():
     """The exact shape served under `--pooling mean`: enabled, 200 OK,
-    n_tokens 0, empty aggregate."""
-    assert _score({
+    n_tokens 0, empty aggregate. It carries the failure and no number."""
+    out = _score({
         "enabled": True,
         "n_tokens": 0,
         "aggregate": {},
         "error": "ValueError: per-step evaluation failed",
-    }) == {}
+    })
+    assert set(out) == {"failure"}
+    assert out["failure"]["kind"] == "lens_error"
 
 
 def test_real_scores_survive():

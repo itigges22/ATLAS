@@ -6,7 +6,9 @@ import math
 import os
 import struct
 from typing import Dict, List, Optional, Tuple
-from .model_transport import model_request
+from .embed_capacity import (EmbeddingCapacityError, observe_rejection,
+                             parse_capacity_rejection)
+from .model_transport import ModelServerHTTPError, model_request
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +131,20 @@ def _post_embedding(text: str, layers: Optional[List[int]] = None,
         body["embd_normalize"] = embd_normalize
     # One transport for every model-bound call: auth and the bound request /
     # invocation identity travel with the embedding request (attribution only).
-    data = model_request(url, body, timeout=timeout)
+    try:
+        data = model_request(url, body, timeout=timeout)
+    except ModelServerHTTPError as exc:
+        # llama-server embeds a request in one physical batch and refuses a
+        # longer input. That is a transport limit on this deployment, not a
+        # property of the text: it is raised as its own type, with the
+        # server's counts, and recorded as the capacity the service knows.
+        rejection = parse_capacity_rejection(exc.message)
+        if rejection is not None:
+            input_tokens, capacity_tokens = rejection
+            observe_rejection(input_tokens, capacity_tokens)
+            raise EmbeddingCapacityError(input_tokens, capacity_tokens,
+                                         exc.message) from exc
+        raise
     if not isinstance(data, list) or not data:
         raise ValueError(f"unexpected /embedding response shape: {type(data).__name__}")
     return data[0]

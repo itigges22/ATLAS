@@ -80,7 +80,7 @@ computes them in one place (`proxy/lens.go`).
 | `model_runtime` | Is the model served and reachable | supported / unreachable |
 | `direct_agent` | The agent loop (tools, permissions, sandbox verify) | **supported** always — model-agnostic, independent of lens/ASA |
 | `lens_identity` | Cost field matches the served model (identity + dimension) | supported / no-artifacts / dim-mismatch |
-| `lens_scoring` | Raw C(x)+G(x) scoring available | supported / partial / disabled |
+| `lens_scoring` | Raw C(x)+G(x) scoring available | supported / partial (G(x) missing, or the embed capacity is below the generation ceiling so the longest writes come back unscored) / disabled |
 | `lens_calibration` | Per-model normalization + thresholds loaded | calibrated / uncalibrated / disabled |
 | `lens_intervention` | Automatic corrective behavior | active *(only when calibrated)* / neutral / disabled |
 | `asa` | Activation-steering vector | supported / unverified / missing |

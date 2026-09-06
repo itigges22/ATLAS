@@ -29,7 +29,8 @@ from stages.refinement_loop import (
 )
 from stages.self_test_gen import (SelfTestGen, SelfTestGenConfig,
                                   PROVENANCE_GENERATED, PROVENANCE_TRUSTED)
-from stages.candidate_selection import CandidateInfo, select_candidate
+from stages.candidate_selection import (CandidateInfo, energy_rank_key,
+                                        select_candidate)
 
 import adapters
 import contract
@@ -63,7 +64,8 @@ for _phase, _stages in {
     "allocation": ("phase2", "phase2_allocated", "diagnostic_allocation"),
     "generation": ("phase1", "plansearch", "plansearch_done",
                    "plansearch_error", "divsampling", "divsampling_done",
-                   "divsampling_error", "divsampling_stop", "lens_per_step"),
+                   "divsampling_error", "divsampling_stop", "lens_per_step",
+                   "lens_unscored"),
     "sandbox": ("sandbox_test", "sandbox_pass", "sandbox_fail",
                 "sandbox_done", "smoke_check", "interactive_lint",
                 "self_test_verify", "build_verify",
@@ -657,6 +659,61 @@ class _PoolCapture:
             self._append(b'{"type":"capture_status","limit_reached":true}\n')
 
 
+def _lens_view(code: str) -> Dict[str, Any]:
+    """Both Lens views of one candidate, as its record carries them.
+
+    `energy` and `energy_norm` are None and `lens_failure` is set when the
+    Lens did not score the candidate (its input exceeded the embedding
+    server's physical batch, the Lens answered an error or was unreachable).
+    `per_step` is empty when the per-step call did not score; that failure
+    is recorded under `lens_failure` with `path: per_step` when C(x) did.
+    Nothing here substitutes a number for a score that did not happen.
+    """
+    scored = scoring.score_candidate(code)
+    energy, energy_norm, energy_calibrated = scored
+    failure = getattr(scored, "failure", None)
+    per_step = scoring.score_candidate_per_step(code)  # PC-207
+    per_step = dict(per_step) if isinstance(per_step, dict) else {}
+    per_step_failure = per_step.pop("failure", None)
+    if per_step_failure:
+        per_step = {}
+    if energy is None:
+        failure = failure or per_step_failure or {
+            "kind": scoring.LENS_ERROR, "detail": "no C(x) energy returned"}
+        energy_norm, energy_calibrated = None, False
+    elif per_step_failure and failure is None:
+        failure = {**per_step_failure, "path": "per_step"}
+    return {"energy": energy, "energy_norm": energy_norm,
+            "energy_calibrated": bool(energy_calibrated),
+            "per_step": per_step, "lens_failure": failure}
+
+
+def _note_lens(emit, candidate: Dict[str, Any], source: str) -> None:
+    """Emit what the Lens said about a freshly generated candidate."""
+    index = candidate["index"]
+    per_step = candidate.get("per_step") or {}
+    if per_step:
+        emit("lens_per_step",
+             f"cand {index}: gx_min={per_step['gx_score_min']:.2f} "
+             f"first_off_rails={per_step['first_off_rails_idx']}",
+             index=index,
+             source=source,
+             first_off_rails_idx=per_step["first_off_rails_idx"],
+             gx_score_min=per_step["gx_score_min"],
+             gx_score_mean=per_step["gx_score_mean"],
+             cx_norm_max=per_step["cx_norm_max"],
+             n_tokens=per_step["n_tokens"])
+    failure = candidate.get("lens_failure")
+    if candidate.get("energy") is None and failure:
+        emit("lens_unscored",
+             f"cand {index}: unscored ({scoring.describe_lens_failure(failure)})",
+             index=index, source=source,
+             kind=failure.get("kind"),
+             input_tokens=failure.get("input_tokens"),
+             capacity_tokens=failure.get("capacity_tokens"),
+             failure_detail=failure.get("detail"))
+
+
 def _capture_pool_member(capture: "_PoolCapture", candidate, probe_code: str) -> None:
     """Record a pool member under the role that explains where it came from.
 
@@ -674,7 +731,8 @@ def _capture_pool_member(capture: "_PoolCapture", candidate, probe_code: str) ->
         lens={"energy": candidate.get("energy"),
               "energy_norm": candidate.get("energy_norm"),
               "energy_calibrated": candidate.get("energy_calibrated"),
-              "per_step": candidate.get("per_step")})
+              "per_step": candidate.get("per_step"),
+              "failure": candidate.get("lens_failure")})
 
 
 def _summarize_phases(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1987,14 +2045,24 @@ class V3PipelineService:
             probe_energy_raw = probe_scores["cx_energy"]
             probe_energy_norm = probe_scores["cx_normalized"]
             probe_cx_calibrated = probe_scores["cx_calibrated"]
-            norm_label = f"{probe_energy_norm:.2f}" if probe_cx_calibrated else "uncalibrated"
-            emit("probe_scored",
-                 f"C(x)={probe_energy_raw:.2f} norm={norm_label} "
-                 f"G(x)={probe_scores['gx_score']:.2f} "
-                 f"({probe_scores['verdict']})",
+            probe_failure = probe_scores.get("failure")
+            probe_scored = probe_energy_raw is not None
+            if probe_scored:
+                norm_label = f"{probe_energy_norm:.2f}" if probe_cx_calibrated else "uncalibrated"
+                detail = (f"C(x)={probe_energy_raw:.2f} norm={norm_label} "
+                          f"G(x)={float(probe_scores['gx_score']):.2f} "
+                          f"({probe_scores['verdict']})")
+            else:
+                # No score to report: the allocator below reads the verdict
+                # "unscored" and keeps its floor, and says so.
+                detail = (f"unscored "
+                          f"({scoring.describe_lens_failure(probe_failure or {})})")
+            emit("probe_scored", detail,
+                 scored=probe_scored,
                  gx_score=probe_scores["gx_score"],
                  gx_available=probe_scores["gx_available"],
-                 verdict=probe_scores["verdict"])
+                 verdict=probe_scores["verdict"],
+                 failure=probe_failure)
             probe_passed, probe_stdout, probe_stderr, probe_evidence = verified_sandbox(probe_code)
             emit("probe_sandbox", f"passed={probe_passed} stderr={probe_stderr[:80] if probe_stderr else ''}")
             result["total_tokens"] += tokens
@@ -2051,7 +2119,8 @@ class V3PipelineService:
             lens={"energy": probe_energy_raw, "energy_norm": probe_energy_norm,
                   "energy_calibrated": probe_cx_calibrated,
                   "gx_score": probe_scores.get("gx_score"),
-                  "verdict": probe_scores.get("verdict")})
+                  "verdict": probe_scores.get("verdict"),
+                  "failure": probe_scores.get("failure")})
         emit("probe_evidence",
              f"adapter={probe_adapter} strength={probe_result['evidence_strength']} "
              f"supported={probe_result['supported']}",
@@ -2256,7 +2325,7 @@ class V3PipelineService:
             passing = [c for c in pool if c.get("passed")]
             chosen = None
             if passing:
-                passing.sort(key=lambda c: c.get("energy", 999))
+                passing.sort(key=energy_rank_key)
                 chosen = passing[0]
                 result["passed"] = True
                 result["phase_solved"] = "budget"
@@ -2300,6 +2369,7 @@ class V3PipelineService:
                     "index": 0, "code": probe_code,
                     "energy": probe_energy_raw, "energy_norm": probe_energy_norm,
                     "energy_calibrated": probe_cx_calibrated,
+                    "lens_failure": probe_scores.get("failure"),
                     "passed": probe_passed, "stdout": "", "stderr": "",
                 })
 
@@ -2326,27 +2396,12 @@ class V3PipelineService:
                                       latency_ms=getattr(ps_result, "total_time_ms", 0.0))
                     for i, code in enumerate(ps_result.candidates):
                         if code:
-                            energy_raw, energy_norm, energy_calibrated = scoring.score_candidate(code)
-                            per_step = scoring.score_candidate_per_step(code)  # PC-207
-                            cand_index = len(candidates)
                             candidates.append({
-                                "index": cand_index, "code": code,
-                                "energy": energy_raw, "energy_norm": energy_norm,
-                                "energy_calibrated": energy_calibrated,
+                                "index": len(candidates), "code": code,
                                 "passed": False, "stdout": "", "stderr": "",
-                                "per_step": per_step,
+                                **_lens_view(code),
                             })
-                            if per_step:
-                                emit("lens_per_step",
-                                     f"cand {cand_index}: gx_min={per_step['gx_score_min']:.2f} "
-                                     f"first_off_rails={per_step['first_off_rails_idx']}",
-                                     index=cand_index,
-                                     source="plansearch",
-                                     first_off_rails_idx=per_step["first_off_rails_idx"],
-                                     gx_score_min=per_step["gx_score_min"],
-                                     gx_score_mean=per_step["gx_score_mean"],
-                                     cx_norm_max=per_step["cx_norm_max"],
-                                     n_tokens=per_step["n_tokens"])
+                            _note_lens(emit, candidates[-1], "plansearch")
                     result["total_tokens"] += ps_result.total_tokens
                     emit("plansearch_done",
                          f"{len(ps_result.candidates)} candidates from PlanSearch",
@@ -2398,27 +2453,12 @@ class V3PipelineService:
                         capture.note_cost(code=code or None, phase="divsampling",
                                           tokens=tokens, latency_ms=t_ms)
                         if code:
-                            energy_raw, energy_norm, energy_calibrated = scoring.score_candidate(code)
-                            per_step = scoring.score_candidate_per_step(code)  # PC-207
-                            cand_index = len(candidates)
                             candidates.append({
-                                "index": cand_index, "code": code,
-                                "energy": energy_raw, "energy_norm": energy_norm,
-                                "energy_calibrated": energy_calibrated,
+                                "index": len(candidates), "code": code,
                                 "passed": False, "stdout": "", "stderr": "",
-                                "per_step": per_step,
+                                **_lens_view(code),
                             })
-                            if per_step:
-                                emit("lens_per_step",
-                                     f"cand {cand_index}: gx_min={per_step['gx_score_min']:.2f} "
-                                     f"first_off_rails={per_step['first_off_rails_idx']}",
-                                     index=cand_index,
-                                     source="divsampling",
-                                     first_off_rails_idx=per_step["first_off_rails_idx"],
-                                     gx_score_min=per_step["gx_score_min"],
-                                     gx_score_mean=per_step["gx_score_mean"],
-                                     cx_norm_max=per_step["cx_norm_max"],
-                                     n_tokens=per_step["n_tokens"])
+                            _note_lens(emit, candidates[-1], "divsampling")
                         result["total_tokens"] += tokens
                     except Exception as e:
                         emit("divsampling_error", str(e)[:200])
@@ -2430,8 +2470,9 @@ class V3PipelineService:
             # ===== SANDBOX TESTING =====
             emit("sandbox_test", f"Testing {len(candidates)} candidates...",
                  candidates=len(candidates))
-            # Sort by energy (easy first) for early-exit potential
-            candidates.sort(key=lambda c: c.get("energy", 0))
+            # Sort by energy (easy first) for early-exit potential; an
+            # unscored candidate has no energy and goes last.
+            candidates.sort(key=energy_rank_key)
 
             passing = []
             for c in candidates:
@@ -2821,13 +2862,26 @@ class V3PipelineService:
                                                  verified.get("energy", 0.0), True)
 
                 if selected:
-                    emit("selected", f"Lens selected candidate {selected.index}",
-                         index=selected.index, energy=getattr(selected, "energy", 0.0))
+                    winner = _candidate_by_index(passing, selected.index)
+                    lens_scored = getattr(selected, "energy", None) is not None
+                    lens_failure = (winner or {}).get("lens_failure")
+                    if lens_scored:
+                        detail = f"Lens selected candidate {selected.index}"
+                    else:
+                        # The only verified candidate carries no score. It
+                        # is delivered on its sandbox evidence and says so;
+                        # a scored candidate would have outranked it.
+                        detail = (f"Selected candidate {selected.index}: verified, "
+                                  f"unscored by the lens "
+                                  f"({scoring.describe_lens_failure(lens_failure or {})})")
+                    emit("selected", detail,
+                         index=selected.index,
+                         energy=getattr(selected, "energy", None),
+                         lens_scored=lens_scored, lens_failure=lens_failure)
                     result["passed"] = True
                     result["code"] = selected.code
                     result["phase_solved"] = "phase1"
                     result["total_time_ms"] = (time.time() - start) * 1000
-                    winner = _candidate_by_index(passing, selected.index)
                     result["verification_evidence"] = (winner or {}).get("verification_evidence", [])
                     result["winning_score"] = (winner or {}).get("energy_norm", 0.0)
                     result["evidence_record"] = ((winner or {}).get("contract_record")

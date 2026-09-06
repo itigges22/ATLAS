@@ -264,6 +264,8 @@ Returns the proxy's view of whether the loaded model has compatible Geometric Le
     "gx_loaded": true,
     "cx_calibrated": true,
     "gx_calibrated": true,
+    "embed_capacity_tokens": 2048,
+    "embed_capacity_source": "declared",
     "hint": "ready"
   },
   "asa": {
@@ -275,7 +277,7 @@ Returns the proxy's view of whether the loaded model has compatible Geometric Le
 }
 ```
 
-`cost_field_dim` / `embed_dim` reflect the loaded model's hidden dimension — the values differ per model.
+`cost_field_dim` / `embed_dim` reflect the loaded model's hidden dimension — the values differ per model. `embed_capacity_tokens` is the longest input the lens can score (llama-server's physical batch, `ATLAS_UBATCH`) as the lens reports it, `0` when unknown; `embed_capacity_source` is `declared` or `observed`. When it is below the proxy's per-turn generation ceiling (`ATLAS_MAX_TOKENS`), the `lens_scoring` dimension reads `partial` and its detail names both numbers: writes longer than the capacity come back unscored.
 
 The payload also carries a `dimensions` array — the seven status dimensions the TUI and `atlas doctor` render, each `{name, status, detail}`:
 
@@ -797,6 +799,7 @@ Score code using combined C(x) + G(x) energy. Single embedding extraction serves
 **Response:**
 ```json
 {
+  "scored": true,
   "cx_energy": 5.2,
   "cx_normalized": 0.32,
   "cx_calibrated": true,
@@ -810,16 +813,31 @@ Score code using combined C(x) + G(x) energy. Single embedding extraction serves
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `cx_energy` | float | Raw cost field energy (lower = more likely correct) |
-| `cx_normalized` | float | 0–1 normalized energy |
+| `scored` | bool | Whether a score was computed. `false` means every score field is `null` and `failure` says why |
+| `cx_energy` | float or null | Raw cost field energy (lower = more likely correct) |
+| `cx_normalized` | float or null | 0–1 normalized energy |
 | `cx_calibrated` | bool | Whether the model's C(x) normalization calibration (`cx_normalization.json`) is loaded |
-| `gx_score` | float | 0–1 probability of correctness (G(x) model) |
-| `verdict` | string | `"likely_correct"`, `"uncertain"`, or `"likely_incorrect"` when thresholds are calibrated; `"uncalibrated"` when the model's `gx_thresholds.json` is missing; `"unavailable"` when the Lens is disabled or the G(x) model isn't loaded; `"error"` when evaluation failed (payload carries `error`) |
+| `gx_score` | float or null | 0–1 probability of correctness (G(x) model) |
+| `verdict` | string | `"likely_correct"`, `"uncertain"`, or `"likely_incorrect"` when thresholds are calibrated; `"uncalibrated"` when the model's `gx_thresholds.json` is missing; `"unavailable"` when the Lens is disabled or the G(x) model isn't loaded; `"unscored"` when no score was computed (payload carries `failure` and `error`) |
 | `gx_available` | bool | Whether the G(x) model was loaded |
 | `enabled` | bool | Whether Geometric Lens is enabled |
 | `latency_ms` | float | Execution time in milliseconds |
+| `failure` | object | Present only when `scored` is `false`: `kind` plus its detail (below) |
 
-When Lens is disabled, returns `enabled: false` with neutral defaults (`cx_energy: 0.0`, `gx_score: 0.5`).
+When Lens is disabled, returns `enabled: false` with neutral defaults (`cx_energy: 0.0`, `gx_score: 0.5`): a configuration state, not a failed score.
+
+When the Lens could not score the text, the response is not a score: `scored: false`, `verdict: "unscored"`, `null` in every score field, and a `failure` object. `kind` is one of:
+
+| `failure.kind` | Meaning | Extra fields |
+|---|---|---|
+| `embed_capacity` | The input exceeds llama-server's physical batch (`ATLAS_UBATCH`), which processes one embedding request whole. The counts are the server's own. | `input_tokens`, `capacity_tokens`, `detail` |
+| `model_server_error` | llama-server answered an HTTP error that was not the capacity refusal | `status`, `detail` |
+| `model_server_unreachable` | No answer from llama-server (refused, reset, timed out) | `detail` (exception type) |
+| `embedding_contract` | The answer violated the artifact's embedding convention | `detail` |
+| `nonfinite_score` | A score came out NaN or infinite (a degenerate forward or calibration); reported as unscored, never serialized as a number | `field` (`cx_energy`, `cx_normalized`, `gx_score`), `detail` |
+| `internal` | Anything else; the service log has the traceback | `detail` |
+
+Nothing in such a response is truncated, split or substituted: the whole sequence is what the calibrated score is computed from ([ADR 0010](adr/0010-lens-capacity-boundary-is-typed.md)). v3-service records the failure on the candidate, ranks it after every scored candidate, and delivers it only as the last verified candidate standing; the proxy applies no threshold to an unscored write.
 
 **Example:**
 ```bash
@@ -837,13 +855,15 @@ curl http://localhost:8099/health
 
 Always returns 200 — the endpoint is informational. `status` is `"healthy"` or `"degraded"`; the `subsystems.lens` block carries `cost_field_loaded`, `cost_field_dim`, `embed_dim`, `gx_loaded`, `cx_calibrated`, `gx_calibrated`, and the self-test result the proxy's `/v1/calibration/status` verdict is derived from.
 
+It also carries the embedding capacity contract: `embed_capacity_tokens` (the longest input one score can be computed from, llama-server's physical batch; `null` until known), `embed_capacity_source` (`"declared"` from `LLAMA_EMBED_CAPACITY_TOKENS`, `"observed"` once the server has refused an input, which is authoritative), `embed_capacity_rejections` and `embed_capacity_max_rejected_tokens`. Information only: an input past the capacity is reported `unscored` per request, never gated here.
+
 ### GET /ready
 
 ```bash
 curl http://localhost:8099/ready
 ```
 
-Readiness probe (`geometric-lens/main.py`). Flips to 503 when scoring is degraded (lens weights missing, embedding-dim mismatch). The atlas-proxy `/health` and `/ready` handlers both call this — `/health` is informational, `/ready` is pass/fail.
+Readiness probe (`geometric-lens/main.py`). Flips to 503 when scoring is degraded (lens weights missing, embedding-dim mismatch). The atlas-proxy `/health` and `/ready` handlers both call this — `/health` is informational, `/ready` is pass/fail. The payload repeats `embed_capacity_tokens`; the capacity never changes the verdict.
 
 ### POST /internal/patterns/context
 
@@ -870,9 +890,9 @@ These are not part of the public API — every row is consumed by other ATLAS se
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/internal/patterns/write` | POST | Write pattern data — in-stack path used by v3-service after a successful run |
-| `/internal/lens/score-text` | POST | Score text (C(x) only) |
+| `/internal/lens/score-text` | POST | Score text (C(x) only). `scored: false` with `energy`/`normalized` `null` and a `failure` when no score was computed (same kinds as `gx-score`, plus `models_not_loaded`) |
 | `/internal/lens/retrain` | POST | Retrain cost field model. Returns 503 with structured guidance when the models dir is mounted read-only (the standard Compose deployment mounts it `:ro`) — run `atlas lens retrain` host-side instead. |
-| `/internal/lens/score-per-step` | POST | Per-token C(x)+G(x) scoring (one forward pass over the prompt; returns per-step verdicts plus `first_off_rails_idx` and aggregates). Pass `layer: int` to score a specific intermediate residual layer (requires the per-layer hidden-states extension on llama-server). |
+| `/internal/lens/score-per-step` | POST | Per-token C(x)+G(x) scoring (one forward pass over the prompt; returns per-step verdicts plus `first_off_rails_idx` and aggregates). Pass `layer: int` to score a specific intermediate residual layer (requires the per-layer hidden-states extension on llama-server). `scored: false` with an empty `per_step`/`aggregate`, `n_tokens: 0` and a `failure` when no score was computed (same kinds as `gx-score`). |
 
 ---
 

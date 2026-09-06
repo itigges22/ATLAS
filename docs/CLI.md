@@ -675,6 +675,9 @@ Training runs host-side and needs PyTorch plus XGBoost/scikit-learn
 `pip install xgboost scikit-learn` — CPU builds are enough). Samples longer
 than the server's micro-batch are embedded in line-boundary chunks and
 mean-pooled rather than dropped; the build log notes each chunked sample.
+That is a training-time convention: the serving path scores a whole
+sequence or reports it unscored, and a chunked score has not been measured
+against a whole-sequence one ([ADR 0010](adr/0010-lens-capacity-boundary-is-typed.md)).
 
 Extracted embeddings are cached (keyed by text hash and dim), so re-running a
 build only embeds the new samples. The cache sits beside its input:

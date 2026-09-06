@@ -77,7 +77,7 @@ from stages.refinement_loop import (
 from stages.self_test_gen import SelfTestGen, SelfTestGenConfig
 from stages.lens_feedback import LensFeedbackCollector, LensFeedbackConfig
 from stages.candidate_selection import (
-    CandidateInfo, select_candidate,
+    CandidateInfo, energy_rank_key, select_candidate,
 )
 from stages.embedding_store import EmbeddingWriter
 
@@ -574,7 +574,7 @@ class V3Pipeline:
                         energy_raw = probe_scores["cx_energy"]
                         energy_norm = probe_scores["cx_normalized"]
                     except Exception:
-                        energy_raw, energy_norm = 0.0, 0.5
+                        energy_raw, energy_norm = None, None
                     result["telemetry"]["probe_cx_normalized"] = energy_norm
                     result["telemetry"]["probe_cx_calibrated"] = (
                         probe_scores["cx_calibrated"])
@@ -704,7 +704,7 @@ class V3Pipeline:
                             code, LENS_URL,
                         )
                     except Exception:
-                        energy_raw, energy_norm = 0.0, 0.5
+                        energy_raw, energy_norm = None, None
                     candidates.append({
                         "index": len(candidates),
                         "code": code,
@@ -746,7 +746,7 @@ class V3Pipeline:
                             code, LENS_URL,
                         )
                     except Exception:
-                        energy_raw, energy_norm = 0.0, 0.5
+                        energy_raw, energy_norm = None, None
                     return {
                         "code": code,
                         "response": response,
@@ -787,7 +787,7 @@ class V3Pipeline:
                     code, LENS_URL,
                 )
             except Exception:
-                energy_raw, energy_norm = 0.0, 0.5
+                energy_raw, energy_norm = None, None
             candidates.append({
                 "index": 0,
                 "code": code,
@@ -805,9 +805,10 @@ class V3Pipeline:
 
         # ===== Test ALL candidates in sandbox (pipelined, V3.1 4.2) =====
         # Sandbox tests + embedding storage run in parallel threads.
-        # Candidates sorted by energy (low=easy first) for early-exit potential.
+        # Candidates sorted by energy (low=easy first) for early-exit potential;
+        # a candidate the Lens did not score has no energy and goes last.
         sandbox_start = time.time()
-        candidates.sort(key=lambda c: c["energy"])
+        candidates.sort(key=energy_rank_key)
         passing_candidates = []
 
         def _test_and_embed(cand):
@@ -848,8 +849,8 @@ class V3Pipeline:
                         passing_candidates.append(cand)
             # as_completed order is thread-completion order — run-dependent.
             # Sort by energy (ascending, matching the product pipeline) so
-            # the [0] fallbacks are deterministic.
-            passing_candidates.sort(key=lambda c: c.get("energy", 0.0))
+            # the [0] fallbacks are deterministic; unscored candidates last.
+            passing_candidates.sort(key=energy_rank_key)
         else:
             for cand in candidates:
                 cand = _test_and_embed(cand)

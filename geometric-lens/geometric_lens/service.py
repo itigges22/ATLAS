@@ -493,6 +493,57 @@ def _reload_weights_locked(model_dir: str = None) -> dict:
         }
 
 
+# --- a score that did not happen ------------------------------------------------------
+#
+# Every scoring answer says whether it scored. When it did not, it carries a
+# typed `failure` (geometric_lens.embed_capacity.failure_from_exception) and
+# no number in any score field: an unscored candidate must not be readable
+# as energy 0.0 / gx 0.5, which the min-energy selector ranks first and the
+# allocator reads as a neutral verdict.
+
+_UNSCORED_COMBINED = {
+    "cx_energy": None, "cx_normalized": None, "cx_calibrated": False,
+    "gx_score": None, "gx_available": False, "verdict": "unscored",
+}
+
+
+def failure_record(exc: BaseException, path: str) -> dict:
+    """Log why `path` did not score and return the typed failure."""
+    from geometric_lens.embed_capacity import (
+        KIND_CAPACITY, KIND_NONFINITE, KIND_UNREACHABLE, failure_from_exception)
+    failure = failure_from_exception(exc)
+    if failure["kind"] == KIND_CAPACITY:
+        logger.warning(
+            "%s unscored: the input of %s tokens exceeds the /embedding "
+            "physical batch of %s tokens; a calibrated score needs the whole "
+            "sequence, so it is reported unscored rather than split",
+            path, failure.get("input_tokens"), failure.get("capacity_tokens"))
+    elif failure["kind"] == KIND_UNREACHABLE:
+        logger.warning("%s unscored: model server unreachable (%s)",
+                       path, failure.get("detail"))
+    elif failure["kind"] == KIND_NONFINITE:
+        logger.error("%s unscored: %s is not a finite number (%s); the "
+                     "artifacts or the calibration produced a degenerate value",
+                     path, failure.get("field"), failure.get("detail"))
+    else:
+        logger.error(f"{path} evaluation failed: {exc}", exc_info=True)
+    return failure
+
+
+def unscored_combined(failure: dict, error: str) -> dict:
+    """The combined-scoring answer for a score that did not happen."""
+    return {**_UNSCORED_COMBINED, "enabled": True, "scored": False,
+            "failure": dict(failure), "error": error}
+
+
+def unscored_per_step(failure: dict, error: str) -> dict:
+    """The per-step answer for a score that did not happen."""
+    return {"enabled": True, "scored": False, "gx_available": False,
+            "cx_calibrated": False,
+            "per_step": [], "aggregate": {}, "n_tokens": 0,
+            "failure": dict(failure), "error": error}
+
+
 def evaluate_energy(query: str) -> Tuple[float, float]:
     """Evaluate raw and normalized energy for a query.
 
@@ -577,6 +628,8 @@ def evaluate_combined(query: str) -> dict:
         import numpy as np
         from geometric_lens.embedding_extractor import extract_embedding
 
+        from geometric_lens.embed_capacity import finite
+
         (cost_field, gx_xgboost, gx_pca_components, gx_pca_mean,
          _, cx_cfg, gx_thresholds) = _snapshot_weights()
 
@@ -585,12 +638,14 @@ def evaluate_combined(query: str) -> dict:
         # Single embedding extraction (shared between C(x) and G(x))
         emb = extract_embedding(query)
 
-        # C(x) evaluation
+        # C(x) evaluation. A NaN or infinite value is not a score: it is
+        # raised here, typed, before it can be normalized or reported.
         x = torch.tensor(emb, dtype=torch.float32).unsqueeze(0)
         with torch.no_grad():
-            energy = cost_field(x).item()
-        normalized = _normalize_cx_energy(energy, cx_cfg,
-                                          length=_score_length(query))
+            energy = finite(cost_field(x).item(), "cx_energy")
+        normalized = finite(_normalize_cx_energy(energy, cx_cfg,
+                                                 length=_score_length(query)),
+                            "cx_normalized")
 
         # G(x) evaluation (if available)
         gx_score = 0.5
@@ -601,7 +656,7 @@ def evaluate_combined(query: str) -> dict:
             emb_np = np.array(emb, dtype=np.float32).reshape(1, -1)
             x_pca = (emb_np - gx_pca_mean) @ gx_pca_components.T
             proba = gx_xgboost.predict_proba(x_pca)[0]
-            gx_score = float(proba[1])
+            gx_score = finite(proba[1], "gx_score")
             gx_available = True
 
             verdict = _gx_verdict(gx_score, gx_thresholds)
@@ -613,6 +668,7 @@ def evaluate_combined(query: str) -> dict:
         )
 
         return {
+            "scored": True,
             "cx_energy": energy,
             "cx_normalized": normalized,
             "cx_calibrated": cx_cfg is not None,
@@ -632,15 +688,9 @@ def evaluate_combined(query: str) -> dict:
         }
 
     except Exception as e:
-        logger.error(f"Combined evaluation failed: {e}", exc_info=True)
-        return {
-            "cx_energy": 0.0, "cx_normalized": 0.5,
-            "cx_calibrated": False,
-            "gx_score": 0.5, "verdict": "error",
-            "enabled": True, "gx_available": False,
-            "error": f"{type(e).__name__}: combined evaluation failed "
-                     "(see service log)",
-        }
+        return unscored_combined(
+            failure_record(e, "combined"),
+            f"{type(e).__name__}: combined evaluation failed (see service log)")
 
 
 def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
@@ -674,6 +724,7 @@ def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
     try:
         import numpy as np
         import torch
+        from geometric_lens.embed_capacity import finite_array
         from geometric_lens.embedding_extractor import (
             extract_per_layer_per_token,
             extract_per_token,
@@ -695,24 +746,29 @@ def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
 
         n_tokens = len(per_token_vecs)
         if n_tokens == 0:
+            from geometric_lens.embed_capacity import KIND_EMPTY
             return {
-                "enabled": True, "gx_available": gx_xgboost is not None,
-                "per_step": [], "aggregate": {}, "n_tokens": 0,
+                **unscored_per_step(
+                    {"kind": KIND_EMPTY, "detail": "no token embeddings returned"},
+                    "empty token list"),
+                "gx_available": gx_xgboost is not None,
                 "layer": tap_label,
-                "error": "empty token list",
             }
 
         # Batched C(x): one MLP forward over [n_tokens, hidden_dim]
         x = torch.tensor(per_token_vecs, dtype=torch.float32)
         with torch.no_grad():
             cx_raw = cost_field(x).squeeze(-1).cpu().numpy()  # (n_tokens,)
+        # One NaN or infinite token would carry into every aggregate, so
+        # the whole text is unscored, typed, rather than numbered.
+        cx_raw = finite_array(cx_raw, "cx_energy")
         if cx_cfg is None:
             cx_norm = np.full(n_tokens, 0.5, dtype=float)
         else:
             midpoint = cx_cfg["midpoint"]
             steepness = cx_cfg["steepness"]
             z = np.clip(steepness * (cx_raw - midpoint), -709.0, 709.0)
-            cx_norm = 1.0 / (1.0 + np.exp(-z))
+            cx_norm = finite_array(1.0 / (1.0 + np.exp(-z)), "cx_normalized")
 
         # Batched G(x) when XGBoost is loaded
         gx_available = gx_xgboost is not None and gx_pca_components is not None
@@ -720,7 +776,7 @@ def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
             emb_np = np.asarray(per_token_vecs, dtype=np.float32)
             x_pca = (emb_np - gx_pca_mean) @ gx_pca_components.T
             proba = gx_xgboost.predict_proba(x_pca)
-            gx_scores = proba[:, 1].astype(float)
+            gx_scores = finite_array(proba[:, 1], "gx_score")
         else:
             gx_scores = np.full(n_tokens, 0.5, dtype=float)
 
@@ -773,6 +829,7 @@ def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
 
         return {
             "enabled":      True,
+            "scored":       True,
             "gx_available": gx_available,
             "cx_calibrated": cx_cfg is not None,
             "per_step":     per_step,
@@ -789,10 +846,6 @@ def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
         }
 
     except Exception as e:
-        logger.error(f"per-step evaluation failed: {e}", exc_info=True)
-        return {
-            "enabled": True, "gx_available": False,
-            "per_step": [], "aggregate": {}, "n_tokens": 0,
-            "error": f"{type(e).__name__}: per-step evaluation failed "
-                     "(see service log)",
-        }
+        return unscored_per_step(
+            failure_record(e, "per-step"),
+            f"{type(e).__name__}: per-step evaluation failed (see service log)")

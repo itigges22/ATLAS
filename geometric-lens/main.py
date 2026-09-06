@@ -17,6 +17,7 @@ from pipeline import (
 )
 from geometric_lens.model_transport import (model_headers as _model_headers,
                                             startup_identity as _startup_identity)
+from geometric_lens import embed_capacity as _embed_capacity
 
 
 # ---------------------------------------------------------------------------
@@ -395,6 +396,13 @@ def health():
                 "fingerprint_present": _BOOT_STATE["fingerprint_present"],
                 "fingerprint_ok": _BOOT_STATE["fingerprint_ok"],
                 "fingerprint_error": _BOOT_STATE["fingerprint_error"],
+                # The /embedding physical batch: the longest input one score
+                # can be computed from. Declared by the deployment
+                # (LLAMA_EMBED_CAPACITY_TOKENS) or observed from a refusal.
+                # Information, not a gate: a deployment whose capacity is
+                # below what its callers generate still scores everything
+                # shorter, and reports each longer input as unscored.
+                **_embed_capacity.snapshot(),
             },
         },
     }
@@ -431,6 +439,7 @@ def ready():
         "lens_self_test": _BOOT_STATE["self_test_pass"],
         "lens_required": lens_required,
         "fingerprint_ok": _BOOT_STATE["fingerprint_ok"],
+        "embed_capacity_tokens": _embed_capacity.snapshot()["embed_capacity_tokens"],
         "reason": _BOOT_STATE["self_test_error"] if not lens_ok else None,
     }
     if not ok:
@@ -575,28 +584,35 @@ def lens_score_text(request: LensScoreTextRequest):
             return {"energy": 0.0, "normalized": 0.5, "enabled": False}
 
         if not lens_service._ensure_models_loaded():
-            return {"energy": 0.0, "normalized": 0.5, "error": "models_not_loaded"}
+            return {"energy": None, "normalized": None, "calibrated": False,
+                    "enabled": True, "scored": False,
+                    "failure": {"kind": "models_not_loaded"},
+                    "error": "models_not_loaded"}
 
         import torch
+        from geometric_lens.embed_capacity import finite
 
         emb = extract_embedding(request.text)
         x = torch.tensor(emb, dtype=torch.float32).unsqueeze(0)
 
         with torch.no_grad():
-            energy = lens_service._cost_field(x).item()
+            energy = finite(lens_service._cost_field(x).item(), "energy")
 
-        normalized = lens_service._normalize_cx_energy(energy)
+        normalized = finite(lens_service._normalize_cx_energy(energy), "normalized")
 
         return _apply_drift_flags({
+            "scored": True,
             "energy": energy,
             "normalized": normalized,
             "calibrated": lens_service._cx_normalization is not None,
             "enabled": True,
         })
     except Exception as e:
+        from geometric_lens.service import failure_record
         return {
-            "energy": 0.0,
-            "normalized": 0.5,
+            "energy": None, "normalized": None, "calibrated": False,
+            "enabled": True, "scored": False,
+            "failure": failure_record(e, "score-text"),
             "error": _safe_detail(e, "lens score-text"),
         }
 
@@ -795,12 +811,9 @@ def lens_gx_score(request: LensScoreTextRequest):
             result = _apply_drift_flags(result)
         return result
     except Exception as e:
-        return {
-            "cx_energy": 0.0, "cx_normalized": 0.5,
-            "cx_calibrated": False,
-            "gx_score": 0.5, "verdict": "error",
-            "error": _safe_detail(e, "lens gx-score"),
-        }
+        from geometric_lens.service import failure_record, unscored_combined
+        return unscored_combined(failure_record(e, "gx-score"),
+                                 _safe_detail(e, "lens gx-score"))
 
 
 @app.post("/internal/lens/score-per-step")
@@ -829,13 +842,18 @@ def lens_score_per_step(request: LensScorePerStepRequest):
 
         result = evaluate_per_step(request.text, layer=request.layer)
         agg = result.get("aggregate") or {}
+        failure = result.get("failure") or {}
         # _safe_log on the request.layer value strips CRLF + truncates
         # so user input can't fake a separate log entry. The other args
-        # are floats/ints from result — structurally safe.
+        # are floats/ints from result — structurally safe; the failure
+        # kind is one of the service's own constants.
         logger.info(
-            "lens score-per-step: in_chars=%d n_tok=%d gx_min=%.3f gx_mean=%.3f off_rails=%d layer=%s lat=%.0fms",
+            "lens score-per-step: in_chars=%d n_tok=%d scored=%s failure=%s "
+            "gx_min=%.3f gx_mean=%.3f off_rails=%d layer=%s lat=%.0fms",
             len(request.text or ""),
             int(result.get("n_tokens", 0)),
+            bool(result.get("scored", bool(result.get("n_tokens")))),
+            _safe_log(failure.get("kind")) if failure else "-",
             float(agg.get("gx_score_min", 0.0)),
             float(agg.get("gx_score_mean", 0.0)),
             int(agg.get("first_off_rails_idx", -1)),
@@ -844,11 +862,9 @@ def lens_score_per_step(request: LensScorePerStepRequest):
         )
         return result
     except Exception as e:
-        return {
-            "enabled": True, "gx_available": False,
-            "per_step": [], "aggregate": {}, "n_tokens": 0,
-            "error": _safe_detail(e, "lens score-per-step"),
-        }
+        from geometric_lens.service import failure_record, unscored_per_step
+        return unscored_per_step(failure_record(e, "score-per-step"),
+                                 _safe_detail(e, "lens score-per-step"))
 
 
 if __name__ == "__main__":

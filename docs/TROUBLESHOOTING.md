@@ -888,6 +888,22 @@ curl -s http://localhost:8080/embedding \
 
 The `--embeddings` flag is set by the llama-server entrypoint in every deployment mode (Compose, bare metal, K3s) — self-embeddings are always on because the Geometric Lens depends on them. The native `/embedding` path (not `/v1/embeddings`) also carries the per-layer hidden-states extension.
 
+### Candidate Reported `unscored` (input exceeds the physical batch)
+
+**Symptom:** The lens log shows `unscored: the input of 2055 tokens exceeds the /embedding physical batch of 2048 tokens`, v3-service emits `lens_unscored` for a candidate (`kind: embed_capacity`, `input_tokens`, `capacity_tokens`), or `atlas doctor` shows `lens_scoring: partial` naming an embed capacity below `ATLAS_MAX_TOKENS`.
+
+**Cause:** llama-server processes one embedding request in a single physical batch (`-ub`, `ATLAS_UBATCH`) and refuses any longer input with HTTP 500. A Lens score is one forward over the whole sequence, so the lens reports the candidate as unscored rather than truncating or splitting it: a split input embeds later pieces without the context of earlier ones and is not the vector the artifacts were calibrated on. The generation budgets that produce candidates (4,096-token PlanSearch code, `ATLAS_MAX_TOKENS` 8,192 for a write) are larger than the largest micro-batch `atlas tier fit` chooses (2,048), so this is expected for long candidates on a default deployment.
+
+**Impact:** The candidate keeps its sandbox result and is ranked after every scored candidate; it is delivered only when no scored candidate passed, and the `selected` event says so. Nothing is scored 0.0 or 0.5 in its place.
+
+**Verify:**
+```bash
+curl -s http://localhost:8099/health | python3 -c "import sys,json; l=json.load(sys.stdin)['subsystems']['lens']; print({k:v for k,v in l.items() if k.startswith('embed_capacity')})"
+```
+`embed_capacity_tokens` is the longest input the lens can score; `embed_capacity_source` is `declared` (from `ATLAS_UBATCH`) or `observed` (from a refusal, authoritative).
+
+**Fix:** Raising `ATLAS_UBATCH` raises the capacity, at a VRAM cost of roughly `ubatch × n_embd × 280` bytes for the compute buffer (about 4.4 GB at 4,096 on a 3,840-dim model): size it with `atlas tier fit`, recreate llama-server, and confirm it starts under `--fit off`. Lowering `ATLAS_MAX_TOKENS` bounds the writes the proxy asks the lens to score. Neither makes a split input scorable; scoring past the physical batch needs the calibration work described in [ADR 0010](adr/0010-lens-capacity-boundary-is-typed.md).
+
 ### `/internal/lens/retrain` Returns 503 "models directory is mounted read-only"
 
 **Symptom:** POSTing `/internal/lens/retrain` on the lens service returns HTTP 503 with ``"reason": "models directory is mounted read-only; run host-side retrain via `atlas lens retrain`"``.

@@ -127,6 +127,13 @@ services:
     environment:
       - LLAMA_URL=http://llama-server:8080
       - LLAMA_EMBED_URL=http://llama-server:8080
+      # The /embedding physical batch llama-server runs with (its `-ub`,
+      # UBATCH_SIZE above): the longest input one Lens score can be computed
+      # from. Declared here so /health reports it before any request is
+      # refused; the lens replaces it with the value the server states on a
+      # refusal. Information only, scoring is never gated on it: a longer
+      # input is reported unscored, never truncated or split.
+      - LLAMA_EMBED_CAPACITY_TOKENS=${ATLAS_UBATCH:-1024}
       - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:?Set ATLAS_MODEL_NAME in .env or run atlas init}
       - ATLAS_LOG_FORMAT=${ATLAS_LOG_FORMAT:-}
       - GEOMETRIC_LENS_ENABLED=true

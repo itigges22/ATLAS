@@ -736,13 +736,31 @@ outside the closed format (`[A-Za-z0-9._:-]{1,128}`) derives no invocation. The
 closed specification and vectors are in
 `proxy/testdata/lens_invocation_vectors.json`.
 
+**The embedding capacity boundary.** llama-server processes one `/embedding`
+request in a single physical batch (`-ub`, `ATLAS_UBATCH`) and refuses a
+longer input; every Lens score is one forward over the whole sequence. The
+refusal is a transport limit of the deployment, not a judgment about the
+text, and it is kept apart from every score: the answer says `scored:
+false` with `null` in every score field and a typed `failure`
+(`embed_capacity` with the server's `input_tokens` and `capacity_tokens`,
+`model_server_error`, `model_server_unreachable`, `embedding_contract`,
+`nonfinite_score` for a NaN or infinite value, `internal`). Nothing is truncated or split in the serving path, because a
+split input is not the vector the artifacts were fitted on. v3-service
+records the failure on the candidate, ranks it after every scored one and
+delivers it only as the last verified candidate standing; the proxy applies
+no threshold to an unscored write. The capacity the lens knows (declared
+through `LLAMA_EMBED_CAPACITY_TOKENS`, or observed from a refusal) is
+reported on `/health` and `/ready` and, when it is below the proxy's
+generation ceiling, as `lens_scoring: partial` in the status dimensions.
+Decision record: [ADR 0010](adr/0010-lens-capacity-boundary-is-typed.md).
+
 Every current Lens bundle also contains `model_identity.json`. The service
 requires its model name to match the served-model id reported by
 llama-server's `/v1/models` (with `ATLAS_MODEL_NAME` as the fallback when the
 probe fails); embedding-width equality alone cannot establish compatibility
 between two different models.
 
-> **Note:** Model weights (.pt, .pkl files) are not committed to the repository — they are built during training and baked into the container image or mounted at runtime. When model files are absent, the service degrades gracefully: C(x) returns neutral energy, G(x) returns `gx_score: 0.5` and `verdict: "unavailable"`. Training data and weights are available on [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS).
+> **Note:** Model weights (.pt, .pkl files) are not committed to the repository — they are built during training and baked into the container image or mounted at runtime. When model files are absent, the service degrades gracefully: C(x) returns neutral energy, G(x) returns `gx_score: 0.5` and `verdict: "unavailable"`. That neutral answer is reserved for a Lens that is disabled or has no artifacts; a score the Lens attempted and could not compute is answered `scored: false` with a typed `failure` and no number. Training data and weights are available on [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS).
 
 ### Pattern cache
 

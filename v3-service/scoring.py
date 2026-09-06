@@ -3,23 +3,85 @@ scoring, task-type classification, language-aware smoke checks, build-command
 verification, and the interactive-task lint."""
 
 import json
+import urllib.error
 import urllib.request
 from pathlib import PurePath
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import adapters
+from stages.candidate_selection import NONFINITE_SCORE, finite_score
 
 
 # --- Lens Scorer (calls Geometric Lens) ---------------------------------------------
+#
+# A Lens answer either scores or says why it did not. The failure is typed
+# (`failure.kind`: embed_capacity with the server's token counts,
+# model_server_error, model_server_unreachable, ...) and is carried into the
+# candidate record. It is never turned into a number: an unscored candidate
+# has no energy, no normalized energy and no G(x) score, so the min-energy
+# selector cannot rank it first and the allocator cannot read it as neutral.
+# A Lens without the typed boundary answered every failure with energy 0.0 /
+# gx 0.5 / verdict "error"; that shape is read as unscored too, and so is
+# any score field that is not a finite number (json.loads accepts NaN and
+# Infinity, and reads 1e999 as an infinity).
+
+LENS_ERROR = "lens_error"
+LENS_UNREACHABLE = "lens_unreachable"
+
+
+def _lens_failure(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The typed failure a Lens answer carries, or None when it scored."""
+    failure = data.get("failure")
+    if isinstance(failure, dict) and failure.get("kind"):
+        return dict(failure)
+    if data.get("scored") is False or data.get("error") or data.get("verdict") == "error":
+        detail = data.get("error") or data.get("verdict") or "unscored"
+        return {"kind": LENS_ERROR, "detail": str(detail)[:200]}
+    return None
+
+
+def _failure_from_exception(exc: BaseException) -> Dict[str, Any]:
+    if isinstance(exc, urllib.error.HTTPError):
+        return {"kind": LENS_ERROR, "status": int(exc.code),
+                "detail": f"HTTP {exc.code} from the lens"}
+    if isinstance(exc, (urllib.error.URLError, OSError, TimeoutError, ConnectionError)):
+        return {"kind": LENS_UNREACHABLE, "detail": type(exc).__name__}
+    return {"kind": LENS_ERROR, "detail": type(exc).__name__}
+
+
+def _nonfinite(field: str, value) -> Dict[str, Any]:
+    return {"kind": NONFINITE_SCORE, "field": field,
+            "detail": f"{field} is not a finite number: {value!r}"[:200]}
+
+
+def _finite_fields(data: Dict[str, Any], fields, default=None) -> Optional[Dict[str, Any]]:
+    """The failure for the first of `fields` whose value is present and
+    not a finite number, or None when every one is a score. An absent
+    field takes `default` (the pre-typed-boundary answer had no G(x))."""
+    for field in fields:
+        value = data.get(field, default)
+        if finite_score(value) is None:
+            return _nonfinite(field, value)
+    return None
+
+
+def describe_lens_failure(failure: Dict[str, Any]) -> str:
+    """One line naming why a candidate is unscored, for logs and events."""
+    if failure.get("kind") == "embed_capacity":
+        return (f"embed_capacity: input {failure.get('input_tokens')} tokens, "
+                f"physical batch {failure.get('capacity_tokens')} tokens")
+    return f"{failure.get('kind')}: {failure.get('detail') or ''}".rstrip(": ")
+
 
 def score_candidate_per_step(code: str) -> dict:
     """PC-207 wiring: per-step C(x)+G(x) scoring of a candidate.
 
     Returns the aggregate dict from `/internal/lens/score-per-step`
     (`first_off_rails_idx`, `gx_score_min`, `gx_score_mean`, etc.)
-    plus `n_tokens`. Fail-soft: returns an empty dict on error so a
-    lens outage degrades to "no per-step signal" instead of a
-    pipeline-stopping exception.
+    plus `n_tokens`. A disabled Lens yields an empty dict (no per-step
+    signal); a Lens that could not score, or could not be reached, yields
+    `{"failure": {...}}` and nothing else, so no default can be read as a
+    verdict. Never raises: a lens outage must not stop the pipeline.
 
     Cost on this hardware tier: ~7-15ms per token (lens batches the
     MLP + XGBoost calls), so a 500-token candidate adds ~3-7 seconds
@@ -38,19 +100,20 @@ def score_candidate_per_step(code: str) -> dict:
             data = json.loads(resp.read())
         if not data.get("enabled"):
             return {}
+        failure = _lens_failure(data)
+        if failure is None and not int(data.get("n_tokens", 0)):
+            # 200 with an empty aggregate and no stated reason: the
+            # defaults below would hand back gx=0.500 for every candidate,
+            # a tie that reads exactly like a real verdict.
+            failure = {"kind": LENS_ERROR, "detail": "no tokens scored"}
         agg = data.get("aggregate", {}) or {}
-        if not int(data.get("n_tokens", 0)):
-            # The endpoint answers 200 with an empty aggregate when it
-            # could not score, so the defaults below would hand back
-            # gx=0.500 for every candidate — a tie that reads exactly
-            # like a real verdict. Report it as no signal instead.
-            print(
-                f"  [lens] per-step scoring returned no tokens "
-                f"({data.get('error') or 'no error reported'}) "
-                f"— degrading to no per-step signal",
-                flush=True,
-            )
-            return {}
+        if failure is None:
+            failure = _finite_fields(
+                agg, ("gx_score_min", "gx_score_mean"), default=0.5) or \
+                _finite_fields(agg, ("cx_norm_max", "cx_norm_mean"), default=0.0)
+        if failure is not None:
+            print(f"  [lens] per-step unscored ({describe_lens_failure(failure)})", flush=True)
+            return {"failure": failure}
         thresholds = data.get("thresholds")
         if not (
             isinstance(thresholds, dict)
@@ -77,14 +140,28 @@ def score_candidate_per_step(code: str) -> dict:
         )
         return result
     except Exception as e:
-        print(f"  [lens] score_candidate_per_step failed: {e} — degrading to no per-step signal", flush=True)
-        return {}
+        failure = _failure_from_exception(e)
+        print(f"  [lens] per-step unscored ({describe_lens_failure(failure)})", flush=True)
+        return {"failure": failure}
 
 
+# The answer of a Lens that is switched off: a configuration state, not a
+# failed score. The allocator reads it as "no signal" and keeps its floor.
 NEUTRAL_COMBINED = {
     "cx_energy": 0.0, "cx_normalized": 0.5, "cx_calibrated": False,
     "gx_score": 0.5, "gx_available": False, "verdict": "unavailable",
 }
+
+# The answer for a candidate the Lens did not score: no number anywhere.
+UNSCORED_COMBINED = {
+    "cx_energy": None, "cx_normalized": None, "cx_calibrated": False,
+    "gx_score": None, "gx_available": False, "verdict": "unscored",
+}
+
+
+def _unscored(failure: Dict[str, Any]) -> Dict[str, Any]:
+    print(f"  [lens] candidate unscored ({describe_lens_failure(failure)})", flush=True)
+    return {**UNSCORED_COMBINED, "failure": failure}
 
 
 def score_candidate_combined(code: str) -> Dict[str, Any]:
@@ -96,10 +173,11 @@ def score_candidate_combined(code: str) -> Dict[str, Any]:
     ``gx_available`` and ``verdict``; the CxGx allocation gate reads all
     six, everything else reads the C(x) three through score_candidate.
 
-    Fail-soft: any transport error, a disabled lens, or a malformed body
-    yields the neutral dict — ``cx_calibrated``/``gx_available`` false, so
-    callers can tell "the lens said neutral" from "the lens said nothing"
-    and the gate degrades to its k=3 floor instead of routing on noise.
+    A disabled lens yields ``NEUTRAL_COMBINED``. A Lens that could not
+    score (the input exceeded the embedding server's physical batch, an
+    upstream error), could not be reached, or answered with a malformed
+    body yields ``UNSCORED_COMBINED`` plus the typed ``failure``: every
+    score field is None, ``verdict`` is ``"unscored"``. Never raises.
 
     Timeout note: 10s was tight under load — the lens shares the box with
     V3's streaming generator and llama-server, and a single hot probe
@@ -116,30 +194,55 @@ def score_candidate_combined(code: str) -> Dict[str, Any]:
         )
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read())
+        if not isinstance(data, dict):
+            return _unscored({"kind": LENS_ERROR, "detail": "malformed body"})
         if not data.get("enabled", False):
             return dict(NEUTRAL_COMBINED)
+        failure = _lens_failure(data)
+        if failure is not None:
+            return _unscored(failure)
+        if "cx_energy" not in data:
+            return _unscored({"kind": LENS_ERROR, "detail": "no C(x) energy in the answer"})
+        failure = _finite_fields(data, ("cx_energy", "cx_normalized", "gx_score"),
+                                 default=0.5)
+        if failure is not None:
+            return _unscored(failure)
         return {
-            "cx_energy": data.get("cx_energy", 0.0),
-            "cx_normalized": data.get("cx_normalized", 0.5),
+            "cx_energy": finite_score(data["cx_energy"]),
+            "cx_normalized": finite_score(data.get("cx_normalized", 0.5)),
             "cx_calibrated": bool(data.get("cx_calibrated", False)),
-            "gx_score": data.get("gx_score", 0.5),
+            "gx_score": finite_score(data.get("gx_score", 0.5)),
             "gx_available": bool(data.get("gx_available", False)),
             "verdict": data.get("verdict", "unavailable"),
         }
     except Exception as e:
-        print(f"  [lens] score_candidate failed: {e} — using neutral uncalibrated score", flush=True)
-        return dict(NEUTRAL_COMBINED)
+        return _unscored(_failure_from_exception(e))
 
 
-def score_candidate(code: str) -> Tuple[float, float, bool]:
+class LensEnergy(tuple):
+    """``(raw_energy, normalized_energy, calibrated)`` that also names why it
+    is unscored. Unpacks like the plain tuple it replaces; ``failure`` is
+    None for a scored candidate."""
+
+    failure: Optional[Dict[str, Any]] = None
+
+    def __new__(cls, energy, normalized, calibrated, failure=None):
+        self = super().__new__(cls, (energy, normalized, calibrated))
+        self.failure = failure
+        return self
+
+
+def score_candidate(code: str) -> Tuple[Optional[float], Optional[float], bool]:
     """Score code with Geometric Lens C(x).
 
     Returns ``(raw_energy, normalized_energy, calibrated)``. The normalized
     value is neutral when this model has no calibration and must not drive
-    adaptive routing in that case.
+    adaptive routing in that case. Both energies are None, and
+    ``.failure`` is set, when the Lens did not score the candidate.
     """
     d = score_candidate_combined(code)
-    return d["cx_energy"], d["cx_normalized"], d["cx_calibrated"]
+    return LensEnergy(d["cx_energy"], d["cx_normalized"], d["cx_calibrated"],
+                      d.get("failure"))
 
 
 # --- Task-type classifier (PC-022) -------------------------------------------
