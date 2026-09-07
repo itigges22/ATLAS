@@ -250,6 +250,11 @@ class _PoolCapture:
         self._trace_request_id = ""
         self._v3_invocation_id = ""
         self._instances: Dict[str, str] = {}
+        # Lens scoring happens before sandbox evaluation.  Keep scored
+        # candidates pending until their full evaluation record is written;
+        # if cancellation closes the run first, close() flushes an explicit
+        # unverified observation instead of losing the scoring evidence.
+        self._pending_lens: Dict[Any, Dict[str, Any]] = {}
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -300,6 +305,9 @@ class _PoolCapture:
         if not self.enabled:
             return
         try:
+            for pending in list(self._pending_lens.values()):
+                self.note_candidate(**pending)
+            self._pending_lens.clear()
             if result:
                 code = result.get("code") or ""
                 if code:
@@ -349,6 +357,7 @@ class _PoolCapture:
         key = (role, digest)
         if key in self._seen:
             return
+        self._pending_lens.pop(key, None)
         self._seen.add(key)
         if index is None:
             index = self._next_index
@@ -382,6 +391,26 @@ class _PoolCapture:
                                    {"tokens": 0, "latency_ms": 0.0, "model_calls": 0}),
         }
         self.write(payload)
+
+    def note_lens_candidate(self, *, role: str, index, code: str,
+                            phase: str, lens: Dict[str, Any]) -> None:
+        """Retain a scored candidate until its sandbox record is available.
+
+        This is capture-only bookkeeping.  A normal run replaces the pending
+        entry with its full candidate evaluation.  Cancellation or another
+        exceptional exit flushes it as explicitly unverified evidence.
+        """
+        if not self.enabled or not code:
+            return
+        digest = hashlib.sha256(code.encode("utf-8")).hexdigest()
+        key = (role, digest)
+        if key in self._seen:
+            return
+        self._pending_lens[key] = {
+            "role": role, "index": index, "code": code,
+            "accepted": False, "record": None,
+            "phase": phase, "lens": dict(lens or {}),
+        }
 
     def identify(self, trace_request_id: str, v3_invocation_id: str) -> None:
         """Bind the request and invocation this pool belongs to."""
@@ -718,6 +747,17 @@ def _note_lens(emit, candidate: Dict[str, Any], source: str) -> None:
              failure_detail=failure.get("detail"))
 
 
+def _candidate_lens_payload(candidate: Dict[str, Any]) -> Dict[str, Any]:
+    """The exact Lens fields carried by candidate capture records."""
+    return {"energy": candidate.get("energy"),
+            "energy_norm": candidate.get("energy_norm"),
+            "energy_calibrated": candidate.get("energy_calibrated"),
+            "token_assertion": candidate.get("token_assertion"),
+            "per_step_token_assertion": candidate.get("per_step_token_assertion"),
+            "per_step": candidate.get("per_step"),
+            "failure": candidate.get("lens_failure")}
+
+
 def _capture_pool_member(capture: "_PoolCapture", candidate, probe_code: str) -> None:
     """Record a pool member under the role that explains where it came from.
 
@@ -732,13 +772,7 @@ def _capture_pool_member(capture: "_PoolCapture", candidate, probe_code: str) ->
         index=candidate.get("index"), code=candidate.get("code") or "",
         accepted=bool(candidate.get("passed")),
         record=candidate.get("contract_record"), phase="sandbox",
-        lens={"energy": candidate.get("energy"),
-              "energy_norm": candidate.get("energy_norm"),
-              "energy_calibrated": candidate.get("energy_calibrated"),
-              "token_assertion": candidate.get("token_assertion"),
-              "per_step_token_assertion": candidate.get("per_step_token_assertion"),
-              "per_step": candidate.get("per_step"),
-              "failure": candidate.get("lens_failure")})
+        lens=_candidate_lens_payload(candidate))
 
 
 def _summarize_phases(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -2352,6 +2386,13 @@ class V3PipelineService:
                 emit("budget_no_verified_candidate",
                      f"{len(pool)} candidate(s), none verified — "
                      f"leaving the caller's gated baseline in place")
+            # A budget boundary can land after Lens scoring but before the
+            # sandbox loop.  Preserve those scored candidates as explicitly
+            # unverified observations so diagnostic capture accounts for
+            # every pre-score tokenization/embedding without changing which
+            # candidate the live pipeline returns.
+            for candidate in pool:
+                _capture_pool_member(capture, candidate, probe_code)
             capture.note_pool(
                 phase="budget", pool=passing,
                 lens_index=(chosen or {}).get("index"),
@@ -2408,6 +2449,10 @@ class V3PipelineService:
                                 "passed": False, "stdout": "", "stderr": "",
                                 **_lens_view(code),
                             })
+                            capture.note_lens_candidate(
+                                role="generated", index=candidates[-1]["index"],
+                                code=code, phase="plansearch_scored",
+                                lens=_candidate_lens_payload(candidates[-1]))
                             _note_lens(emit, candidates[-1], "plansearch")
                     result["total_tokens"] += ps_result.total_tokens
                     emit("plansearch_done",
@@ -2465,6 +2510,10 @@ class V3PipelineService:
                                 "passed": False, "stdout": "", "stderr": "",
                                 **_lens_view(code),
                             })
+                            capture.note_lens_candidate(
+                                role="generated", index=candidates[-1]["index"],
+                                code=code, phase="divsampling_scored",
+                                lens=_candidate_lens_payload(candidates[-1]))
                             _note_lens(emit, candidates[-1], "divsampling")
                         result["total_tokens"] += tokens
                     except Exception as e:

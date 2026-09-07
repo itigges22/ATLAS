@@ -11,6 +11,7 @@ decision: an exhausted ATLAS_V3_TIMEOUT budget emits ``refinement_skip``
 and never calls the loop; a disabled cap (0) always enters.
 """
 
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -134,6 +135,30 @@ def test_exhausted_budget_returns_before_the_repair_phase(monkeypatch):
 
     spent = next(e for e in result["events"] if e["stage"] == "budget_exhausted")
     assert spent["data"]["remaining_ms"] <= 1000
+
+
+def test_budget_exit_captures_scored_candidates_before_sandbox(
+        monkeypatch, tmp_path):
+    """A candidate scored before the budget boundary remains attributable.
+
+    The capture record is deliberately unverified: recording the observation
+    must not invent a sandbox result or alter the anytime return decision.
+    """
+    sink = tmp_path / "pool.jsonl"
+    monkeypatch.setenv("ATLAS_V3_TIMEOUT", "1")
+    monkeypatch.setenv(v3pipeline.CAPTURE_ENV, str(sink))
+
+    result, refinement = _run_pipeline(monkeypatch)
+
+    assert refinement.calls == 0
+    assert any(e["stage"] == "budget_exhausted" for e in result["events"])
+    records = [json.loads(line) for line in sink.read_text().splitlines()
+               if line.strip()]
+    generated = [r for r in records
+                 if r.get("type") == "candidate_evaluation"
+                 and r.get("role") == "generated"]
+    assert len(generated) == 1
+    assert generated[0]["lens"]["energy"] == 5.0
 
 
 def test_disabled_cap_always_enters_refinement(monkeypatch):

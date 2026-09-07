@@ -290,6 +290,33 @@ def _of_type(records, kind):
     return [r for r in records if r.get("type") == kind]
 
 
+def test_interrupted_capture_flushes_pending_lens_candidate(
+        monkeypatch, tmp_path):
+    """A scored candidate survives cancellation before sandbox evaluation."""
+    sink = tmp_path / "pending.jsonl"
+    monkeypatch.setenv(v3pipeline.CAPTURE_ENV, str(sink))
+    capture = v3pipeline._PoolCapture.from_env()
+    capture.bind("pending-task")
+    capture.identify("pending-request", "pending-invocation")
+    capture.note_lens_candidate(
+        role="generated", index=1, code=CAP_ONE,
+        phase="plansearch_scored",
+        lens={"energy": 1.25, "energy_norm": 0.4,
+              "energy_calibrated": True,
+              "token_assertion": {"input_tokens": 10},
+              "per_step_token_assertion": {"input_tokens": 10}})
+    capture.close(None)
+
+    evaluations = _of_type(_capture_records(sink), "candidate_evaluation")
+    assert len(evaluations) == 1
+    rec = evaluations[0]
+    assert rec["role"] == "generated"
+    assert rec["phase"] == "plansearch_scored"
+    assert rec["accepted"] is False
+    assert rec["contract_record_source"] == "not_built_in_production"
+    assert rec["lens"]["energy"] == 1.25
+
+
 def _run_captured(monkeypatch, tmp_path, task_id="cap"):
     sink = tmp_path / "pool.jsonl"
     monkeypatch.setenv(v3pipeline.CAPTURE_ENV, str(sink))
