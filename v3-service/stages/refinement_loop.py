@@ -392,7 +392,12 @@ class RefinementLoop:
             f"Problem: {problem}\n\n"
             f"Approach: {approach}\n\n"
             f"These constraints MUST be satisfied:\n{constraints_text}\n\n"
-            f"Write clean, correct Python code."
+            f"Treat every explicitly requested public name, exact signature, "
+            f"entry point, and input/output behavior as a hard contract.\n"
+            f"Preserve existing public interfaces unless the problem explicitly "
+            f"requires changing them.\n"
+            f"Write the complete Python source file only. Before answering, "
+            f"mentally compile it and verify every requested contract is implemented."
         )
         system = "You are an expert programmer. Think through the approach carefully, then write correct code."
         return (

@@ -166,7 +166,9 @@ Original failing code:
 {code}
 ```
 
-Think step by step about what needs to change, then write the complete fixed Python code."""
+Treat every explicitly requested public name, exact signature, entry point, and input/output behavior as a hard contract.
+Preserve existing public interfaces unless the problem explicitly requires changing them.
+Think step by step about what needs to change, then write the complete fixed Python source file. Before answering, mentally compile it and verify every requested contract is implemented."""
 
 
 # ---------------------------------------------------------------------------

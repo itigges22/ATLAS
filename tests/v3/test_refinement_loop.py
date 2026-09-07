@@ -677,3 +677,12 @@ class TestDataStructures:
         assert cfg.enabled is False
         assert cfg.max_iterations == 2
         assert cfg.max_time_ms == 120000.0
+
+
+def test_refinement_prompt_preserves_the_declared_interface_contract():
+    prompt = RefinementLoop._build_code_prompt(
+        object(), "Implement the requested API", ["handle errors"], "iterate")
+    assert "exact signature" in prompt
+    assert "Preserve existing public interfaces" in prompt
+    assert "mentally compile" in prompt
+    assert "complete Python source file only" in prompt

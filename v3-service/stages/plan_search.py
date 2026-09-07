@@ -272,6 +272,11 @@ PLAN_CONSTRUCTION_PROMPT = """\
 Based on these constraints about the problem:
 {constraints}
 
+Non-negotiable implementation contract:
+- Preserve every explicitly requested public name, exact signature, entry point, and input/output behavior.
+- Preserve existing public interfaces unless the problem explicitly requires changing them.
+- The eventual answer must be a complete, syntactically valid source file.
+
 Design a solution plan that satisfies ALL of them:
 1. Algorithm choice (justified by the constraints)
 2. Data structures needed
@@ -292,7 +297,9 @@ Plan:
 These constraints MUST be satisfied:
 {constraints}
 
-Write clean, correct Python code. Verify each constraint is handled.
+Treat every explicitly requested public name, exact signature, entry point, and input/output behavior as a hard contract.
+Preserve existing public interfaces unless the problem explicitly requires changing them.
+Write the complete source file only. Before answering, mentally compile it and verify every requested contract is implemented.
 
 Problem:
 {problem}"""

@@ -558,6 +558,8 @@ class TestPromptTemplates:
         assert "hash map" in prompt
         assert "Two sum" in prompt
         assert "Do NOT write code" in prompt
+        assert "exact signature" in prompt
+        assert "syntactically valid source file" in prompt
 
     def test_code_prompt_includes_all_context(self):
         prompt = CODE_GENERATION_PROMPT.format(
@@ -568,3 +570,6 @@ class TestPromptTemplates:
         assert "DP approach" in prompt
         assert "O(n)" in prompt
         assert "Max subarray" in prompt
+        assert "exact signature" in prompt
+        assert "mentally compile" in prompt
+        assert "complete source file only" in prompt

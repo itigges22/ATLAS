@@ -528,3 +528,12 @@ class TestDataStructures:
         assert cfg.repair_temperature == 0.4
         assert cfg.analysis_max_tokens == 2048
         assert cfg.repair_max_tokens == 4096
+
+
+def test_repair_prompt_preserves_the_declared_interface_contract():
+    prompt = PRCoT(PRCoTConfig(enabled=True))._build_repair_prompt(
+        "Implement the requested API", "def old(): pass", "wrong interface")
+    assert "exact signature" in prompt
+    assert "Preserve existing public interfaces" in prompt
+    assert "mentally compile" in prompt
+    assert "complete fixed Python source file" in prompt
