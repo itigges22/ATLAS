@@ -16,6 +16,7 @@ and assert:
     set returns no code at all.
 """
 
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -152,6 +153,61 @@ def test_all_passing_candidates_vetoed_enters_repair_and_repair_wins(monkeypatch
     assert result["passed"] is True
     assert result["phase_solved"] == "pr_cot"
     assert result["code"] == REPAIRED_CODE
+
+
+def test_repair_capture_carries_observational_lens_evidence(monkeypatch, tmp_path):
+    sink = tmp_path / "pool.jsonl"
+    monkeypatch.setenv(v3pipeline.CAPTURE_ENV, str(sink))
+    lens = {
+        "energy": 4.0, "energy_norm": 0.4, "energy_calibrated": True,
+        "token_assertion": {"input_tokens": 91, "capacity_tokens": 2112,
+                            "margin_tokens": 312, "max_input_tokens": 1800},
+        "per_step_token_assertion": {
+            "input_tokens": 91, "capacity_tokens": 2112,
+            "margin_tokens": 312, "max_input_tokens": 1800},
+        "per_step": {"n_tokens": 91}, "lens_failure": None,
+    }
+    observed = []
+    real_lens_view = v3pipeline._lens_view
+
+    def observe(code):
+        if code == REPAIRED_CODE:
+            observed.append(code)
+            return dict(lens)
+        return real_lens_view(code)
+
+    monkeypatch.setattr(v3pipeline, "_lens_view", observe)
+    service = _make_service(
+        monkeypatch, STUB_CODES, RecordingPRCoT(repairs=[REPAIRED_CODE]))
+
+    result = service.run("write a real dashboard", task_id="d1-repair-capture")
+
+    assert result["phase_solved"] == "pr_cot"
+    assert observed.count(REPAIRED_CODE) == 1
+    records = [json.loads(line) for line in sink.read_text().splitlines()]
+    repair = next(r for r in records
+                  if r.get("type") == "candidate_evaluation"
+                  and r.get("role") == "repair")
+    assert repair["lens"] == lens
+
+
+def test_repair_lens_observation_is_dormant_without_capture(monkeypatch):
+    observed = []
+    real_lens_view = v3pipeline._lens_view
+
+    def observe(code):
+        if code == REPAIRED_CODE:
+            observed.append(code)
+        return real_lens_view(code)
+
+    monkeypatch.setattr(v3pipeline, "_lens_view", observe)
+    service = _make_service(
+        monkeypatch, STUB_CODES, RecordingPRCoT(repairs=[REPAIRED_CODE]))
+
+    result = service.run("write a real dashboard", task_id="d1-repair-no-capture")
+
+    assert result["phase_solved"] == "pr_cot"
+    assert REPAIRED_CODE not in observed
 
 
 def test_energy_fallback_returns_no_unverified_candidate(monkeypatch):

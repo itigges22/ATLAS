@@ -266,3 +266,21 @@ def test_repair_candidates_carry_a_contract_record():
             offenders.append((role_v, node.lineno))
     assert not offenders, (
         f"pool members captured with no contract record: {offenders}")
+
+
+def test_late_generated_candidates_carry_lens_evidence_into_capture():
+    """Repair/refinement candidates must not bypass diagnostic Lens capture."""
+    import ast
+    src = (Path(__file__).resolve().parents[2] / "v3-service" / "pipeline.py").read_text()
+    tree = ast.parse(src)
+    missing = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if getattr(node.func, "attr", None) != "note_candidate":
+            continue
+        kw = {k.arg: k.value for k in node.keywords}
+        role = getattr(kw.get("role"), "value", None)
+        if role in {"repair", "refinement"} and "lens" not in kw:
+            missing.append((role, node.lineno))
+    assert not missing, f"late candidates captured without Lens evidence: {missing}"

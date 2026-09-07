@@ -2984,6 +2984,15 @@ class V3PipelineService:
                             latency_ms=getattr(pr_result, "total_time_ms", 0.0),
                             parent_code=(failing[0].code if failing else None))
                         passed, stdout, stderr, repair_evidence = verified_sandbox(repair_code)
+                        # Repairs are late-generated candidates.  In evidence
+                        # mode they need the same observational Lens record as
+                        # phase-one candidates; otherwise a successful repair
+                        # is captured with an empty Lens object and the frozen
+                        # diagnostic cannot prove its pre-score token bound.
+                        # Keep this capture-only so ordinary product behavior
+                        # and live repair selection remain unchanged.
+                        repair_lens = (_lens_view(repair_code)
+                                       if capture.enabled else None)
                         # A repair is a candidate. It used to be captured with
                         # record=None, so the sealed Stage-A run holds three
                         # pool members with adapter None and an empty record --
@@ -2997,7 +3006,7 @@ class V3PipelineService:
                             record=_evaluate_candidate(
                                 file_path, repair_code, passed, _has_oracle,
                                 emit, sandbox, task=_task),
-                            phase="repair_pr_cot")
+                            phase="repair_pr_cot", lens=repair_lens)
                         if passed:
                             emit("pr_cot_pass", "PR-CoT repair succeeded!",
                                  strategy="pr_cot", tokens=pr_result.total_tokens)
@@ -3067,6 +3076,11 @@ class V3PipelineService:
                     result["total_tokens"] += ref_result.total_tokens
                     if ref_result.solved:
                         passed, stdout, stderr, refinement_evidence = verified_sandbox(ref_result.winning_code)
+                        # Refinement winners are late-generated candidates too;
+                        # apply the same capture-only Lens observation as the
+                        # PR-CoT repair path above.
+                        refinement_lens = (_lens_view(ref_result.winning_code)
+                                           if capture.enabled else None)
                         # Same gap the repair path had: a refinement winner
                         # is a candidate, and a candidate with no record is one
                         # nothing can say anything about.
@@ -3076,7 +3090,7 @@ class V3PipelineService:
                             record=_evaluate_candidate(
                                 file_path, ref_result.winning_code, passed,
                                 _has_oracle, emit, sandbox, task=_task),
-                            phase="refinement")
+                            phase="refinement", lens=refinement_lens)
                         if passed:
                             emit("refinement_pass",
                                  f"Refinement solved in {ref_result.total_iterations} iterations!",
