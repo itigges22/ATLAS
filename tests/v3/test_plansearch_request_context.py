@@ -93,7 +93,11 @@ class Relay(BaseHTTPRequestHandler):
                 "body_sha_input": len(raw),
             })
 
-        text = "".join(m.get("content") or "" for m in body.get("messages", []))
+        # Classify the requested stage from the user instruction. System
+        # guidance legitimately mentions code in every stage and must not
+        # make this test double return an implementation for planning calls.
+        text = "".join(m.get("content") or "" for m in body.get("messages", [])
+                       if m.get("role") == "user")
         if "CONSTRAINT SET" in text.upper() or "constraint" in text.lower()[:400]:
             content = CONSTRAINTS
         else:

@@ -87,12 +87,22 @@ VALID_TIERS = frozenset(BUDGET_TIERS.keys())
 # in the system prompt ("Think step by step" / "Think carefully" / "Think
 # through") because the LLMCallable contract has no tier parameter. Reword
 # these prompts and the adapter's marker list together.
+_CODE_CONTRACT_SUFFIX = (
+    " When the user asks for code, treat every explicitly requested public "
+    "name and declaration as immutable. Copy spelling, capitalization, "
+    "parameter kinds, defaults, and type annotations exactly; do not "
+    "substitute aliases. Return only the requested artifact; do not add "
+    "demos, tests, or main blocks unless requested."
+)
+
 _SYSTEM_PROMPT_NOTHINK = (
     "You are an expert programmer. Respond directly and concisely."
+    + _CODE_CONTRACT_SUFFIX
 )
 _SYSTEM_PROMPT_THINK = (
     "You are an expert programmer. Think step by step about the problem "
     "before writing code."
+    + _CODE_CONTRACT_SUFFIX
 )
 
 
