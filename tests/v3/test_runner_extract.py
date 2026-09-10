@@ -1,4 +1,4 @@
-from stages.llm_client import extract_code
+from stages.llm_client import extract_code, extract_code_for_problem
 
 
 def test_extract_code_accepts_non_python_language_fence():
@@ -90,3 +90,46 @@ def test_inline_and_fenced_forms_share_bytes_only_when_the_bytes_agree(extract):
 def test_extract_code_prose_before_a_fence_is_not_part_of_the_artifact():
     response = "Here is the file:\n```javascript\nconst x = 1;\n```\nThat should do it.\n"
     assert extract_code(response) == "const x = 1;\n"
+
+
+def test_problem_extractor_prefers_requested_artifact_over_later_tests():
+    problem = "Create solution.py. Implement exactly:\ndef transpose_rows(rows):"
+    response = (
+        "```python\ndef transpose_rows(rows):\n    return rows\n```\n"
+        "Supplemental checks:\n"
+        "```python\nfrom solution import transpose_rows\n\n"
+        "def test_rows():\n    assert transpose_rows([]) == []\n```"
+    )
+    assert extract_code_for_problem(response, problem, fallback="last") == (
+        "def transpose_rows(rows):\n    return rows\n"
+    )
+
+
+def test_problem_extractor_keeps_historical_fallback_without_exact_target():
+    response = "```python\nx = 1\n```\n```python\nx = 2\ny = 3\n```"
+    assert extract_code_for_problem(response, "Create a Python module") == (
+        "x = 2\ny = 3\n"
+    )
+
+
+def test_problem_extractor_repairs_only_unmatched_closer_when_file_parses():
+    problem = "Create solution.py. Implement exactly:\ndef merge_intervals(items):"
+    response = "```python\ndef merge_intervals(items):\n    return list(items))\n```"
+    assert extract_code_for_problem(response, problem) == (
+        "def merge_intervals(items):\n    return list(items)\n"
+    )
+
+
+def test_problem_extractor_repairs_unexpected_top_level_indent_when_file_parses():
+    problem = "Create solution.py. Implement class TokenBucket"
+    response = "```python\nimport logging\n logger = logging.getLogger(__name__)\n\nclass TokenBucket:\n    pass\n```"
+    assert extract_code_for_problem(response, problem) == (
+        "import logging\nlogger = logging.getLogger(__name__)\n\n"
+        "class TokenBucket:\n    pass\n"
+    )
+
+
+def test_problem_extractor_leaves_ambiguous_syntax_failure_unchanged():
+    problem = "Create solution.py. Implement exactly:\ndef solve(value):"
+    code = "def solve(value)\n    return value\n"
+    assert extract_code_for_problem(f"```python\n{code}```", problem) == code

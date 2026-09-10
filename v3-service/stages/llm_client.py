@@ -11,6 +11,7 @@ receive plain text. Any GGUF's own prompt format is honored without per-model
 handling.
 """
 
+import ast
 import json
 import os
 import re
@@ -174,6 +175,102 @@ def extract_code(response: str) -> str:
         filtered_lines.append(line)
 
     return '\n'.join(filtered_lines)
+
+
+_FENCED_CODE = re.compile(
+    r'```[^\S\r\n]*[A-Za-z0-9_+.#-]*[^\S\r\n]*\r?\n(.*?)```',
+    re.DOTALL,
+)
+_EXACT_FUNCTION = re.compile(
+    r'\bImplement\s+exactly\s*:\s*(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(',
+    re.IGNORECASE,
+)
+_EXACT_CLASS = re.compile(
+    r'\bImplement\s+class\s+([A-Za-z_]\w*)\b', re.IGNORECASE,
+)
+
+
+def _requested_python_declarations(problem: str) -> List[str]:
+    """Return only declarations explicitly named as the requested artifact.
+
+    Existing project context and reference implementations can contain many
+    declarations, so broad ``def`` matching would let context accidentally
+    choose a response block.  These two forms are the generation contract's
+    explicit target forms; callers without one retain their historical
+    extraction policy.
+    """
+    names = _EXACT_FUNCTION.findall(problem or "")
+    names.extend(_EXACT_CLASS.findall(problem or ""))
+    return list(dict.fromkeys(names))
+
+
+def _declares_name(code: str, name: str) -> bool:
+    return bool(re.search(
+        rf'(?m)^\s*(?:(?:async\s+)?def|class)\s+{re.escape(name)}\b', code
+    ))
+
+
+def _repair_unambiguous_python_syntax(code: str) -> str:
+    """Repair only parser-identified, unambiguous punctuation/indent typos.
+
+    This is deliberately not a general code fixer.  It removes an unmatched
+    closing delimiter at the exact SyntaxError offset, or an indentation that
+    Python reports as unexpected at top level.  The changed artifact is used
+    only when the complete file then parses; otherwise the model bytes are
+    returned unchanged for the normal sandbox/repair path to reject.
+    """
+    original = code
+    current = code
+    for _ in range(4):
+        try:
+            ast.parse(current)
+            return current
+        except SyntaxError as exc:
+            if not exc.lineno or not exc.offset:
+                return original
+            lines = current.splitlines(keepends=True)
+            if exc.lineno > len(lines):
+                return original
+            line = lines[exc.lineno - 1]
+            pos = exc.offset - 1
+            if (exc.msg.startswith("unmatched ") and 0 <= pos < len(line)
+                    and line[pos] in ")]}"):
+                lines[exc.lineno - 1] = line[:pos] + line[pos + 1:]
+            elif exc.msg == "unexpected indent" and line[:1] in (" ", "\t"):
+                lines[exc.lineno - 1] = line.lstrip(" \t")
+            else:
+                return original
+            current = "".join(lines)
+    try:
+        ast.parse(current)
+    except SyntaxError:
+        return original
+    return current
+
+
+def extract_code_for_problem(
+    response: str, problem: str, *, fallback: str = "longest"
+) -> str:
+    """Extract the requested artifact and conservatively syntax-gate Python.
+
+    When the request explicitly names a function or class, a fenced block
+    declaring that target outranks supplemental examples/tests even if those
+    are longer or later.  Without an explicit target, historical longest/last
+    behavior is preserved.  For explicit Python artifacts, only the narrow
+    parser-proven repair above is attempted.
+    """
+    cleaned = strip_reasoning_leak(response or "")
+    blocks = _FENCED_CODE.findall(cleaned)
+    names = _requested_python_declarations(problem)
+    if blocks:
+        targeted = [b for b in blocks if all(_declares_name(b, n) for n in names)]
+        choices = targeted or blocks
+        code = choices[-1] if fallback == "last" else max(choices, key=len)
+    else:
+        code = extract_code(cleaned)
+    if names:
+        return _repair_unambiguous_python_syntax(code)
+    return code
 
 
 def chatml_to_messages(prompt: str) -> List[Dict[str, str]]:

@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from .llm_client import strip_reasoning_leak
+from .llm_client import extract_code_for_problem, strip_reasoning_leak
 
 
 # Type alias for LLM callable
@@ -293,7 +293,9 @@ class PRCoT:
             )
             total_tokens += repair_tokens
 
-            repair_code = extract_code_from_repair(repair_response)
+            repair_code = extract_code_for_problem(
+                repair_response, problem, fallback="last"
+            )
             perspective_time = (time.time() - perspective_start) * 1000
 
             perspective_result = PerspectiveResult(

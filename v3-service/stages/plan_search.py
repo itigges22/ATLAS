@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from .llm_client import strip_reasoning_leak
+from .llm_client import extract_code_for_problem, strip_reasoning_leak
 
 from .budget_forcing import BudgetForcing, get_system_prompt
 
@@ -756,7 +756,7 @@ class PlanSearch:
         response, tokens, time_ms = llm_call(
             prompt, self.config.step3_temperature, max_tokens, seed
         )
-        code = extract_code_from_response(response)
+        code = extract_code_for_problem(response, problem, fallback="last")
         return code, tokens, time_ms
 
     # -- Helpers ------------------------------------------------------------

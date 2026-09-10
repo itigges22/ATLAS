@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from stages.llm_client import extract_code
+from stages.llm_client import extract_code_for_problem
 from stages.budget_forcing import BudgetForcing, BudgetForcingConfig
 from stages import cxgx_gate
 from stages.plan_search import (
@@ -1878,7 +1878,7 @@ class V3PipelineService:
         try:
             chatml = self.budget_forcing.format_chatml(problem, "light")
             response, tokens, t_ms = llm(chatml, BASE_TEMPERATURE, MAX_TOKENS, 42)
-            probe_code = extract_code(response)
+            probe_code = extract_code_for_problem(response, problem)
             if probe_code:
                 emit("probe_light", f"Light probe: {len(probe_code)} chars, {tokens} tokens, {t_ms:.0f}ms")
         except Exception as e:
@@ -1890,7 +1890,7 @@ class V3PipelineService:
             try:
                 chatml = self.budget_forcing.format_chatml(problem, "standard")
                 response, tokens, t_ms = llm(chatml, BASE_TEMPERATURE, MAX_TOKENS, 42)
-                probe_code = extract_code(response)
+                probe_code = extract_code_for_problem(response, problem)
             except Exception as e:
                 emit("probe_error", str(e))
 
@@ -1899,7 +1899,7 @@ class V3PipelineService:
             # Generate with the minimal reasoning budget
             chatml = self.budget_forcing.format_chatml(problem, "nothink")
             response, tokens, t_ms = llm(chatml, BASE_TEMPERATURE, MAX_TOKENS, 42)
-            probe_code = extract_code(response)
+            probe_code = extract_code_for_problem(response, problem)
 
         # Classify task type. Interactive tasks (games, UIs, framework code)
         # skip synthetic I/O self-tests entirely — those tests would fail by
@@ -2497,7 +2497,7 @@ class V3PipelineService:
                             self.budget_forcing.get_max_tokens(bf_tier),
                             42 + len(candidates) + idx,
                         )
-                        code = extract_code(response)
+                        code = extract_code_for_problem(response, problem)
                         # Attribute at the site that owns the bytes: this call
                         # produced this candidate, so no sibling thread can be
                         # charged for it. A call that yielded nothing usable is

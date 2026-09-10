@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from .llm_client import strip_reasoning_leak
+from .llm_client import extract_code_for_problem, strip_reasoning_leak
 
 from .failure_analysis import (
     FailingCandidate,
@@ -318,7 +318,9 @@ class RefinementLoop:
                 code_response, gen_tokens, _ = llm_call(
                     code_prompt, 0.2, 4096, 42 + iteration
                 )
-                code = self._extract_code(code_response)
+                code = extract_code_for_problem(
+                    code_response, problem, fallback="last"
+                )
 
             total_tokens += gen_tokens
 
