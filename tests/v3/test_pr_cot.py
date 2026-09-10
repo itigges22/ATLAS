@@ -535,5 +535,8 @@ def test_repair_prompt_preserves_the_declared_interface_contract():
         "Implement the requested API", "def old(): pass", "wrong interface")
     assert "exact signature" in prompt
     assert "Preserve existing public interfaces" in prompt
+    assert "parameter order and kinds (including / and * markers)" in prompt
+    assert "laziness, stopping conditions, ordering" in prompt
+    assert "never import that file or requested artifact from itself" in prompt
     assert "mentally compile" in prompt
-    assert "complete fixed Python source file" in prompt
+    assert "complete, syntactically valid fixed Python source file" in prompt

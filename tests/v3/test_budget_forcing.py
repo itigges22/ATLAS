@@ -180,8 +180,13 @@ class TestGetSystemPrompt:
         prompt = get_system_prompt(tier)
         assert "public name and declaration as immutable" in prompt
         assert "spelling, capitalization" in prompt
-        assert "parameter kinds, defaults, and type annotations exactly" in prompt
+        assert "parameter order and kinds (including / and * markers)" in prompt
+        assert "defaults, and type annotations exactly" in prompt
         assert "do not substitute aliases" in prompt
+        assert "laziness, stopping conditions, ordering" in prompt
+        assert "complete, syntactically valid requested artifact" in prompt
+        assert "never import that artifact from itself" in prompt
+        assert "verify the artifact parses" in prompt
         assert "do not add demos, tests, or main blocks unless requested" in prompt
 
 

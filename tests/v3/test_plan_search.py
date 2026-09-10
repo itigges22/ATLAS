@@ -572,4 +572,7 @@ class TestPromptTemplates:
         assert "Max subarray" in prompt
         assert "exact signature" in prompt
         assert "mentally compile" in prompt
-        assert "complete source file only" in prompt
+        assert "parameter order and kinds (including / and * markers)" in prompt
+        assert "laziness, stopping conditions, ordering" in prompt
+        assert "complete, syntactically valid source file only" in prompt
+        assert "never import that file or requested artifact from itself" in prompt

@@ -299,7 +299,10 @@ These constraints MUST be satisfied:
 
 Treat every explicitly requested public name, exact signature, entry point, and input/output behavior as a hard contract.
 Preserve existing public interfaces unless the problem explicitly requires changing them.
-Write the complete source file only. Before answering, mentally compile it and verify every requested contract is implemented.
+Copy parameter order and kinds (including / and * markers), defaults, and type annotations exactly.
+Implement behavioral contracts such as laziness, stopping conditions, ordering, and error behavior literally.
+Write one complete, syntactically valid source file only; never import that file or requested artifact from itself.
+Before answering, mentally compile it and verify every requested declaration and contract is implemented.
 
 Problem:
 {problem}"""

@@ -396,8 +396,14 @@ class RefinementLoop:
             f"entry point, and input/output behavior as a hard contract.\n"
             f"Preserve existing public interfaces unless the problem explicitly "
             f"requires changing them.\n"
-            f"Write the complete Python source file only. Before answering, "
-            f"mentally compile it and verify every requested contract is implemented."
+            f"Copy parameter order and kinds (including / and * markers), defaults, "
+            f"and type annotations exactly.\n"
+            f"Implement behavioral contracts such as laziness, stopping conditions, "
+            f"ordering, and error behavior literally.\n"
+            f"Write one complete, syntactically valid Python source file only; "
+            f"never import that file or requested artifact from itself. Before "
+            f"answering, mentally compile it and verify every requested declaration "
+            f"and contract is implemented."
         )
         system = "You are an expert programmer. Think through the approach carefully, then write correct code."
         return (

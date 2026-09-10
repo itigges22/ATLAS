@@ -168,7 +168,9 @@ Original failing code:
 
 Treat every explicitly requested public name, exact signature, entry point, and input/output behavior as a hard contract.
 Preserve existing public interfaces unless the problem explicitly requires changing them.
-Think step by step about what needs to change, then write the complete fixed Python source file. Before answering, mentally compile it and verify every requested contract is implemented."""
+Copy parameter order and kinds (including / and * markers), defaults, and type annotations exactly.
+Implement behavioral contracts such as laziness, stopping conditions, ordering, and error behavior literally.
+Think step by step about what needs to change, then write one complete, syntactically valid fixed Python source file; never import that file or requested artifact from itself. Before answering, mentally compile it and verify every requested declaration and contract is implemented."""
 
 
 # ---------------------------------------------------------------------------

@@ -90,9 +90,13 @@ VALID_TIERS = frozenset(BUDGET_TIERS.keys())
 _CODE_CONTRACT_SUFFIX = (
     " When the user asks for code, treat every explicitly requested public "
     "name and declaration as immutable. Copy spelling, capitalization, "
-    "parameter kinds, defaults, and type annotations exactly; do not "
-    "substitute aliases. Return only the requested artifact; do not add "
-    "demos, tests, or main blocks unless requested."
+    "parameter order and kinds (including / and * markers), defaults, and "
+    "type annotations exactly; do not substitute aliases. Implement "
+    "behavioral contracts such as laziness, stopping conditions, ordering, "
+    "and error behavior literally. Return one complete, syntactically valid "
+    "requested artifact; never import that artifact from itself, and do not "
+    "add demos, tests, or main blocks unless requested. Before answering, "
+    "verify the artifact parses and every requested declaration still matches."
 )
 
 _SYSTEM_PROMPT_NOTHINK = (

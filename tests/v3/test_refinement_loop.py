@@ -684,5 +684,8 @@ def test_refinement_prompt_preserves_the_declared_interface_contract():
         object(), "Implement the requested API", ["handle errors"], "iterate")
     assert "exact signature" in prompt
     assert "Preserve existing public interfaces" in prompt
+    assert "parameter order and kinds (including / and * markers)" in prompt
+    assert "laziness, stopping conditions, ordering" in prompt
+    assert "never import that file or requested artifact from itself" in prompt
     assert "mentally compile" in prompt
-    assert "complete Python source file only" in prompt
+    assert "complete, syntactically valid Python source file only" in prompt
