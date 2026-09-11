@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
 from pipeline import _build_problem_from_request  # noqa: E402
+from stages.llm_client import extract_code_for_problem  # noqa: E402
 
 TASK = ("input.txt holds one integer per line: a sonar depth reading. Write "
         "solve.py that reads input.txt and prints how many window sums are "
@@ -48,3 +49,27 @@ def test_no_request_keeps_the_previous_shape():
 def test_a_blank_request_is_treated_as_absent():
     problem = _build_problem_from_request("a.py", "x = 1\n", {}, "", "", [], "   ")
     assert "## The request" not in problem
+
+
+def test_user_interface_outranks_model_authored_baseline_at_real_builder_boundary():
+    request = (
+        "Create solution.py. Implement exactly:\n"
+        "def merge_intervals(intervals: list[tuple[int, int]], *, "
+        "merge_touching: bool = True) -> list[tuple[int, int]]:"
+    )
+    baseline = (
+        "from typing import List, Tuple\n\n"
+        "def merge_intervals(intervals: List[Tuple[int, int]], *, "
+        "merge_touching: bool = True) -> List[Tuple[int, int]]:\n"
+        "    return intervals\n"
+    )
+    problem = _build_problem_from_request(
+        "solution.py", baseline, {}, "", "", [], request,
+    )
+
+    assert extract_code_for_problem(baseline, problem) == (
+        "from typing import List, Tuple\n\n"
+        "def merge_intervals(intervals: list[tuple[int, int]], *, "
+        "merge_touching: bool = True) -> list[tuple[int, int]]:\n"
+        "    return intervals\n"
+    )

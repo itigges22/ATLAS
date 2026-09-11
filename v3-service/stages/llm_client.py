@@ -213,9 +213,24 @@ def _requested_python_function_contracts(problem: str) -> Dict[str, tuple]:
     """
     requested = set(_EXACT_FUNCTION.findall(problem or ""))
     contracts = {}
-    for raw_line in (problem or "").splitlines():
+    lines = (problem or "").splitlines()
+    for line_index, raw_line in enumerate(lines):
         declaration = raw_line.strip()
         if not declaration.startswith(("def ", "async def ")):
+            continue
+        # Only the declaration immediately owned by ``Implement exactly:``
+        # is authoritative.  The generated problem also contains a reference
+        # implementation whose model-authored signature may differ; scanning
+        # every matching ``def`` let that later baseline overwrite the user's
+        # exact contract.  Existing project context can contain the same name
+        # too.  Neither is permission to rewrite the requested interface.
+        previous = line_index - 1
+        while previous >= 0 and not lines[previous].strip():
+            previous -= 1
+        if previous < 0 or not re.search(
+            r"\bImplement\s+exactly\s*:\s*$",
+            lines[previous], re.IGNORECASE,
+        ):
             continue
         try:
             parsed = ast.parse(declaration + "\n    pass").body

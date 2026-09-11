@@ -174,6 +174,54 @@ def test_problem_extractor_restores_builtin_annotations_from_exact_contract():
     )
 
 
+def test_problem_extractor_uses_request_contract_not_later_reference_signature():
+    problem = (
+        "## The request\n\n"
+        "Create solution.py. Implement exactly:\n"
+        "def merge_intervals(intervals: list[tuple[int, int]], *, "
+        "merge_touching: bool = True) -> list[tuple[int, int]]:\n\n"
+        "Create the file `solution.py`.\n\n"
+        "## Reference implementation:\n"
+        "Improve upon this baseline if possible.\n\n"
+        "```\n"
+        "from typing import List, Tuple\n\n"
+        "def merge_intervals(intervals: List[Tuple[int, int]], *, "
+        "merge_touching: bool = True) -> List[Tuple[int, int]]:\n"
+        "    return intervals\n"
+        "```\n"
+    )
+    response = (
+        "```python\n"
+        "from typing import List, Tuple\n\n"
+        "def merge_intervals(intervals: List[Tuple[int, int]], *, "
+        "merge_touching: bool = True) -> List[Tuple[int, int]]:\n"
+        "    return intervals\n"
+        "```"
+    )
+    assert extract_code_for_problem(response, problem) == (
+        "from typing import List, Tuple\n\n"
+        "def merge_intervals(intervals: list[tuple[int, int]], *, "
+        "merge_touching: bool = True) -> list[tuple[int, int]]:\n"
+        "    return intervals\n"
+    )
+
+
+def test_problem_extractor_ignores_same_named_project_context_before_request():
+    problem = (
+        "The following files already exist in the project:\n\n"
+        "### helpers.py\n```\n"
+        "def solve(value: str) -> str:\n    return value\n```\n\n"
+        "---\n\nTask:\n"
+        "Create solution.py. Implement exactly:\n"
+        "def solve(value: int, *, strict: bool = False) -> int:\n"
+    )
+    response = "```python\ndef solve(value):\n    return value\n```"
+    assert extract_code_for_problem(response, problem) == (
+        "def solve(value: int, *, strict: bool = False) -> int:\n"
+        "    return value\n"
+    )
+
+
 def test_problem_extractor_does_not_rewrite_ambiguous_duplicate_target():
     problem = "Implement exactly:\ndef solve(value, *, strict: bool = False):"
     code = (
