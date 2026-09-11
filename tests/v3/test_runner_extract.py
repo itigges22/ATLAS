@@ -133,3 +133,51 @@ def test_problem_extractor_leaves_ambiguous_syntax_failure_unchanged():
     problem = "Create solution.py. Implement exactly:\ndef solve(value):"
     code = "def solve(value)\n    return value\n"
     assert extract_code_for_problem(f"```python\n{code}```", problem) == code
+
+
+def test_problem_extractor_restores_exact_requested_signature_only():
+    problem = (
+        "Create solution.py. Implement exactly:\n"
+        "def round_robin(iterables, *, stop_shortest: bool = False):"
+    )
+    response = (
+        "```python\n"
+        "def round_robin(iterables: list, *, stop_shortest=False) -> object:\n"
+        "    return iter(iterables)\n"
+        "```"
+    )
+    assert extract_code_for_problem(response, problem) == (
+        "def round_robin(iterables, *, stop_shortest: bool = False):\n"
+        "    return iter(iterables)\n"
+    )
+
+
+def test_problem_extractor_restores_builtin_annotations_from_exact_contract():
+    problem = (
+        "Create solution.py. Implement exactly:\n"
+        "def merge_intervals(intervals: list[tuple[int, int]], *, "
+        "merge_touching: bool = True) -> list[tuple[int, int]]:"
+    )
+    response = (
+        "```python\n"
+        "from typing import List, Tuple\n\n"
+        "def merge_intervals(intervals: List[Tuple[int, int]], *, "
+        "merge_touching: bool = True) -> List[Tuple[int, int]]:\n"
+        "    return intervals\n"
+        "```"
+    )
+    assert extract_code_for_problem(response, problem) == (
+        "from typing import List, Tuple\n\n"
+        "def merge_intervals(intervals: list[tuple[int, int]], *, "
+        "merge_touching: bool = True) -> list[tuple[int, int]]:\n"
+        "    return intervals\n"
+    )
+
+
+def test_problem_extractor_does_not_rewrite_ambiguous_duplicate_target():
+    problem = "Implement exactly:\ndef solve(value, *, strict: bool = False):"
+    code = (
+        "def solve(value: int, *, strict=False):\n    return value\n\n"
+        "def solve(value: int, *, strict=False):\n    return value\n"
+    )
+    assert extract_code_for_problem(f"```python\n{code}```", problem) == code

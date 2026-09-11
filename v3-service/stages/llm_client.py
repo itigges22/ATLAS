@@ -204,6 +204,33 @@ def _requested_python_declarations(problem: str) -> List[str]:
     return list(dict.fromkeys(names))
 
 
+def _requested_python_function_contracts(problem: str) -> Dict[str, tuple]:
+    """Return exact, parseable one-line function declarations in the request.
+
+    The explicit ``Implement exactly:`` form names an interface, not merely a
+    function.  Parsing the declaration lets post-processing distinguish that
+    contract from annotations or aliases a model added on its own.
+    """
+    requested = set(_EXACT_FUNCTION.findall(problem or ""))
+    contracts = {}
+    for raw_line in (problem or "").splitlines():
+        declaration = raw_line.strip()
+        if not declaration.startswith(("def ", "async def ")):
+            continue
+        try:
+            parsed = ast.parse(declaration + "\n    pass").body
+        except SyntaxError:
+            continue
+        if len(parsed) != 1 or not isinstance(
+            parsed[0], (ast.FunctionDef, ast.AsyncFunctionDef)
+        ):
+            continue
+        node = parsed[0]
+        if node.name in requested:
+            contracts[node.name] = (declaration, node)
+    return contracts
+
+
 def _declares_name(code: str, name: str) -> bool:
     return bool(re.search(
         rf'(?m)^\s*(?:(?:async\s+)?def|class)\s+{re.escape(name)}\b', code
@@ -248,6 +275,78 @@ def _repair_unambiguous_python_syntax(code: str) -> str:
     return current
 
 
+def _restore_exact_requested_signatures(code: str, problem: str) -> str:
+    """Restore an explicit requested signature without rewriting function bodies.
+
+    Models sometimes add equivalent-looking annotations or substitute typing
+    aliases even when the request says the declaration is exact.  For a unique
+    top-level target, replace only its header with the parseable declaration
+    supplied by the user.  Ambiguous targets, one-line bodies, async/sync
+    changes, or a result that does not parse are left byte-for-byte unchanged.
+    """
+    contracts = _requested_python_function_contracts(problem)
+    if not contracts:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    current = code
+    # Requests currently name one exact artifact, but deterministic iteration
+    # keeps this safe if a future request explicitly names several functions.
+    for name, (declaration, requested) in contracts.items():
+        try:
+            parsed = ast.parse(current)
+        except SyntaxError:
+            return code
+        matches = [
+            node for node in parsed.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == name
+        ]
+        if len(matches) != 1:
+            continue
+        candidate = matches[0]
+        if type(candidate) is not type(requested) or not candidate.body:
+            continue
+        # A same-line body cannot be separated from its header without a broad
+        # rewrite.  Leave it to normal fail-closed handling.
+        if candidate.body[0].lineno <= candidate.lineno:
+            continue
+        lines = current.splitlines(keepends=True)
+        start = candidate.lineno - 1
+        body_start = candidate.body[0].lineno - 1
+        indent = lines[start][:len(lines[start]) - len(lines[start].lstrip(" \t"))]
+        newline = "\r\n" if lines[start].endswith("\r\n") else "\n"
+        trial = "".join(lines[:start] + [indent + declaration + newline] + lines[body_start:])
+        try:
+            checked = ast.parse(trial)
+        except SyntaxError:
+            continue
+        restored = [
+            node for node in checked.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == name
+        ]
+        if len(restored) != 1:
+            continue
+        restored_node = restored[0]
+        restored_return = (
+            ast.dump(restored_node.returns, include_attributes=False)
+            if restored_node.returns is not None else None
+        )
+        requested_return = (
+            ast.dump(requested.returns, include_attributes=False)
+            if requested.returns is not None else None
+        )
+        if (ast.dump(restored_node.args, include_attributes=False)
+                != ast.dump(requested.args, include_attributes=False)
+                or restored_return != requested_return):
+            continue
+        current = trial
+    return current
+
+
 def extract_code_for_problem(
     response: str, problem: str, *, fallback: str = "longest"
 ) -> str:
@@ -269,7 +368,8 @@ def extract_code_for_problem(
     else:
         code = extract_code(cleaned)
     if names:
-        return _repair_unambiguous_python_syntax(code)
+        repaired = _repair_unambiguous_python_syntax(code)
+        return _restore_exact_requested_signatures(repaired, problem)
     return code
 
 
